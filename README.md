@@ -117,7 +117,7 @@ code, no game assets and no keys, and gives no help in obtaining them.
 
 ## 中文说明
 
-本项目是《异度神剑 2 决定版（Nintendo Switch 2 Edition）》**3.0.1 零售版**的静态重编译（PC / Windows + Vulkan）：
+本项目是《异度之刃 2（Nintendo Switch 2 Edition）》**3.0.1 零售版**的静态重编译（PC / Windows + Vulkan）：
 把游戏的 NSO 模块整体举升成 C++，再链接一个通用 Switch 运行时（自己实现的 NVN → Vulkan 重放层）运行。
 
 * **仓库里没有任何游戏代码、游戏资源或密钥**；需要你自己的游戏 dump（路径见上表），构建产物（含举升后的游戏代码）
