@@ -5,6 +5,9 @@ Windows x86-64 only. The build has three parts: the runtime libraries (C++/Vulka
 
 The reference toolchain is described in [docs/ENVIRONMENT.md](ENVIRONMENT.md); this page is the shortest path.
 
+> In a hurry? [QUICKSTART.md](QUICKSTART.md) has the five steps and the common failures. This page is the full
+> build, including the shader cache.
+
 ## 1. Toolchain
 
 | what | version used here | why |

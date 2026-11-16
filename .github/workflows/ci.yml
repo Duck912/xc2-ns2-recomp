@@ -38,6 +38,11 @@ jobs:
             echo "the maintainer's absolute checkout path is in the tree"; exit 1
           fi
           echo "ok: no personal paths"
+      - name: Markdown links resolve
+        run: |
+          set -eu
+          python3 tools/check_links.py
+
       - name: No loose ExeFS under xc2/game
         run: |
           set -eu
