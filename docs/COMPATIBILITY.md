@@ -30,7 +30,7 @@ Ryzen 7 5800X + Radeon RX 6800 XT, Adrenalin 26.10.1, 1440p window:
 - the upscaler slot is served by the built-in **TAAU** by default; **FSR 4.1.2** and **FSR 3.1.6** are selectable
   at run time (`[dlss] upscaler = fsr3` + `[upscale] fsr_version`), and FSR 4.1.2 measured no slower than TAAU here
 - dynamic resolution is handled: one FidelityFX context per input size (6 in a long session, 0 crashes)
-- 1080p / 1440p / 4K window sizes; HDR10 swapchain
+- 1080p / 1440p / 4K window sizes; **HDR10 output**, verified on an HDR display
 - **VRR opt-in**: `[gfx] present_mode = fifo_relaxed` — a late frame is presented at once instead of being
   quantised to the next vblank, which turns 43–52 fps into even pacing. Needs VRR on the display and in the
   driver; the default stays `fifo` because most players have no VRR.
@@ -44,7 +44,6 @@ Ryzen 7 5800X + Radeon RX 6800 XT, Adrenalin 26.10.1, 1440p window:
 |---|---|
 | **add-on content shipped inside the game** | the retail 3.0.1 program links no `nn::aoc` symbols of its own; add-ons are served by the runtime's `aoc:u` from the directory in `NXRT_AOC_DIR` (the 3.0.1 launcher points it at `game/dlc-301`), and the DLC files themselves are not distributed |
 | **internal rendering above 1440p** | the game's own chain tops out at 2560×1440 in docked mode |
-| **HDR output** | the swapchain is HDR10, but the UI and tonemap path is not verified |
 
 ## Known issues
 
