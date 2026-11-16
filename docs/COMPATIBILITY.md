@@ -35,13 +35,14 @@ Ryzen 7 5800X + Radeon RX 6800 XT, Adrenalin 26.10.1, 1440p window:
   quantised to the next vblank, which turns 43–52 fps into even pacing. Needs VRR on the display and in the
   driver; the default stays `fifo` because most players have no VRR.
 - keyboard/mouse and gamepad, with remapping
+- add-on content through `NXRT_AOC_DIR` (the 3.0.1 launcher points it at `game/dlc-301`; the files are yours)
 - mods through the emulator layout: a `mods` folder next to the executable
 
 ## What does not work
 
 | | why |
 |---|---|
-| **add-on content (DLC)** | the retail 3.0.1 program imports no `nn::aoc` API at all; on the console the platform merges add-ons into the `rom:` view, which this runtime does not do |
+| **add-on content shipped inside the game** | the retail 3.0.1 program links no `nn::aoc` symbols of its own; add-ons are served by the runtime's `aoc:u` from the directory in `NXRT_AOC_DIR` (the 3.0.1 launcher points it at `game/dlc-301`), and the DLC files themselves are not distributed |
 | **internal rendering above 1440p** | the game's own chain tops out at 2560×1440 in docked mode |
 | **HDR output** | the swapchain is HDR10, but the UI and tonemap path is not verified |
 
