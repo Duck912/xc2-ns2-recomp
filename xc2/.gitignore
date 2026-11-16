@@ -1,0 +1,5 @@
+build/
+# game/ 里是游戏数据（xc2ns2 + romfs，永不入库），但 shader-patch 是我们的补丁，必须入库
+game/*
+!game/shader-patch/
+!game/shader-patch/**

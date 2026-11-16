@@ -1,0 +1,58 @@
+# xc2/tests/deck.nxs - drive XC2 through the prologue and capture shots, deterministically.
+#
+# Run (from xc2\build\boot, so game/romfs is next to the exe):
+#   $env:NXRT_TEST_SCRIPT='...\xc2\tests\deck.nxs'
+#   $env:NXRT_TEST_OUT='testout_deck'; $env:NXRT_TEST_DETERMINISTIC='1'; $env:NXRT_TEST_FRAME_SOURCE='tick'
+#   .\xc2_boot.exe --exefs <fefw-recomp>\work\xc2ns2 --link host --gfx window --log deck_tt.log
+#
+# Why: the prologue's scenes run on the GAME clock, so with @rate 30
+@timeout 20000          # every later wait may take this many frames (default 3600 is under the opening's length) (one frame = exactly 1/30 s of game time) a scene lands on
+# a fixed FRAME number instead of a wall-clock time that drifts between runs (HANDOVER 21.8). @shot writes
+# <out>/shots/<name>.png at that frame and does not block.
+#
+# XC2 has no game probes (they are Metroid Prime only), so no @warp/@area: the opening is walked with pad presses and frame
+# waits. Loading runs on the host clock, hence @sleep.
+
+@rate 30
+@timeout 20000          # every later wait may take this many frames (default 3600 is under the opening's length)
+@log deck.nxs: boot + title presses
+600
+press A
+60
+press A
+60
+press A
+@sleep 3000
+
+# A sweep: the ship deck (dragon + Rex) is somewhere in the middle; the shots name their frame so the next script can cut
+# straight to it.
+@frame 1800
+@shot 1800
+@frame 2200
+@shot 2200
+@frame 2600
+@shot 2600
+@frame 3000
+@shot 3000
+@frame 3400
+@shot 3400
+@frame 3800
+@shot 3800
+@frame 4200
+@shot 4200
+@frame 4600
+@shot 4600
+@frame 5000
+@shot 5000
+@frame 5400
+@shot 5400
+@frame 5800
+@shot 5800
+@frame 6200
+@shot 6200
+@frame 6600
+@shot 6600
+@frame 7000
+@shot 7000
+
+@pass

@@ -1,0 +1,92 @@
+# Frame counters converted to the game time (HANDOVER 59): one "<store hex> [# what it counts]" per line.
+# The store addresses are the ones of build\fps_sites.txt (the census list); the rule follows from the site kind:
+#   f32+1.0 / f32-1.0 -> fps_cf (a +-1.0 counter)      f32+reg -> fps_fs (the increment x the step)
+#   intN+k / intN-k   -> fps_ci (the frames due; a countdown never passes 0)      intN+reg -> skipped (unknown)
+# Every call returns the game own value at the native 30 Hz ([xc2] fps = 0), so this list is inert there.
+#
+# A frame-locked site is only a timer once its code says so: the batches below were read one by one (HANDOVER 59.3).
+# The census is the test (frame-locked -> scaled, mean per visit halved) and the boot is the other one.
+
+
+# ---- batch 1: float timers that add 1/30 s a frame (19) -- fps_fs
+71001a6dac   # f32+reg [x8+372], 17 objects, mean 0.03333 a visit, func 0x71001a6c8c
+71001a6df4   # f32+reg [x8+392], 17 objects, mean 0.03333 a visit, func 0x71001a6c8c
+710002e198   # f32+reg [x0+4336], 20 objects, mean 0.03333 a visit, func 0x710002e0d8
+71004ff788   # f32+reg [x19+24], 6 objects, mean 0.03333 a visit, func 0x71004ff768
+7100601648   # f32+reg [x19+96], 4 objects, mean 0.03333 a visit, func 0x7100601608
+710033eac0   # f32+reg [x9+140], 1 objects, mean 0.03333 a visit, func 0x710033ea98
+7100077274   # f32+reg [x8+0], 1 objects, mean 0.03333 a visit, func 0x710007719c
+710098a64c   # f32+reg [x19+12], 2 objects, mean 0.03333 a visit, func 0x710098a570
+710033137c   # f32+reg [x19+40], 1 objects, mean 0.03333 a visit, func 0x7100331304
+7100600d3c   # f32+reg [x19+248], 1 objects, mean 0.03333 a visit, func 0x7100600d10
+710050da5c   # f32+reg [x19+104], 23 objects, mean 0.03333 a visit, func 0x710050d9f0
+7100963988   # f32+reg [x19+20], 55 objects, mean 0.03333 a visit, func 0x7100963958
+7100965c04   # f32+reg [x19+48], 20 objects, mean 0.03333 a visit, func 0x7100965bc0
+71003311c0   # f32+reg [x26+68], 5 objects, mean 0.03333 a visit, func 0x7100331154
+7100322cc8   # f32+reg [x19+12], 6 objects, mean 0.03333 a visit, func 0x7100322c9c
+7100322d04   # f32+reg [x19+16], 6 objects, mean 0.03333 a visit, func 0x7100322c9c
+71005168fc   # f32+reg [x19+104], 6 objects, mean 0.03333 a visit, func 0x7100516060
+71005440f4   # f32+reg [x19+56], 2 objects, mean 0.03333 a visit, func 0x7100544064
+7100545e84   # f32+reg [x20+56], 4 objects, mean 0.03333 a visit, func 0x7100545dfc
+
+# ---- batch 2: integer countdowns read and verified (2) -- fps_ci
+71007572e0   # int32-1 [x8+40], 3 objects, mean 1 a visit, func 0x71007570d4
+710033b254   # int32-1 [x19+1568], 1 objects, mean 1 a visit, func 0x710033ade4
+
+# ---- batch 3: float adders of +1.0 a frame (10) -- fps_fs
+7100922b88   # f32+reg [x22+184], 739 objects, mean 1 a visit, func 0x71009228f4
+7100921c8c   # f32+reg [x19+396], 866 objects, mean 1 a visit, func 0x7100921bcc
+7100920a08   # f32+reg [x20+388], 610 objects, mean 1 a visit, func 0x71009208fc
+7100923358   # f32+reg [x21+184], 499 objects, mean 1 a visit, func 0x7100923250
+71007e382c   # f32+reg [x19+32], 7 objects, mean 1 a visit, func 0x71007e37a8
+7100935990   # f32+reg [x19+348], 1 objects, mean 1 a visit, func 0x710093590c
+7100937370   # f32+reg [x8+0], 1 objects, mean 1 a visit, func 0x7100937360
+71007d0e24   # f32+reg [x19+132], 1 objects, mean 1 a visit, func 0x71007d0b20
+71007d0db8   # f32+reg [x19+112], 1 objects, mean 1 a visit, func 0x71007d0b20
+71007d2d9c   # f32+reg [x8+124], 1 objects, mean 1 a visit, func 0x71007d2790
+
+# ---- batch 4: per-entity float accumulators (a phase or state time) (9) -- fps_fs
+71007ff5b8   # f32+reg [x23+32], 3158 objects, mean 0.06667 a visit, func 0x71007ff4c0
+710092bea8   # f32+reg [x8+72], 549 objects, mean 0.0001736 a visit, func 0x710092bde4
+71009044f0   # f32+reg [x8+0], 160 objects, mean 0.04892 a visit, func 0x7100904488
+7100800b20   # f32+reg [x19+72], 64 objects, mean 0.003161 a visit, func 0x71008004f0
+710080062c   # f32+reg [x19+104], 64 objects, mean 0.04004 a visit, func 0x71008004f0
+7100800c98   # f32+reg [x19+24], 64 objects, mean 0.005594 a visit, func 0x71008004f0
+7100800950   # f32+reg [x19+72], 64 objects, mean 0.003511 a visit, func 0x71008004f0
+710086e960   # f32+reg [x19+16], 70 objects, mean 0.1 a visit, func 0x710086e8c4
+710086e9b4   # f32+reg [x19+16], 54 objects, mean 0.1 a visit, func 0x710086e8c4
+
+# ---- batch 5: per-entity integer frame counters (3) -- fps_ci
+710087a620   # int8+1 [x0+160], 558 objects, mean 1 a visit, func 0x710087a610
+710087a8c4   # int16+1 [x0+42], 200 objects, mean 1 a visit, func 0x710087a8b4
+710087a678   # int8+1 [x0+162], 164 objects, mean 1 a visit, func 0x710087a670
+
+# ---- batch 6: the title screen counters of one a frame (2) -- fps_ci
+710068cac4   # int32+1 [x19+548] -- the title census pair found it frame-locked; the cursor blink runs twice as fast without it
+7100644028   # int32+1 [x19+548] -- the title census pair found it frame-locked; the cursor blink runs twice as fast without it
+
+# ---- not converted: a frame-locked value that is not a plain adder (read, and left alone)
+# 71000ed738   # f32+reg [x19+800] -- one half of a MIRRORED TIMER PAIR: [x19+800] accumulates while [x19+808] counts the other way, chosen by bit 1 of the state at [x19+8]; scaling only this half breaks the balance and the title twitches
+# 71000ed8dc   # f32+reg [x19+804] -- the store is fmax-clamped to a floor ([x19+804], constant 0x7100f658b0): fps_fs would turn the clamp into a half-speed approach instead of a snap
+
+# ---- not converted: frame-locked values that are not timers (read one by one, left alone)
+# 7100005968   # int32-1 [x21+8] -- a REFERENCE COUNT: [x21+8] counts down, 0 calls the destructor at [x21]+8 (fired m_RefCount > 0 at boot)
+# 7100513554   # int32-1 [x21+8] -- the same reference-count template as 7100005968
+# 7100806f58   # int8-1 [x19+363] -- a countdown with expiry, but 0 through the sampled scenes (cannot be verified yet)
+# 71008b7668   # int16-1 [x19+168] -- the same (a countdown with expiry that only ticks inside some state)
+# 710081d3b8   # int16-1 [x19+3104] -- a cooldown pair, also 0 in every sampled scene
+# 71007736b8   # int32-1 [x20+5296] -- a linked-list loop counter: while (n--) node = node->next, one extra step dereferences null
+# 710078a258   # int32-1 [x19+4] -- the decremented value is a scaled index into a table ([x19+80] + value*[x21])
+# 710078a7fc   # int32-1 [x19+4] -- the same index pattern (12-byte records)
+# 710033cb1c   # int32-1 [x22+4628] -- a stack index: the value picks [x22 + value*2 + 4112] and the pushed slot
+# 7100773e0c   # int32-1 [x22+5932] -- a table index: [x22 + value + 0x16a8]
+# 71008b9408   # int64-1 [x19+1464] -- an int64 loop counter of a division loop (umulh, modulo): arithmetic, not time
+# 7100772ec8   # int32-1 [x19+6028] -- the pending-count of a lock-free queue (a bitmask CAS right above it)
+# 71006ed23c   # int32-1 [x23+16] -- a per-record counter of an array walk (x22 += 12 a step), a job budget
+# 71009404f0   # int8-1 [x9+325] -- a per-frame budget: how many items the loop processes this frame ([x9+325])
+# 7100922ae0   # int16+reg [x22+192] -- int16-1 of a register: the amount is not known at lift time (left for the manual pass)
+# 71009233e8   # int16+reg [x21+192] -- the same (+reg)
+# 710086f5f0   # int32+reg [x19+8] -- int32+reg, 9.55 a visit: a scaled value, not a frame count
+
+# ---- queue: the +1.0 float counter compared against exactly 1.0 (a progress value, not a timer)
+# 710093594c   # f32+1.0 [x19+348] -- fcmp against 1.0 right after the store

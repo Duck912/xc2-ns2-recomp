@@ -1,0 +1,22 @@
+name: Feature request
+description: Something the emulator or the toolchain should do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What do you want
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why it is useful
+      description: Who hits this, and what it costs them today.
+    validations:
+      required: true
+  - type: textarea
+    id: how
+    attributes:
+      label: How you would do it (optional)
+      description: Pointers into the code are welcome.

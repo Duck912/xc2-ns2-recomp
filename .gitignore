@@ -1,0 +1,50 @@
+# XC2 NS2 recomp - keep only what is needed to rebuild this project
+
+# ---- 构建产物（可重建） ----
+build/
+xc2/build/
+third_party/fefw-recomp/build/
+*.obj
+*.lib
+*.exe
+*.pdb
+*.ilk
+
+# ---- 游戏数据（永不入库） ----
+xc2/game/xc2ns2/
+xc2/game/romfs/
+**/romfs/
+*.nup
+*.nsp
+*.xci
+*.ard
+*.arh
+prod.keys
+
+# ---- work：整体排除，只留活跃的探针工具链与金标准 ----
+work/*
+!work/fog/
+work/fog/*
+!work/fog/*.py
+!work/fog/*.md
+!work/fog/*.frag
+!work/fog/*.ps1
+!work/fog/*.cmd
+!work/fog/*.json
+# work/oracle 是 §32 的金标准数据（13,892 文件），体积太大不入库，磁盘上保留
+
+# ---- 第三方：大件与自带 .git 的 - 
+third_party/deps/
+third_party/nxrecomp/
+third_party/fefw-recomp/refs/
+third_party/xc2-recomp-src/
+third_party/xc2-recomp-ref/
+
+# ---- 内部文档（过程日志、交接、事故记录）：本地保留，不进公开分支 ----
+docs/internal/
+
+# ---- 杂项 ----
+*.bak-*
+*.orig
+__pycache__/
+*.pyc

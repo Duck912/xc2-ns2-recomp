@@ -1,0 +1,47 @@
+name: Compatibility report
+description: This game area runs (or does not run) on your hardware
+labels: [compatibility]
+body:
+  - type: input
+    id: area
+    attributes:
+      label: Game area / chapter
+      placeholder: Gormott, the open plain after the first camp
+    validations:
+      required: true
+  - type: input
+    id: build
+    attributes:
+      label: Build
+    validations:
+      required: true
+  - type: input
+    id: hw
+    attributes:
+      label: CPU / GPU / driver / RAM
+    validations:
+      required: true
+  - type: input
+    id: fps
+    attributes:
+      label: Frame rate
+      description: The "hitch: N frames in 10 s: mean X fps, 1% low Y" line from the log is ideal.
+    validations:
+      required: true
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result
+      options:
+        - Perfect
+        - Playable
+        - Runs with glitches
+        - Loads but unplayable
+        - Does not load
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Settings that mattered, glitches, anything that would save the next person time.

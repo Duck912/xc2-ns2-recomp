@@ -1,0 +1,49 @@
+name: repository checks
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tree-hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No game data, keys or builds in the tree
+        run: |
+          set -eu
+          bad=$(git ls-files | grep -Ei '\.(nsp|xci|nca|nup|ard|arh|nro|nso|kef|kips|keys)$|(^|/)prod\.keys$|(^|/)romfs/' || true)
+          if [ -n "$bad" ]; then
+            echo "These files must never be committed:"; echo "$bad"; exit 1
+          fi
+          echo "ok: no game data"
+      - name: Notices are present
+        run: |
+          set -eu
+          for f in LICENSE THIRD_PARTY_NOTICES.md docs/INVARIANTS.md \
+                   third_party/fefw-recomp/MODIFICATIONS.md; do
+            test -f "$f" || { echo "missing $f"; exit 1; }
+          done
+          grep -q nxnative THIRD_PARTY_NOTICES.md
+          echo "ok: notices"
+      - name: No personal paths
+        run: |
+          set -eu
+          # a real user profile, anywhere, docs included
+          if git grep -n -I -E '[A-Za-z]:\\Users\\[A-Za-z0-9._-]+' -- .; then
+            echo "a personal path is in the tree"; exit 1
+          fi
+          # the maintainer's own checkout, hardcoded into a script or a source file
+          if git grep -n -I -F 'Xenoblade 2 Switch 2 Edition recomp' -- . ':!.github/workflows/ci.yml'; then
+            echo "the maintainer's absolute checkout path is in the tree"; exit 1
+          fi
+          echo "ok: no personal paths"
+      - name: No loose ExeFS under xc2/game
+        run: |
+          set -eu
+          # the ExeFS modules have no extension, so the extension list above cannot see them
+          bad=$(git ls-files 'xc2/game/**' || true)
+          if [ -n "$bad" ]; then
+            echo "game files under xc2/game:"; echo "$bad"; exit 1
+          fi
+          echo "ok: no game files"

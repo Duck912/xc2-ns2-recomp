@@ -1,0 +1,58 @@
+name: Bug report
+description: Something is wrong with the emulator, a build step or a tool
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before you open this: please read [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) —
+        the known issues are listed there, and the three project invariants are in
+        [docs/INVARIANTS.md](docs/INVARIANTS.md).
+  - type: input
+    id: build
+    attributes:
+      label: Build
+      description: Release tag or commit you ran.
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU, driver and Windows version
+      placeholder: RX 6800 XT, Adrenalin 26.10.1, Windows 11 26200
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you saw, and where in the game.
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: |
+        Attach the log from work\logs\ (one file per launch, timestamped). If it is large,
+        attach the last 2000 lines.
+    validations:
+      required: true
+  - type: dropdown
+    id: upscaler
+    attributes:
+      label: Does it also happen with TAAU?
+      description: Set [upscale] upscaler = taau, restart, and try the same spot.
+      options:
+        - "Yes, it happens with TAAU too"
+        - "No, only with FSR"
+        - "Not tried"
+    validations:
+      required: true
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Confirmation
+      options:
+        - label: This repository contains no game files, and I have not attached any.
+          required: true
