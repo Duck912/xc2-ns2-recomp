@@ -104,9 +104,11 @@ cmake -S third_party/fefw-recomp/runtime -B third_party/fefw-recomp/build/runtim
 cmake --build third_party/fefw-recomp/build/runtime-gfx --target nxrt nxrt_gfx
 
 # the game module the boot executable links against (nxrt_game_xc2ns2_core / _data)
+# -DNXRT_GAMES=xc2ns2 is NOT optional: without it NXRT_GAMES defaults to "fefw", the configure succeeds, and
+# nothing named nxrt_game_xc2ns2_* exists, so the link below fails with "unknown target".
 cmake -S third_party/fefw-recomp/runtime -B third_party/fefw-recomp/build/xc2-game-probe `
       -G Ninja -DCMAKE_BUILD_TYPE=Release -DNXRT_BUILD_GFX=ON -DNXRT_BUILD_GAMES=ON `
-      -DNXRT_TEST_GAME=xc2ns2 -DNXRT_BUILD_TESTS=OFF `
+      -DNXRT_GAMES=xc2ns2 -DNXRT_TEST_GAME=xc2ns2 -DNXRT_BUILD_TESTS=OFF `
       -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl
 cmake --build third_party/fefw-recomp/build/xc2-game-probe `
       --target nxrt_game_xc2ns2_core nxrt_game_xc2ns2_data
