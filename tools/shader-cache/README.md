@@ -18,9 +18,17 @@ python tools/shader-cache/ard_index.py       --ard <romfs>\bf2.ard --out work\fi
 python tools/shader-cache/extract_embedded.py --ard <romfs>\bf2.ard --tsv work\files.tsv --out work\blocks
 ```
 
-Then translate and install: `spirv_harness --batch work\blocks` produces the `.spv` files and the
-`results.tsv` rows, and `tools/shader/install_shaders.ps1` puts them in the cache. That half is not ported
-yet; see the note at the end.
+Then translate and install:
+
+```powershell
+python tools/shader-cache/build_cache.py --blocks work\blocks --cache xc2\build\boot\shader_cache\spirv `
+    --harness third_party\fefw-recomp\tools\shaders\build\bin\Release\net10.0\spirv_harness.exe --jobs 10
+```
+
+It translates only what the cache is missing, installs the `.spv` files and their `results.tsv` rows, and can
+rebuild the preload pack if you pass `--pack-tool` and `--pack`. `--dry-run` reports the plan, `--json` emits
+one object per step, and the exit codes are 0 ok / 2 bad arguments / 3 input mismatch / 4 missing dependency /
+5 a step failed — so a GUI or a wrapper can drive it without parsing prose.
 
 ## The record format
 
@@ -57,8 +65,15 @@ Of the 12,126 distinct blocks, **12,104 are real shaders** and 22 are misaligned
 match anything the game requests, so they never reach the cache). With the 9,067 blocks already collected by
 playing, that is the 21,171-entry cache this project runs with.
 
-## Not ported yet
+## Still missing
 
-The translate + install + repack half lives in a private driver that also contains the 3.0.0-only paths.
-Porting it is the next step; until then, `spirv_harness --batch` plus `install_shaders.ps1` does the same
-thing by hand.
+The preload pack rebuild lives in `pack_full.py`, which is not ported yet — pass `--pack-tool` if you have it.
+Without it the pack is left alone, which is correct but slower at startup: the runtime reads the pack first and
+falls back to the loose `.spv` files for anything the pack lacks, so newly installed shaders are found either
+way.
+
+## Platform
+
+The three tools here are plain Python with no Windows calls, and the shader harness is .NET 10 with explicit
+`OperatingSystem.IsWindows()` branches, so the whole shader pipeline runs on Linux and macOS as well. Only the
+*runtime* build is Windows-bound today (clang-cl and the MSVC headers).
