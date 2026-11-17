@@ -37,6 +37,10 @@ const game::Info& core_info() {
     static const game::Info info = [] {
         game::Info g = data_info();
         g.title_defaults = &title_defaults;
+        // The DLC's openings are AV1 .webm and the game's movie player takes movie::VideoDecoder from its movie
+        // module; the host one (media/movie_vdec.cpp, dav1d) hands it CPU frames. Without this flag those movies fail
+        // to open and the player aborts (measured 2026-11-18: Torna's mv11010100 on both builds).
+        g.movie_video_decoder = true;
         return g;
     }();
     return info;

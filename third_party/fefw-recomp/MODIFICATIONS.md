@@ -89,3 +89,5 @@ git log --oneline 6f1d964..HEAD -- third_party/fefw-recomp
   stubs, heap model, nn::audio/opus on the retail 3.0.1 build, fs read tracing, crash dumps.
 - **tools/shaders** — the Ampere (NVN2) SASS path: stage from the control section, SUATOM/TLD4, tensor decoder.
 
+- **runtime/games/xc2ns2** — the title facts registered for this game (program id, Switch 2 platform, save sizes),
+  and ``movie_video_decoder``: the DLC openings are AV1 and play through the host movie::VideoDecoder (dav1d).
