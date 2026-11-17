@@ -24,6 +24,11 @@ These are not style preferences. Each one exists because breaking it cost a sess
 2. **The shader cache is append-only.** Never rebuild or delete it. It holds 21,171 translated programs, and
    `spirv.preload.pack` is read before the loose `.spv` files, so a stale pack silently wins over an edited
    shader. If you change a shader patch, run `xc2\scripts\patch-shaders.ps1 -Check` and expect exit 0.
+   **A cache built from the romfs alone is never complete:** the archive yields 12,154 blocks (12,126 embedded
+   groups + 28 in `ndsr.pck`), and the rest exist in no file at all — the game builds them at run time, so they
+   only arrive through `NXRT_NVN_DUMP_MISSING`. A cache of 12,104 renders a black title screen. Any new build,
+   package or setup path must run the archive scan **and** the prefill; see handover 139 for the chain and the
+   checklist.
 3. **The game runs in one instance, started by the operator.** Automation must not terminate or restart it.
    Reading logs and snapshots at any time is fine. After it exits, the next launch waits about 25 seconds.
 4. **Absolute paths in scripts and commands.** Relative paths break as soon as the working directory moves,

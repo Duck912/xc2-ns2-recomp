@@ -543,6 +543,102 @@ def step_ingest(r, repo, install, nup, dump, exefs_in, romfs_in):
     return r.end_step("ingest", started, True)
 
 
+def step_shaders_package(r, repo, install, py, jobs):
+    """Translate the game's shaders into the cache the runtime reads.
+
+    The shaders are embedded in the romfs's bf2.ard, not in nn::gfx containers, so this walks the archive's embedded
+    group layout (tools/shader-cache: ard_index, extract_embedded, translate, install). The cache lands in
+    <install>/shader_cache/spirv, which is where [nvn] shader_cache points. A package ships no cache: it is derived
+    from the player's own copy of the game.
+    """
+    started = r.step("shaders")
+    spirv = install / "shader_cache" / "spirv"
+    if (spirv / "results.tsv").is_file() and any(spirv.glob("*.spv")):
+        return r.end_step("shaders", started, True, "the shader cache is already there")
+    tool = repo / "tools" / "shader-cache" / "build_cache.py"
+    harness = repo / "tools" / "spirv_harness" / "spirv_harness.exe"
+    ard = install / "romfs" / "bf2.ard"
+    if not tool.is_file():
+        return r.end_step("shaders", started, False, "the package has no tools/shader-cache/build_cache.py")
+    if not harness.is_file():
+        return r.end_step("shaders", started, False, "the package has no shader harness")
+    if not ard.is_file():
+        return r.end_step("shaders", started, False, "no bf2.ard under " + str(install / "romfs"))
+    n = jobs if jobs > 0 else max(2, (os.cpu_count() or 4) - 1)
+    r.log("  reading the archive and translating what the cache lacks; this is the long step")
+    rc = r.run([str(py), str(tool), "--ard", str(ard), "--cache", str(spirv), "--harness", str(harness),
+                "--work", str(install / "build" / "shader-cache"), "--jobs", str(n)],
+               cwd=repo, on_line=shader_progress(r))
+    if rc != 0:
+        return r.end_step("shaders", started, False, "the shader chain failed")
+    r.log("  %d shader(s) from the archive" % len(list(spirv.glob("*.spv"))))
+    prefill_package(r, repo, install, py, harness, spirv, jobs=jobs)
+    r.log("  %d shader(s) in the cache" % len(list(spirv.glob("*.spv"))))
+    return r.end_step("shaders", started, True)
+
+
+def prefill_package(r, repo, install, py, harness, spirv, seconds=40, jobs=0):
+    """Run the game headless once and translate whatever the archive scan could not name.
+
+    A handful of blocks in 3.0.1 are in no file at all - the game builds them at run time - so scanning the archive
+    can never be complete on its own (measured: 12,154 from the archive, 5 more that exist nowhere). The runtime
+    already knows which blocks it is missing, so one short headless run collects exactly those.
+    """
+    exe = install / "xc2_boot.exe"
+    if not exe.is_file():
+        r.log("  prefill: no xc2_boot.exe yet, skipping")
+        return
+    missing = install / "build" / "missing"
+    if missing.is_dir():
+        shutil.rmtree(missing, ignore_errors=True)
+    missing.mkdir(parents=True, exist_ok=True)
+    env = {
+        "NXRT_NVN_DUMP_MISSING": str(missing),
+        "NXRT_NVN_SHADER_CACHE": str(spirv),
+        "NXRT_FS_ROMFS": str(install / "game" / "romfs-301"),
+        "NXRT_FS_SAVE_DIR": str(install / "save"),
+    }
+    log = install / "setup" / "prefill.log"
+    argv = [str(exe), "--exefs", str(install / "exefs"), "--link", "host", "--gfx", "headless", "--log", str(log)]
+    r.log("  prefill: the game runs headless for up to %d s to name the blocks no file contains" % seconds)
+    full = os.environ.copy()
+    full.update(env)
+    try:
+        p = subprocess.Popen(argv, cwd=str(install), env=full,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError as e:
+        r.log("  prefill: could not start the game (%s); the cache stays as the archive left it" % e)
+        return
+    deadline = time.time() + seconds
+    seen = 0
+    while time.time() < deadline and p.poll() is None:
+        n = len(list(missing.glob("code_*.bin")))
+        if n != seen:
+            seen = n
+            r.note_progress("prefill: %d block(s) collected" % n)
+        time.sleep(1)
+    if p.poll() is None:
+        p.kill()
+        p.wait()
+    blocks = sorted(missing.glob("code_*.bin"))
+    r.log("  prefill: collected %d block(s)" % len(blocks))
+    if not blocks:
+        return
+    n = jobs if jobs > 0 else max(2, (os.cpu_count() or 4) - 1)
+    rc = r.run([str(py), str(repo / "tools" / "shader-cache" / "build_cache.py"), "--blocks", str(missing),
+                "--cache", str(spirv), "--harness", str(harness), "--jobs", str(n)], cwd=repo,
+               on_line=shader_progress(r))
+    if rc != 0:
+        r.log("  prefill: the collected blocks did not translate; the game will still run")
+
+def shader_progress(r):
+    """build_cache.py reports each stage on its own line; pass those on so the page shows movement."""
+    def on_line(line):
+        s = line.strip()
+        if s[:1] == "[" and ("plan" in s or "translate" in s or "install" in s or "pack" in s):
+            r.note_progress(s[:140])
+    return on_line
+
 def step_done_package(r, repo, install):
     """The package runs the exe from <install>, which looks for game/romfs-301 there (not under a build folder)."""
     started = r.step("done")
@@ -602,6 +698,7 @@ def main():
             ("ingest", lambda: step_ingest(r, repo, install, nup, dump, exefs_in, romfs_in)),
             ("lift", lambda: step_lift_package(r, repo, install, tools[0], a.jobs)),
             ("link", lambda: step_link_package(r, repo, install, tools[1], tools[2], a.jobs)),
+            ("shaders", lambda: step_shaders_package(r, repo, install, tools[0], a.jobs)),
             ("done", lambda: step_done_package(r, repo, install)),
         ]
     else:

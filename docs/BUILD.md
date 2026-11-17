@@ -149,13 +149,29 @@ script links the older four-module route into `xc2\build\boot\`.
 ### 4.4 shaders
 
 Shaders are translated offline into `xc2\build\boot\shader_cache\spirv` (SPIR-V keyed by the shader hash).
-You do not have to manage this: the launcher fills the cache for you.
 
-**First launch.** The cache starts empty, so the launcher runs the game **headless for about 24 seconds** to collect
-every shader the game asks for, translates them, and only then opens the window. Progress is printed as `PREFILL:`
-lines and written to `work\prefill.status` (`phase`, `elapsed`, `budget`, `collected`, `note`) so a front end
-can show it. Collection runs once per cache (`work\.prefilled`); `-noprefill` skips it, and a collector that dies
-early leaves the marker unwritten so the next launch tries again.
+**The cache has three sources and all three are needed.** Scanning the romfs alone is not enough, and the number to
+remember is **12,154** (handover 139):
+
+| source | count | tool |
+|---|---|---|
+| the embedded groups in `bf2.ard` | 12,126 | `tools\shader-cache\extract_embedded.py` |
+| `ndsr.pck`, a third container layout inside it | +28 = **12,154** | the same scan |
+| blocks that exist in **no file at all** (the game builds them at run time) | 5 | only `NXRT_NVN_DUMP_MISSING` |
+
+A cache with only the embedded groups (12,104) renders a **black title screen** — that is the failure this section
+exists to prevent. Measured on the portable package: the archive scan yields 12,132 `.spv` in 187 s at 10 jobs.
+
+```powershell
+<python> tools\shader-cache\build_cache.py --ard <romfs>\bf2.ard --cache <install>\shader_cache\spirv `
+    --harness <tools>\spirv_harness\spirv_harness.exe --work <install>\build\shader-cache --jobs 10
+```
+
+**First launch.** Whatever the archive cannot name is collected by running the game **headless for about 24 seconds**
+(`NXRT_NVN_DUMP_MISSING`), translating those blocks, and only then opening the window. Progress is printed as
+`PREFILL:` lines and written to `work\prefill.status` (`phase`, `elapsed`, `budget`, `collected`, `note`) so a
+front end can show it. Collection runs once per cache (`work\.prefilled`); `-noprefill` skips it, and a collector
+that dies early leaves the marker unwritten so the next launch tries again.
 
 **Later launches** need nothing. New areas keep asking for shaders the cache has never seen: those are collected when
 the game exits and translated, so the *next* launch is complete. The first time you enter an area with unseen

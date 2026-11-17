@@ -77,12 +77,14 @@ Say ("zig           {0:N1} MB" -f (Size (Join-Path $Out 'tools\build\zig')))
 # --- 4. the engine, the shader corpus extractor, and what the lift needs --------------------------------------
 New-Item -ItemType Directory -Force (Join-Path $Out 'engine') | Out-Null
 Copy-Item (Join-Path $root 'tools\setup\xc2_setup.py') (Join-Path $Out 'engine') -Force
-New-Item -ItemType Directory -Force (Join-Path $Out 'tools\shaders') | Out-Null
-Copy-Item (Join-Path $root 'third_party\fefw-recomp\tools\shaders\ampere\extract_corpus.py') (Join-Path $Out 'tools\shaders') -Force
+# The shader chain: the game's shaders are embedded in the romfs's bf2.ard, which these read and translate. Without
+# them a package has an empty cache and the first launch renders with gaps.
+New-Item -ItemType Directory -Force (Join-Path $Out 'tools\shader-cache') | Out-Null
+Copy-Item (Join-Path $root 'tools\shader-cache\*.py') (Join-Path $Out 'tools\shader-cache') -Force
 # The engine's --nup path runs this with the bundled Python (zstandard is in it), for a player whose dump is a .nup.
 New-Item -ItemType Directory -Force (Join-Path $Out 'tools\analysis') | Out-Null
 Copy-Item (Join-Path $root 'tools\analysis\nup_extract.py') (Join-Path $Out 'tools\analysis') -Force
-Say 'engine        xc2_setup.py + extract_corpus.py + nup_extract.py'
+Say 'engine        xc2_setup.py + the shader chain + nup_extract.py'
 New-Item -ItemType Directory -Force (Join-Path $Out 'xc2\sites') | Out-Null
 Copy-Item (Join-Path $root 'xc2\sites\*.txt') (Join-Path $Out 'xc2\sites') -Force
 New-Item -ItemType Directory -Force (Join-Path $Out 'xc2\src') | Out-Null
