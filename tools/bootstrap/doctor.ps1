@@ -26,6 +26,16 @@ $lock = Get-Content $lockPath -Raw | ConvertFrom-Json
 
 $problems = @()
 $report = @()
+
+# Two sources can share a cache file name (the two Vulkan archives are both vulkan-sdk-1.4.363.0.zip), in which case
+# the CMake download dir holds one file for two of them and a hash comparison proves nothing.
+$leafOf = @{}
+foreach ($s in $lock.sources) {
+    if ($s.dest -or -not $s.url) { continue }
+    $leaf = ($s.url -split '/')[-1]
+    if (-not $leafOf.ContainsKey($leaf)) { $leafOf[$leaf] = @() }
+    $leafOf[$leaf] += $s.name
+}
 function Add-Row([string]$name, [string]$state, [string]$detail) {
     $script:report += [pscustomobject]@{ name = $name; state = $state; detail = $detail }
     if ($state -ne 'ok') { $script:problems += "$name : $detail" }
@@ -61,6 +71,19 @@ function Get-Cached($src) {
     return $null
 }
 
+# A checkout that is already on disk is checked against the lock's commit: that is the only way to know the bytes
+# being compiled are the bytes that were verified, and it is the check a reporter can run for us.
+$root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+foreach ($s in $lock.sources) {
+    if (-not $s.checkout) { continue }
+    $dir = Join-Path $root $s.checkout
+    if (-not (Test-Path (Join-Path $dir '.git'))) { continue }
+    $head = (& git -C $dir rev-parse HEAD 2>$null)
+    if ($LASTEXITCODE -ne 0) { continue }
+    if ($head -eq $s.commit) { Add-Row ($s.name + ' (checkout)') 'ok' ($head.Substring(0, 7) + ' matches the lock') }
+    else { Add-Row ($s.name + ' (checkout)') 'version' ("on disk " + $head.Substring(0, 7) + ", lock says " + $s.commit.Substring(0, 7)) }
+}
+
 foreach ($s in $lock.sources) {
     if ($s.kind -eq 'git') {
         if (-not $s.commit) {
@@ -72,10 +95,28 @@ foreach ($s in $lock.sources) {
         else { Add-Row $s.name 'unreachable' "$($s.url) does not answer; $($s.risk)" }
         continue
     }
+    # Sources that a script of ours downloads to its own place are checked there, not in the CMake cache.
+    if ($s.dest) {
+        $d = Join-Path $root $s.dest
+        if (Test-Path $d) {
+            $n = (Get-ChildItem $d -Recurse -File -ErrorAction SilentlyContinue | Measure-Object).Count
+            if ($n -gt 0) { Add-Row $s.name 'ok' ("present at " + $s.dest + " ($n files)") }
+            else { Add-Row $s.name 'empty' ($s.dest + " exists but holds no files") }
+        } else {
+            Add-Row $s.name 'missing' ("not at " + $s.dest + "; run the script that fetches it (BUILD.md section 2)")
+        }
+        continue
+    }
     $cached = Get-Cached $s
     if ($cached) {
         # A zero-byte file in the cache is a download that failed and was left behind; the hash check would only say
         # "wrong hash", which reads like a supply-chain problem rather than a broken cache.
+        $leaf = ($s.url -split '/')[-1]
+        if ($leafOf[$leaf].Count -gt 1) {
+            Add-Row $s.name 'ambiguous' ("shares the cache file $leaf with " + (($leafOf[$leaf] | Where-Object { $_ -ne $s.name }) -join ', ') +
+                                           "; the hash cannot be attributed, check the CMake configure output instead")
+            continue
+        }
         if ((Get-Item $cached).Length -eq 0) {
             Add-Row $s.name 'empty' "$cached is 0 bytes: a failed download is sitting in the cache, delete it and rebuild"
             continue
