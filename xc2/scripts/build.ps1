@@ -137,7 +137,16 @@ if ($ccJobs.Count) {
     }
     $bad = @($res | Where-Object { $_.Exit -ne 0 })
     Write-Host ("compile: {0} ok, {1} failed, {2:N1}s" -f ($res.Count - $bad.Count), $bad.Count, $t.Elapsed.TotalSeconds)
-    foreach ($b in $bad) { Write-Host ($b.Log -split "`n" | Where-Object { $_ -match 'error:' } | Select-Object -First 5) }
+    # A compiler that is killed (memory, a cancelled job) exits non-zero without writing an "error:" line, and this
+    # used to print nothing at all: measured 2026-11-17, ten failed translation units and a blank space in the log,
+    # with each one compiling fine by hand afterwards. Always show the exit code and whatever it did say.
+    foreach ($b in $bad) {
+        $lines = @($b.Log -split "`n" | Where-Object { $_ -match 'error:|fatal|Internal error|Killed|out of memory' } | Select-Object -First 5)
+        if (-not $lines.Count) { $lines = @($b.Log -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 5) }
+        Write-Host ("  {0}: exit {1}" -f (Split-Path $b.Src -Leaf), $b.Exit)
+        if (-not $lines.Count) { Write-Host '    (no output at all: the compiler was most likely killed)' }
+        else { foreach ($l in $lines) { Write-Host ('    ' + $l.TrimEnd()) } }
+    }
     if ($bad.Count) { throw 'compile failed' }
 }
 

@@ -293,15 +293,21 @@ def step_runtime(r, repo):
     return r.end_step("runtime", started, True)
 
 
-def step_lift(r, repo, install):
+def step_lift(r, repo, install, jobs=0):
     started = r.step("lift")
     lib = repo / "xc2" / "build" / "lib-301"
     if all((lib / (m + ".lib")).is_file() for m in MODULES):
         return r.end_step("lift", started, True, "the libraries are already there")
-    rc = r.run(pwsh(repo / "xc2" / "scripts" / "build.ps1", "-Exefs", install / "exefs", "-Run:$false",
-                    "-Modules", ",".join(MODULES), "-LiftDir", repo / "xc2" / "build" / "lift-301",
-                    "-ObjDir", repo / "xc2" / "build" / "obj-301", "-LibDir", lib), cwd=repo,
-                on_line=build_progress(r, "lift"))
+    argv = pwsh(repo / "xc2" / "scripts" / "build.ps1", "-Exefs", install / "exefs", "-Run:$false",
+                "-Modules", ",".join(MODULES), "-LiftDir", repo / "xc2" / "build" / "lift-301",
+                "-ObjDir", repo / "xc2" / "build" / "obj-301", "-LibDir", lib)
+    if jobs > 0:
+        # The build script's own default is 10 concurrent clang-cl, which is what it takes to run the largest
+        # translation units out of memory on a busy machine: measured 10 failures that each compiled in 2-4 s by
+        # hand. A front end that knows the machine can say otherwise.
+        r.log("  jobs: %d" % jobs)
+        argv += ["-Jobs", str(jobs)]
+    rc = r.run(argv, cwd=repo, on_line=build_progress(r, "lift"))
     return r.end_step("lift", started, rc == 0, "" if rc == 0 else "build.ps1 failed (its stub link is expected to fail)")
 
 
@@ -414,6 +420,8 @@ def main():
     g.add_argument("--dump")
     g.add_argument("--exefs", help="a folder that already holds the modules (romfs given with --romfs)")
     ap.add_argument("--romfs", help="the romfs folder when it is not next to the dump")
+    ap.add_argument("--jobs", type=int, default=0,
+                    help="parallel compiles for the lift; 0 keeps the build script's own default")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--skip", default="", help="comma separated steps to skip")
     a = ap.parse_args()
@@ -436,7 +444,7 @@ def main():
         ("sources", lambda: step_sources(r, repo)),
         ("runtime", lambda: step_runtime(r, repo)),
         ("ingest", lambda: step_ingest(r, repo, install, nup, dump, exefs_in, romfs_in)),
-        ("lift", lambda: step_lift(r, repo, install)),
+        ("lift", lambda: step_lift(r, repo, install, a.jobs)),
         ("link", lambda: step_link(r, repo, install)),
         ("done", lambda: step_done(r, repo, install)),
     ]
