@@ -13,6 +13,20 @@ the result stays on your machine, in `xc2/build/boot/shader_cache`.
 | 1 | `ard_index.py` | scans `bf2.ard` for the record magic and writes the record index | 10.2 GB in 7 s (52,409 records); 14.1 GB in 10 s (75,646) |
 | 2 | `extract_embedded.py` | decodes the shader groups embedded inside those records | 13,059 groups, 78,793 blocks, 12,126 distinct, 84 s |
 
+One command runs all of it:
+
+```powershell
+python tools/shader-cache/build_cache.py --ard <romfs>\bf2.ard `
+    --cache xc2\build\boot\shader_cache\spirv `
+    --harness third_party\fefw-recomp\tools\shaders\build\bin\Release\net10.0\spirv_harness.exe `
+    --pack  xc2\build\boot\shader_cache\spirv.preload.pack --jobs 10
+```
+
+Measured on the retail 3.0.1 archive from an empty cache: **4.7 minutes**, ending with 12,104 shaders,
+12,104 resource rows and a 53.9 MB pack, exit 0.
+
+The three stages are also usable on their own:
+
 ```powershell
 python tools/shader-cache/ard_index.py       --ard <romfs>\bf2.ard --out work\files.tsv
 python tools/shader-cache/extract_embedded.py --ard <romfs>\bf2.ard --tsv work\files.tsv --out work\blocks
@@ -65,12 +79,25 @@ Of the 12,126 distinct blocks, **12,104 are real shaders** and 22 are misaligned
 match anything the game requests, so they never reach the cache). With the 9,067 blocks already collected by
 playing, that is the 21,171-entry cache this project runs with.
 
+## Reproducing it
+
+From a clean room — a pristine checkout, the player's own dump and romfs, and an empty cache — the result is
+byte-identical to a cache built by hand:
+
+| check | result |
+|---|---|
+| shaders the rebuild produces that are not in a hand-built cache | 0 of 12,104 |
+| `.spv` byte-identical on a 50-file sample | 50 of 50 |
+| rows carrying a non-empty `resources` field | 12,081 of 12,104 |
+| pack entries whose hash is in the cache | 12,104 of 12,104 |
+
+The header must come from the harness, never from a hardcoded string: the runtime locates the resource records
+by looking for a column literally named `resources` (`parse_results_tsv` in `nvn_shaders.cpp`), so a cache
+written under any other header silently loses every shader's descriptor bindings and the scene renders flat.
+
 ## Still missing
 
-The preload pack rebuild lives in `pack_full.py`, which is not ported yet — pass `--pack-tool` if you have it.
-Without it the pack is left alone, which is correct but slower at startup: the runtime reads the pack first and
-falls back to the loose `.spv` files for anything the pack lacks, so newly installed shaders are found either
-way.
+Nothing in this folder. The preload pack is now `pack.py`; pass `--pack <path>` and the chain rebuilds it.
 
 ## Platform
 

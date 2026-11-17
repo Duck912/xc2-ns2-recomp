@@ -93,8 +93,12 @@ def cached(path):
 
 
 def main(argv):
-    ap = argparse.ArgumentParser(description="Translate extracted shader blocks and install them.")
-    ap.add_argument("--blocks", required=True, help="folder written by extract_embedded.py")
+    ap = argparse.ArgumentParser(
+        description="Translate extracted shader blocks and install them. "
+                    "With --ard it runs the whole chain: index, extract, translate, install, pack.")
+    ap.add_argument("--ard", default="", help="bf2.ard: run the index and extraction stages first")
+    ap.add_argument("--work", default="", help="scratch folder for the chain (default: next to --cache)")
+    ap.add_argument("--blocks", default="", help="folder written by extract_embedded.py")
     ap.add_argument("--cache", required=True, help="the spirv cache folder (xc2/build/boot/shader_cache/spirv)")
     ap.add_argument("--harness", required=True, help="spirv_harness executable")
     ap.add_argument("--jobs", type=int, default=8)
@@ -105,6 +109,33 @@ def main(argv):
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
     rep = Reporter(a.json)
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    work = a.work or (os.path.join(os.path.dirname(os.path.abspath(a.cache)), "shader-cache-work"))
+    if a.ard:
+        if not os.path.exists(a.ard):
+            rep.fail(EXIT_INPUT, "no archive at " + a.ard)
+            return EXIT_INPUT
+        os.makedirs(work, exist_ok=True)
+        tsv = os.path.join(work, "files.tsv")
+        rep.step("index", ard=a.ard)
+        r = subprocess.run([sys.executable, os.path.join(here, "ard_index.py"),
+                            "--ard", a.ard, "--out", tsv], capture_output=True, text=True)
+        if r.returncode != 0:
+            rep.say((r.stderr or r.stdout or "").strip()[-600:])
+            rep.fail(EXIT_INPUT, "the index step failed")
+            return EXIT_INPUT
+        a.blocks = os.path.join(work, "blocks")
+        rep.step("extract", ard=a.ard, out=a.blocks)
+        r = subprocess.run([sys.executable, os.path.join(here, "extract_embedded.py"),
+                            "--ard", a.ard, "--tsv", tsv, "--out", a.blocks], capture_output=True, text=True)
+        if r.returncode != 0:
+            rep.say((r.stderr or r.stdout or "").strip()[-600:])
+            rep.fail(EXIT_INPUT, "the extraction step failed")
+            return EXIT_INPUT
+    if not a.blocks:
+        rep.fail(EXIT_ARGS, "give --blocks, or --ard to run the whole chain")
+        return EXIT_ARGS
 
     manifest = os.path.join(a.blocks, "manifest.tsv")
     if not os.path.exists(manifest):
@@ -128,7 +159,7 @@ def main(argv):
         rep.done(translated=0, installed=0, would_translate=len(missing), note="dry run")
         return EXIT_OK
 
-    stage = a.stage or os.path.join(os.path.dirname(os.path.abspath(a.blocks)), "build_cache")
+    stage = a.stage or os.path.join(work, "build_cache")
     stage_in = os.path.join(stage, "in")
     stage_out = os.path.join(stage, "out")
     for d in (stage_in, stage_out):
@@ -171,11 +202,22 @@ def main(argv):
     results = os.path.join(a.cache, "results.tsv")
     new_rows = os.path.join(stage_out, "results.tsv")
     if os.path.exists(new_rows):
+        # The header has to come from the harness, not from us: the runtime finds the resource records by
+        # looking for a column literally named "resources" (parse_results_tsv in nvn_shaders.cpp), and a cache
+        # written under any other header silently loses every shader's descriptor bindings.
         known = set()
-        head = "hash\tentry\trec_off\tprog_off\tctrl_off\tcode_len\tstage"
+        with open(new_rows, encoding="utf-8") as f:
+            head = f.readline().rstrip("\n")
+        if "resources" not in head.split("\t"):
+            rep.fail(EXIT_INPUT, "the harness output has no 'resources' column: " + head)
+            return EXIT_INPUT
         if os.path.exists(results):
             with open(results, encoding="utf-8") as f:
-                head = f.readline().rstrip("\n")
+                old_head = f.readline().rstrip("\n")
+                if old_head != head:
+                    rep.say("note: the cache was written under a different header")
+                    rep.say("      cache : " + old_head)
+                    rep.say("      harness: " + head)
                 for line in f:
                     if line.strip():
                         known.add(line.split("\t", 1)[0])
@@ -200,9 +242,13 @@ def main(argv):
             added = len(add)
 
     packed = "left alone"
-    if a.pack_tool and a.pack:
-        rep.step("pack", tool=a.pack_tool)
-        cmd = [sys.executable, a.pack_tool, "--rows", results, "--cache", a.cache,
+    pack_tool = a.pack_tool or os.path.join(here, "pack.py")
+    if a.pack and not os.path.exists(pack_tool):
+        rep.fail(EXIT_DEP, "asked to rebuild the pack but there is no pack tool at " + pack_tool)
+        return EXIT_DEP
+    if a.pack:
+        rep.step("pack", tool=os.path.basename(pack_tool))
+        cmd = [sys.executable, pack_tool, "--rows", results, "--cache", a.cache,
                "--out", os.path.join(stage, "spirv.preload.pack"), "--install", a.pack]
         r = subprocess.run(cmd, capture_output=True, text=True)
         if r.returncode != 0:
