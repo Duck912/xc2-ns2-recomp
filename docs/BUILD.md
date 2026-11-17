@@ -57,6 +57,24 @@ xc2/game/xc2ns301/       main, sdk, subsdk0, subsdk1, subsdk2, subsdk3, rtld, ma
 <your dlc>/              optional                               (NXRT_AOC_DIR at run time)
 ```
 
+That is the **folder** layout. If your dump is a single `.nup` package instead — the format a55uka's tool writes —
+unpack it first; the two parts land exactly where the paths above expect them:
+
+```powershell
+# the program (exefs): main, main.npdm, sdk, subsdk0..3, rtld
+python tools\analysis\nup_extract.py --nup <your dump>.nup --pkg 0 --part exefs --out xc2\game\xc2ns301
+
+# the romfs: bf2.ard, bf2.arh, stream/
+python tools\analysis\nup_extract.py --nup <your dump>.nup --pkg 0 --part romfs --out <your romfs 3.0.1>
+
+# the add-on content, if you have it (package 7)
+python tools\analysis\nup_extract.py --nup <your dump>.nup --pkg 7 --out <your dlc>
+```
+
+`--list` prints the packages a `.nup` holds and `--verify` checks every extent and SHA-256 first, which is
+worth doing once: it catches a truncated dump before the build blames itself. It needs `zstandard`
+(`pip install zstandard`) only for packages that are actually compressed.
+
 ## 4. Build
 
 ### 4.1 the runtime (once, and after changing `third_party/fefw-recomp/runtime/**`)
