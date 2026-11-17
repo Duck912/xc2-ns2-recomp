@@ -3788,6 +3788,44 @@ bool begin_draw(int mode, bool indexed, int index_type, VkPrimitiveTopology* top
         for (uint32_t i = 0; i < S.ncolor; ++i)
             for (Texture* st : g_storage_bound)
                 if (S.color_tex[i].get() == st) g_color_general |= 1u << i;
+        // [nvn] fs_debug: a fragment output whose numeric type disagrees with the colour attachment it lands in, or
+        // lands in nothing. Both are Undefined-Value warnings in Vulkan; the console stores the register bits
+        // unchanged, so the fix is a shader variant - but which shader is not visible from the VUID, only from here.
+        static const bool fs_debug = nxrt::config_get_bool("nvn", "fs_debug", false);
+        if (fs_debug && S.stage[kFragment]) {
+            static std::set<std::string> told;
+            for (const ShaderIo& o : S.stage[kFragment]->refl.outputs) {
+                const Texture* t = o.location < S.ncolor ? S.color_tex[o.location].get() : nullptr;
+                const VkFormat af = t ? tex_vk_format(const_cast<Texture*>(t)) : VK_FORMAT_UNDEFINED;
+                const bool int_target = af != VK_FORMAT_UNDEFINED && is_int_format(af);
+                const bool int_output = o.type != ScalarType::Float;
+                const char* bad = !t ? "no attachment"
+                                  : (int_output != int_target) ? (int_target ? "float output into an integer attachment"
+                                                                             : "integer output into a float attachment")
+                                  : (int_output && (o.type == ScalarType::Sint) != vk_format_is_signed_int(af))
+                                        ? "signed output into an unsigned attachment (or the reverse)"
+                                        : nullptr;
+                if (!bad) continue;
+                char key[128];
+                snprintf(key, sizeof key, "%s:%u:%d", S.stage[kFragment]->hash.c_str(), o.location, int(af));
+                if (told.insert(key).second)
+                    NXLOG_I(kTag, "fs_debug: fs %s output location %u is %s, attachment %u is format %d: %s", S.stage[kFragment]->hash.c_str(),
+                            o.location, o.type == ScalarType::Float ? "float" : "integer", o.location, int(af), bad);
+            }
+            // the light list renders into R32G32_UINT; name every shader that does, with what its outputs say
+            if (S.ncolor > 0 && S.color_tex[0] && tex_vk_format(S.color_tex[0].get()) == VK_FORMAT_R32G32_UINT) {
+                static std::set<std::string> told2;
+                if (told2.insert(S.stage[kFragment]->hash).second) {
+                    std::string outs;
+                    for (const ShaderIo& o : S.stage[kFragment]->refl.outputs)
+                        outs += " loc" + std::to_string(o.location) + ":" +
+                                (o.type == ScalarType::Float ? "f" : o.type == ScalarType::Sint ? "i" : o.type == ScalarType::Uint ? "u" : "?") +
+                                std::to_string(o.components);
+                    NXLOG_I(kTag, "fs_debug: fs %s renders into R32G32_UINT (attachments %u); outputs:%s", S.stage[kFragment]->hash.c_str(), S.ncolor,
+                            outs.c_str());
+                }
+            }
+        }
         if (g_trace) {   // [nvn] trace_dump_tex: also the block-compressed level 0 as the GPU holds it, to compare with the prepared data
             static const std::string dump_dir = nxrt::config_get_str("nvn", "trace_dump_tex", "");
             static std::unordered_map<uint32_t, bool> raw_done;
