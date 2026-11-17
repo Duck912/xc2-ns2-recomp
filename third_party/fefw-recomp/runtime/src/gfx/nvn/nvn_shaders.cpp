@@ -729,7 +729,7 @@ size_t parse_results_tsv(std::string_view text, std::unordered_map<std::string, 
     return lines;
 }
 
-bool apply_harness(ShaderReflection& refl, const std::vector<HarnessResource>& resources) {
+bool apply_harness(ShaderReflection& refl, const std::vector<HarnessResource>& resources, std::string* why) {
     bool ok = true;
     for (const HarnessResource& r : resources) {
         DescriptorBinding* b = nullptr;
@@ -737,12 +737,20 @@ bool apply_harness(ShaderReflection& refl, const std::vector<HarnessResource>& r
             if (int(x.declared_set) == r.set && int(x.declared_binding) == r.binding) b = &x;
         if (!b) {
             ok = false;
+            if (why) {
+                *why = "the record names s" + std::to_string(r.set) + "b" + std::to_string(r.binding) + " (" + r.type +
+                       "), the SPIR-V has:";
+                for (const auto& x : refl.bindings)
+                    *why += " s" + std::to_string(int(x.declared_set)) + "b" + std::to_string(int(x.declared_binding));
+            }
             continue;
         }
         switch (r.kind) {
         case HarnessResource::Storage:
             if (b->type != DescriptorType::StorageBuffer || r.bank != 0) {
                 ok = false;
+                if (why) *why = "s" + std::to_string(r.set) + "b" + std::to_string(r.binding) +
+                                " is recorded as a storage buffer but the SPIR-V does not have one there";
                 break;
             }
             set_c0_offset(b->nvn, refl.stage, r.word * 4);  // the harness prints 32-bit words
@@ -929,7 +937,8 @@ bool make_shader_info(const uint8_t* code, const uint8_t* control, std::vector<u
     if (resources && !pre_refl) {
         std::vector<HarnessResource> list;
         if (!parse_harness_resources(*resources, list)) return fail("unreadable resources record");
-        if (!apply_harness(out.refl, list)) return fail("resources record does not match the SPIR-V");
+        std::string why;
+        if (!apply_harness(out.refl, list, &why)) return fail("resources record does not match the SPIR-V: " + why);
     }
     apply_nvn2_compute_table(out.refl, c);
     return move_pool_arrays(out.spirv, out.refl, error);
