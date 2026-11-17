@@ -1558,6 +1558,12 @@ int main(int argc, char **argv) {
         po.device = gfx_device.get();
         po.renderer = gfx_renderer.get();
         po.window = !headless;
+        // The F1 settings page (gfx/play/play_ui.cpp, 68 KB, already in nxrt_gfx) is compiled into this exe either
+        // way. Turning it on creates it - the log says "overlay ready (toggle key F1)" - but F1 still does nothing,
+        // and the reason is the event path, not the overlay: platform::pump_events() (called on the input thread
+        // below) fills input::queue, while the only drain is play.cpp's update function, which runs from the frame
+        // hook. XC2 declares no frame-step site, so that hook never runs and the queue is never drained.
+        // Wire that up (call play's update from the input pump, or expose a pump) before switching this on.
         po.overlay = false;
         nxrt::play::start(po);
     }
