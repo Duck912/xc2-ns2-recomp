@@ -34,6 +34,7 @@ import zlib
 CONTROL_MAGIC = b"\x34\x12\x76\x98"
 CONTROL_SIZE = 0xd8
 CONTROL_ID = 201
+NDSR_MAGIC = b"NDSR"   # ndsr.pck: an opcode stream, code before the control table
 HEADER = 0x30
 
 STAGE = {0: "vertex", 1: "fragment", 2: "geometry", 3: "tess_control", 4: "tess_eval", 5: "compute"}
@@ -113,6 +114,26 @@ def main(argv):
     t0 = time.time()
     man = open(os.path.join(a.out, "manifest.tsv"), "w", encoding="utf-8", newline="\n")
     man.write(MANIFEST_COLUMNS)
+
+    def emit(data, code_off, size, ctrl_off):
+        """Write one block (code + its control section) and its manifest row, once per distinct hash."""
+        code = data[code_off:code_off + size]
+        h = hashlib.sha1(code).hexdigest()[:16]
+        stat["blocks"] += 1
+        if h in known:
+            stat["known_hit"] += 1
+        if h in seen:
+            return
+        seen.add(h)
+        with open(os.path.join(a.out, "code_%s.bin" % h), "wb") as g:
+            g.write(code)
+        with open(os.path.join(a.out, "ctrl_%s.bin" % h), "wb") as g:
+            g.write(data[ctrl_off:ctrl_off + CONTROL_SIZE])
+        st = struct.unpack_from("<H", data, ctrl_off + 0x56)[0]
+        man.write("run_%s\t%s\t0x0\t0x%x\t0x0\t0xd8\t0x%x\t0x%x\t0x%x\t0x%x\t%s\tcode_%s.bin\tctrl_%s.bin\n" % (
+            h, STAGE.get(st, "unknown"), size,
+            struct.unpack_from("<I", data, ctrl_off + 0x38)[0], struct.unpack_from("<I", data, ctrl_off + 0x38)[0],
+            struct.unpack_from("<I", data, ctrl_off + 0x40)[0], struct.unpack_from("<I", data, ctrl_off + 0x3c)[0], h, h, h))
     with open(a.ard, "rb") as f:
         for i, (off, name, unc, comp) in enumerate(recs):
             if i and i % 10000 == 0:
@@ -153,28 +174,33 @@ def main(argv):
                     cs = struct.unpack_from("<I", data, c + 0x44)[0]
                     if cs == 0 or pos + cs > len(data):
                         break
-                    code = data[pos:pos + cs]
-                    h = hashlib.sha1(code).hexdigest()[:16]
-                    stat["blocks"] += 1
-                    if h in known:
-                        stat["known_hit"] += 1
-                    if h not in seen:
-                        seen.add(h)
-                        with open(os.path.join(a.out, "code_%s.bin" % h), "wb") as g:
-                            g.write(code)
-                        with open(os.path.join(a.out, "ctrl_%s.bin" % h), "wb") as g:
-                            g.write(data[c:c + CONTROL_SIZE])
-                        st = struct.unpack_from("<H", data, c + 0x56)[0]
-                        man.write("run_%s\t%s\t0x0\t0x%x\t0x0\t0xd8\t0x%x\t0x%x\t0x%x\t0x%x\t%s\tcode_%s.bin\tctrl_%s.bin\n" % (
-                            h, STAGE.get(st, "unknown"), cs,
-                            struct.unpack_from("<I", data, c + 0x38)[0], struct.unpack_from("<I", data, c + 0x38)[0],
-                            struct.unpack_from("<I", data, c + 0x40)[0], struct.unpack_from("<I", data, c + 0x3c)[0], h, h, h))
+                    emit(data, pos, cs, c)
                     pos += (cs + 0xff) & ~0xff
+
+            # The "NDSR" containers (ndsr.pck) put the code BEFORE the control table and describe each program
+            # with a 16-byte entry in an opcode stream:  [control][?][code][(size << 4) | flags]
+            # The control section holds no pointer to its code, so the stream is the only way in.  Measured on the
+            # retail archive: 40 entries, 28 distinct blocks, and all 28 of the blocks the runtime asked for were
+            # found this way - they are exactly the ones the group rule above misses.
+            if data[:4] == NDSR_MAGIC:
+                lo, hi = ctrls[0], ctrls[-1] + CONTROL_SIZE
+                stat["ndsr_records"] += 1
+                for k in range(0, len(data) - 16, 4):
+                    ctrl, _unused, code_off, field = struct.unpack_from("<IIII", data, k)
+                    if not (lo <= ctrl < hi) or not (0 < code_off < lo):
+                        continue
+                    size = field >> 4
+                    if size == 0 or code_off + size > len(data):
+                        continue
+                    stat["ndsr_blocks"] += 1
+                    emit(data, code_off, size, ctrl)
     man.close()
 
     print("done %.0fs" % (time.time() - t0))
     print("  groups  : %d" % stat["groups"])
     print("  blocks  : %d   (inflate failures: %d)" % (stat["blocks"], stat["inflate_fail"]))
+    if stat["ndsr_records"]:
+        print("  ndsr    : %d record(s), %d program entries" % (stat["ndsr_records"], stat["ndsr_blocks"]))
     print("  distinct: %d   -> %s" % (len(seen), a.out))
     if known:
         print("  known   : %d of the distinct blocks are hashes the runtime has asked for" % stat["known_hit"])
