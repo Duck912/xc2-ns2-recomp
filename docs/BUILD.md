@@ -34,9 +34,16 @@ $env:XC2_PYTHON = 'C:\path\to\python.exe'
 
 | what | how |
 |---|---|
-| `third_party/nxrecomp` (the recompiler) | from the repository root: `git clone https://github.com/drakolordx7/nxrecomp.git third_party/nxrecomp` — the version this build used is commit `e7a5a54` (2026-11-14) |
+| `third_party/nxrecomp` (the recompiler) | from the repository root, unpack [nxrecomp-e7a5a54-xc2.tar.gz](https://github.com/weile10000/xc2-ns2-recomp/releases/download/v0.1.0/nxrecomp-e7a5a54-xc2.tar.gz) so that `third_party/nxrecomp/` appears (4.6 MB, sha256 `6b140959ada4d74b1843783736569db03ab307d8b84fb376da9c77cdc0729419`) |
 | `third_party/deps` (SDL3, Vulkan-Headers, volk, VMA, ImGui, zstd, dav1d) | fetched by CMake's `FetchContent` on the first configure (`runtime/cmake/gfx_deps.cmake`) |
 | Ryujinx's shader translator | `pwsh -File third_party/fefw-recomp/tools/shaders/scripts/setup_ryujinx.ps1`, then `dotnet build third_party/fefw-recomp/tools/shaders/harness/SpirvHarness.csproj -c Release` |
+
+**Do not `git clone` the recompiler.** The upstream repository rewrote its history on 2026-11-16: the commit this
+build needs (`e7a5a54`) is no longer fetchable — git answers `not our ref`, the API returns 422 — and the current
+default branch has a different layout (`base/` and `games/` where this build expects `recomp/`, `runtime/` and
+`tools/`). A fresh clone therefore produces a tree nothing here can use. The release asset above is that exact
+commit (GPL-3.0-or-later) **plus this project's three recompiler patches and the `xc2ns2` game profile**, which live
+in `third_party/nxrecomp` and are git-ignored, so they would otherwise be lost with the upstream commit.
 
 The translator script needs no arguments. It stages the three projects it uses (Ryujinx.Common, Spv.Generator,
 Ryujinx.Graphics.Shader) from a local checkout if you have one at `third_party/fefw-recomp/refs/ryubing`, and

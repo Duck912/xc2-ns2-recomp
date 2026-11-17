@@ -87,12 +87,13 @@
     },
     {
       "name": "nxrecomp",
-      "kind": "git",
-      "url": "https://github.com/drakolordx7/nxrecomp.git",
-      "commit": "e7a5a54",
-      "license": "see the upstream repository",
+      "kind": "archive",
+      "url": "https://github.com/weile10000/xc2-ns2-recomp/releases/download/v0.1.0/nxrecomp-e7a5a54-xc2.tar.gz",
+      "sha256": "6b140959ada4d74b1843783736569db03ab307d8b84fb376da9c77cdc0729419",
+      "size": 4802000,
+      "license": "GPL-3.0-or-later",
       "used_by": "the recompiler; BUILD.md section 2",
-      "risk": "a commit id is not a guarantee: this upstream has already had e7a5a54 reported unreachable. Vendor a tarball here once a working copy is confirmed."
+      "note": "Upstream at e7a5a54 plus this project's three recompiler patches and the xc2ns2 game profile, which live in third_party/nxrecomp (git-ignored) and would otherwise be lost. The upstream repository rewrote its history on 2026-11-16: the commit is no longer fetchable (git says 'not our ref', the API returns 422) and the default branch has a different layout (base/ + games/ instead of recomp/ + runtime/ + tools/). A git clone of that repository therefore produces a tree this build cannot use, which is what the first clean-room build found."
     },
     {
       "name": "astc-encoder",
