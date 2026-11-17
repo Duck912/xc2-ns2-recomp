@@ -20,6 +20,13 @@ param(
     [switch]$Json
 )
 $ErrorActionPreference = 'Stop'
+
+# The toolchain lives in a directory that env.ps1 puts on PATH, so a machine that HAS cmake and ninja reports them as
+# missing unless that script ran first - which is what a first-time user hits, and the advice ("install cmake") is then
+# wrong. Source it here when XC2_ENV names it, so the report describes the machine rather than the shell.
+if ($env:XC2_ENV -and (Test-Path $env:XC2_ENV)) {
+    . $env:XC2_ENV | Out-Null
+}
 $lockPath = Join-Path $PSScriptRoot 'deps.lock.json'
 if (-not (Test-Path $lockPath)) { throw "no deps.lock.json next to this script" }
 $lock = Get-Content $lockPath -Raw | ConvertFrom-Json
