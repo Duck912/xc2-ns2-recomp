@@ -149,24 +149,35 @@ script links the older four-module route into `xc2\build\boot\`.
 ### 4.4 shaders
 
 Shaders are translated offline into `xc2\build\boot\shader_cache\spirv` (SPIR-V keyed by the shader hash).
-The incremental path needs nothing from this repository:
+You do not have to manage this: the launcher fills the cache for you.
 
-1. run the game **with `-dump`** — `tools\run\play-301.cmd -dump`; collection is off by default, and every
-   shader the game asks for that the cache lacks is written to `work/shader_dump-*/`;
-2. after the game exits, `pwsh -File tools\shader\install_shaders.ps1 -Dump work\shader_dump-*` translates that
-   dump and installs it into the cache. It stops if the translator fails, replaces the `results.tsv` rows of hashes
-   it re-translated, and drops `spirv.preload.pack` when a shader's bytes changed — the pack is read before the
-   loose `.spv` files, so without that the old entry would keep winning.
+**First launch.** The cache starts empty, so the launcher runs the game **headless for about 24 seconds** to collect
+every shader the game asks for, translates them, and only then opens the window. Progress is printed as `PREFILL:`
+lines and written to `work\prefill.status` (`phase`, `elapsed`, `budget`, `collected`, `note`) so a front end
+can show it. Collection runs once per cache (`work\.prefilled`); `-noprefill` skips it, and a collector that dies
+early leaves the marker unwritten so the next launch tries again.
 
-Two shaders carry hand-made fixes (a fog-layer correction and a UV-divide correction). They are **derived from the
-game's own shaders and are therefore not distributed**: the folder xc2\patches\ is yours to create, and
-xc2\scripts\patch-shaders.ps1 installs whatever is in it (or exits cleanly when the folder is absent). Without
-them the game runs, with those two visual defects.
+**Later launches** need nothing. New areas keep asking for shaders the cache has never seen: those are collected when
+the game exits and translated, so the *next* launch is complete. The first time you enter an area with unseen
+shaders, that area renders with gaps until you restart.
 
-A *complete* cache (21,171 shaders for 3.0.1) also scans the resource archives for shader blocks embedded in
-resource records and in the ExeFS `.rodata`. That driver lives in the private work tree
-(`work/oracle/build_shaders.py`) and is not part of this repository yet — with it the cache can be rebuilt in
-one pass; without it the incremental path above fills it in as you play.
+**Rebuilding offline.** `tools\shader-cache\` walks your own dump and needs nothing else:
+
+```powershell
+python tools\shader-cache\ard_index.py        --ard <romfs>\bf2.ard --out work\files.tsv
+python tools\shader-cache\extract_embedded.py --ard <romfs>\bf2.ard --tsv work\files.tsv --out work\blocks
+python tools\shader-cache\build_cache.py      --blocks work\blocks `
+       --cache xc2\build\boot\shader_cache\spirv --harness <spirv_harness.exe>
+```
+
+That finds **12,154** blocks in 3.0.1 in about five minutes. It is not the whole set: some shaders the game uses are
+not in any file — they exist only at run time — so the launcher's collection is what closes the last gap. Neither
+path alone is complete.
+
+**Stencil samplers.** `format-07753` (a float sampler reading a stencil plane as an integer) is undefined behaviour
+on NVIDIA and can end in a lost device. `tools\shader\patch_ds_samplers.py` retypes the affected samplers; the
+launcher runs it automatically after a session that reported them, using your own log, so nothing derived from the
+game is distributed.
 
 ## 5. Run
 
