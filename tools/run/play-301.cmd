@@ -155,7 +155,7 @@ rem A fresh cache renders with gaps - the title screen is black - until the game
 rem asked for are translated. Do that collection headless here, so the FIRST launch is already complete. Once per
 rem cache (work\.prefilled); -noprefill skips it.
 if not defined XC2_NOPREFILL (
-    if not defined NXRT_NVN_SHADER_CACHE set NXRT_NVN_SHADER_CACHE=%NXRT_NVN_SHADER_CACHE_DIR%\spirv
+    if not defined NXRT_NVN_SHADER_CACHE set NXRT_NVN_SHADER_CACHE=%ROOT%\xc2\build\boot\shader_cache\spirv
     powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\tools\run\prefill.ps1" -Exe "%XC2_EXE%" -Exefs "%ROOT%\xc2\game\xc2ns301" -Cache "%NXRT_NVN_SHADER_CACHE%" -Work "%ROOT%\work"
 )
 rem Every block the game asks for and the cache lacks is written to work\missing-301, and ds_debug records which
@@ -165,7 +165,7 @@ if not defined NXRT_NVN_DUMP_MISSING set NXRT_NVN_DUMP_MISSING=%ROOT%\work\missi
 if not defined NXRT_NVN_DS_DEBUG set NXRT_NVN_DS_DEBUG=1
 "%XC2_EXE%" --exefs "%ROOT%\xc2\game\xc2ns301" --link host --gfx %GFXMODE% --log "%LOG%"
 set XC2_RC=%ERRORLEVEL%
-if not defined NXRT_NVN_SHADER_CACHE set NXRT_NVN_SHADER_CACHE=%NXRT_NVN_SHADER_CACHE_DIR%\spirv
+if not defined NXRT_NVN_SHADER_CACHE set NXRT_NVN_SHADER_CACHE=%ROOT%\xc2\build\boot\shader_cache\spirv
 powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\tools\run\fill-cache.ps1" -Cache "%NXRT_NVN_SHADER_CACHE%" -Missing "%ROOT%\work\missing-301" -DsLog "%LOG%"
 set ERRORLEVEL=%XC2_RC%
 echo exit code %ERRORLEVEL%
