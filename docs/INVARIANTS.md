@@ -27,3 +27,17 @@ The repository contains tooling, runtime code and documentation only. The game's
 produces from them, the shader cache built from them and any key material stay on the machine that owns the
 game. Builds are not distributed: the build embeds the lifted game code, so it is built locally from the
 player's own dump.
+
+### Where that rule has an edge: the hook tables
+
+`xc2/sites/sites-<module>.txt` is tracked, and it lists addresses inside the game. Those addresses cannot be
+found without the game's files, so by the letter of the rule they would be private. They stay public because
+the alternative is worse: without them the lifter emits no hook at all, every `hook_add_entry` in
+`xc2_boot.cpp` silently does nothing, and a fresh clone builds a binary that runs but cannot be diagnosed or
+tuned.
+
+The line is **bytes**. An `entryhook` or `midhook` line is an address and a name — no game bytes. A `patch`
+line carries the instruction word it expects and the one it writes, which is the game's own code, so those
+belong in the untracked `xc2/build/sites-<module>.txt`. The shipped file states this itself
+("patch 71002a8828 is NOT shipped"), and `check_invariants.py` now enforces it: a private override carrying one
+patch shadowed the shipped list for two days and stopped a from-zero build in 0.8 s (2026-11-17).

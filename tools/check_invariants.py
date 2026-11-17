@@ -24,6 +24,10 @@ GAME_EXTENSIONS = (
 # with a UnicodeDecodeError. The .cmd files must stay ASCII so cmd.exe never mangles them.
 ASCII_GLOBS = ("xc2/sites/", "xc2/build/")
 
+# The shipped hook tables: addresses only. A "patch" line rewrites an instruction word of the game and is
+# therefore the game's own code, so it lives in the untracked build\sites-<module>.txt instead.
+SITES_GLOB = "xc2/sites/"
+
 
 def tracked():
     out = subprocess.run(["git", "ls-files"], capture_output=True, text=True, check=True).stdout
@@ -48,6 +52,26 @@ def check_no_extension_exefs(files):
     """The ExeFS modules have no extension, so the list above cannot see them."""
     names = {"main", "sdk", "subsdk0", "subsdk1", "subsdk2", "subsdk3", "rtld"}
     bad = [f for f in files if f.startswith("xc2/game/") and f.rsplit("/", 1)[-1] in names]
+    return (not bad, bad)
+
+
+def check_sites_have_no_game_bytes(files):
+    """A "patch" line rewrites an instruction word of the game, so it is the game's code and stays private.
+
+    xc2/sites/sites-main.txt says so itself - "patch 71002a8828 is NOT shipped: it rewrites one instruction word of
+    the game" - and build/sites-<module>.txt is where those lines live. Nothing enforced it: measured 2026-11-17, a
+    private sites-main.txt carrying one patch shadowed the shipped list for two days and stopped a from-zero build
+    in 0.8 s. "entryhook"/"midhook" lines are addresses and a name, no bytes, and stay public because without them
+    the lifter emits no hooks at all.
+    """
+    bad = []
+    for f in files:
+        if not (f.startswith(SITES_GLOB) and f.endswith(".txt")) or not os.path.exists(f):
+            continue
+        with open(f, "r", encoding="utf-8", errors="replace") as fh:
+            for n, line in enumerate(fh, 1):
+                if line.lstrip().startswith("patch"):
+                    bad.append("%s:%d: %s" % (f, n, line.strip()[:90]))
     return (not bad, bad)
 
 
@@ -98,6 +122,7 @@ CHECKS = [
     ("nothing private is tracked", check_private_not_tracked),
     ("no game data is tracked", check_game_data),
     ("no ExeFS module is tracked", check_no_extension_exefs),
+    ("shipped hook tables carry no game bytes", check_sites_have_no_game_bytes),
 ]
 
 HOOK_CHECKS = CHECKS  # the fast ones are also the critical ones
