@@ -35,6 +35,11 @@ See [docs/BUILD.md](docs/BUILD.md). In short: a Windows toolchain (MSVC + LLVM c
 - Say which build you tested on, and what you measured. Numbers with a scene and a build are worth more than
   "it feels faster".
 
+## AI assistance
+
+The maintainer works with an AI pair-programmer (credited in the README). Issues and pull requests may be
+answered with its help; every reply is reviewed before it is posted, and the maintainer stands behind its content.
+
 ## Licence
 
 The project is **GPL-3.0-or-later**; by contributing you agree to license your work under the same terms.
