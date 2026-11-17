@@ -596,6 +596,13 @@ GAME_ENV = {
     "NXRT_XC2_FPS": "60",
     "NXRT_NVN_PRESENT_INTERVAL_HZ": "60",
     "NXRT_NVN_QUAD_SPLIT": "16",
+    # The light list's registration mask is derived after every list draw ([nvn] earlyz_mask, on by default) but only
+    # for the shaders in [nvn] earlyz_fs, whose default is the eleven of the old list. The game's list now has more,
+    # so those drew without a rebuilt mask and the black rectangle came back (measured 2026-11-18: "fs d3aa3541 writes
+    # a storage image but is not in earlyz_fs, so the mask is not rebuilt"). auto = every shader, gated by the format
+    # test inside the rebuild.
+    "NXRT_NVN_EARLYZ_FS": "auto",
+    "NXRT_NVN_EARLYZ_MASK": "1",
     # The deferred lighting pass is one full-screen triangle with cull BACK; with the wrong front face it is culled and
     # the whole frame stays at the G-buffer's albedo (flat, untextured, black-looking). tools/run/play-301.cmd uses 2;
     # the runtime default is 1, so a launcher that forgets this renders the scene wrong.
