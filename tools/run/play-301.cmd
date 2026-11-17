@@ -25,10 +25,11 @@ set ROOT=%~dp0..\..
 if not exist "%ROOT%\work\logs" mkdir "%ROOT%\work\logs"
 for /f %%i in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd-HHmmss"') do set STAMP=%%i
 set GFXMODE=window
-rem Frame rate (round 45): this launcher used to inherit the ini's 30 Hz. -60 sets the game's own step and the
-rem present interval, exactly like tools\run\play-log.cmd -60 does for the playable build.
-set FPS=0
-set HZ=30
+rem Frame rate: 60 is the default. FPS=60 makes the game step its own 60 Hz loop (native, no interpolation) and
+rem HZ=60 sets the present interval to match, so the pacing comes from the game rather than from a host timer.
+rem -30 falls back to the console's 30 Hz step.
+set FPS=60
+set HZ=60
 rem Front-face convention (HANDOVER 03 section 26): the deferred lighting pass is one full-screen triangle with cull BACK, so the
 rem wrong convention removes a whole layer (characters, eyes). 2 = the default used here; -ff0 / -ff1 / -ff2 / -ff3 for the A/B.
 rem Cloud-sea quad subdivision (HANDOVER 90.20): 16 is the smallest n that cleans the title screen; 0 disables it.
