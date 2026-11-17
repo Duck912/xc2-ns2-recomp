@@ -323,6 +323,147 @@ def step_link(r, repo, install):
     return r.end_step("link", started, rc == 0, "" if rc == 0 else "build-boot.ps1 failed")
 
 
+# ---- package mode ---------------------------------------------------------------------------------------------
+# A release package carries the runtime as a DLL and the two tools that compile the lifted code, so the same engine
+# runs there with nothing installed: no cmake, no clang-cl, no XC2_ENV, no checkout. Whether this is one is decided
+# by the folder itself, not by a flag, so a package cannot be mistaken for a checkout or the other way round.
+
+# Guest load addresses, the table xc2/scripts/build.ps1 lifts with.
+BASES = {
+    "main": "0x7100000000", "sdk": "0x7500000000", "subsdk0": "0x7600000000", "subsdk1": "0x7640000000",
+    "subsdk2": "0x7680000000", "subsdk3": "0x76C0000000", "rtld": "0x7700000000",
+}
+ZIG_FLAGS = ["-target", "x86_64-windows-gnu", "-std=c++20", "-O1", "-w", "-fno-exceptions", "-fno-rtti",
+             "-fno-strict-aliasing", "-ffp-contract=off", "-fno-math-errno", "-fno-threadsafe-statics",
+             "-DNX_INLINE_INDIRECT"]
+
+
+def package_tools(repo):
+    """(python, zig, xc2_rt.lib) when repo is a release package, else None."""
+    py = repo / "tools" / "python" / "python.exe"
+    zig = repo / "tools" / "build" / "zig" / "zig.exe"
+    lib = repo / "runtime" / "xc2_rt.lib"
+    if py.is_file() and zig.is_file() and lib.is_file():
+        return py, zig, lib
+    return None
+
+
+def cpu_variant(zig):
+    """The -mcpu this processor runs: '+fma' needs FMA3 (Haswell / Piledriver or newer), so an older one gets the
+    compatible set instead of an illegal instruction. Same two variants as xc2/scripts/build-release.ps1."""
+    try:
+        out = subprocess.run([str(zig), "targets"], capture_output=True, text=True, errors="replace", timeout=120)
+        text = out.stdout
+        i = text.find(".native")
+        j = text.find(".features", i)
+        if i < 0 or j < 0:
+            return "x86_64+cx16+fma"
+        feats = re.findall(r'"([^"]+)"', text[j:text.find("}", j)])
+    except (OSError, subprocess.SubprocessError):
+        return "x86_64+cx16+fma"
+    need = ("cx16", "sse4_2", "avx", "fma")
+    return "x86_64+cx16+fma" if all(f in feats for f in need) else "x86_64+cx16+sse4_2+popcnt"
+
+
+def step_doctor_package(r, repo, tools):
+    started = r.step("doctor")
+    py, zig, lib = tools
+    rc = r.run([str(py), "-c", "import capstone, lz4.block, zstandard, nxrecomp"])
+    if rc != 0:
+        return r.end_step("doctor", started, False, "the bundled Python cannot import the lifter (capstone/lz4/zstandard/nxrecomp)")
+    r.log("  python %s" % py)
+    r.log("  zig    %s (%s)" % (zig, cpu_variant(zig)))
+    r.log("  runtime %s" % lib)
+    return r.end_step("doctor", started, True, "the package carries everything")
+
+
+def step_lift_package(r, repo, install, py, jobs):
+    started = r.step("lift")
+    # Build products live with the game, not in the package: a player's install folder is theirs to fill, and the
+    # package stays exactly as it was unpacked.
+    lift = install / "build" / "lift"
+    sites = repo / "xc2" / "sites"
+    n = jobs if jobs > 0 else max(2, (os.cpu_count() or 4) - 1)
+    done = 0
+    for m in MODULES:
+        out = lift / m
+        if (out / ("module_%s.cpp" % m)).is_file():
+            r.log("  %s: already lifted" % m)
+            done += 1
+            continue
+        argv = [str(py), "-m", "nxrecomp", "lift", str(install / "exefs" / m), str(out),
+                "--game", "xc2ns2", "--name", m, "--base", BASES[m], "--jobs", str(n)]
+        s = sites / ("sites-%s.txt" % m)
+        if s.is_file():
+            argv += ["--sites", str(s)]
+        if r.run(argv, cwd=repo) != 0:
+            return r.end_step("lift", started, False, "the lifter failed on " + m)
+        done += 1
+        r.note_progress("lift %s (%d/%d)" % (m, done, len(MODULES)), 100.0 * done / len(MODULES))
+    return r.end_step("lift", started, True)
+
+
+def step_link_package(r, repo, install, zig, rtlib, jobs):
+    started = r.step("link")
+    exe = install / "xc2_boot.exe"
+    if exe.is_file():
+        return r.end_step("link", started, True, "the boot exe is already there")
+    lift = install / "build" / "lift"
+    obj = install / "build" / "obj-zig"
+    inc = repo / "third_party" / "nxrecomp" / "recomp" / "include"
+    stub = repo / "xc2" / "src" / "xc2_stub.cpp"
+    if not stub.is_file():
+        return r.end_step("link", started, False, "the package has no xc2/src/xc2_stub.cpp")
+    mcpu = "-mcpu=" + cpu_variant(zig)
+    # ZIG_FLAGS starts with -target <triple>; the processor goes right after the triple.
+    flags = [str(zig), "c++", "-target", "x86_64-windows-gnu", mcpu] + ZIG_FLAGS[2:]
+    srcs = sorted(lift.glob("*/*.cpp"))
+    if not srcs:
+        return r.end_step("link", started, False, "nothing was lifted")
+    objs = []
+    todo = []
+    for s in srcs:
+        o = obj / s.parent.name / (s.stem + ".o")
+        o.parent.mkdir(parents=True, exist_ok=True)
+        objs.append(o)
+        if not o.is_file() or o.stat().st_mtime < s.stat().st_mtime:
+            todo.append((s, o))
+    if todo:
+        # One at a time is about 27 minutes for the 537 translation units; the compiler is the only thing using the
+        # machine while this runs, so it takes every core but one.
+        n = jobs if jobs > 0 else max(2, (os.cpu_count() or 4) - 1)
+        r.log("  compiling %d of %d file(s), %d at a time" % (len(todo), len(srcs), n))
+
+        def build(item):
+            s, o = item
+            p = subprocess.run(flags + ["-I" + str(inc), "-I" + str(s.parent), "-c", str(s), "-o" + str(o)],
+                               cwd=str(repo), capture_output=True, text=True, errors="replace")
+            return s, p.returncode, (p.stderr or "")[-400:]
+
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        done = 0
+        with ThreadPoolExecutor(max_workers=n) as ex:
+            futures = [ex.submit(build, t) for t in todo]
+            for f in as_completed(futures):
+                s, rc, err = f.result()
+                done += 1
+                r.note_progress("compile %d/%d" % (done, len(todo)), 100.0 * done / len(todo))
+                if rc != 0:
+                    r.log("  %s failed: %s" % (s.name, err.strip()[:300]))
+                    return r.end_step("link", started, False, "compiling %s failed" % s.name)
+        r.log("  compiled %d file(s)" % len(todo))
+    rsp = obj / "objects.rsp"
+    if not r.dry:
+        obj.mkdir(parents=True, exist_ok=True)
+        rsp.write_text("".join('"%s"\n' % o for o in objs), encoding="ascii")
+    argv = ([str(zig), "c++", "-target", "x86_64-windows-gnu", "-O1", "-w", "-fno-exceptions", "-fno-rtti",
+             "-DXC2_MODULES_7", "@" + str(rsp), str(stub), "-I" + str(inc), "-I" + str(stub.parent),
+             str(rtlib), "-o", str(exe)])
+    if r.run(argv) != 0:
+        return r.end_step("link", started, False, "the exe did not link")
+    shutil.copy2(str(rtlib.parent / "xc2_rt.dll"), str(install / "xc2_rt.dll"))
+    return r.end_step("link", started, True)
+
 def junction(link, target, r):
     if link.exists() or link.is_symlink():
         return 0
@@ -402,6 +543,19 @@ def step_ingest(r, repo, install, nup, dump, exefs_in, romfs_in):
     return r.end_step("ingest", started, True)
 
 
+def step_done_package(r, repo, install):
+    """The package runs the exe from <install>, which looks for game/romfs-301 there (not under a build folder)."""
+    started = r.step("done")
+    game = install / "game"
+    if not r.dry:
+        game.mkdir(parents=True, exist_ok=True)
+    junction(game / "romfs-301", install / "romfs", r)
+    if not r.dry:
+        (install / "setup_state.tsv").write_text("mprs_setup_state\t1\nmeta\tfinished\t1\n", encoding="utf-8")
+    r.write_status(state="done", note="ready to play")
+    return r.end_step("done", started, True, "ready to play")
+
+
 def step_done(r, repo, install):
     started = r.step("done")
     link_boot_romfs(r, repo, install)
@@ -437,17 +591,31 @@ def main():
     r.log("repo    %s" % repo)
     r.log("install %s" % install)
     r.log("input   %s" % (nup or dump or exefs_in))
-    import_toolchain(r)
 
-    steps = [
-        ("doctor", lambda: step_doctor(r, repo)),
-        ("sources", lambda: step_sources(r, repo)),
-        ("runtime", lambda: step_runtime(r, repo)),
-        ("ingest", lambda: step_ingest(r, repo, install, nup, dump, exefs_in, romfs_in)),
-        ("lift", lambda: step_lift(r, repo, install, a.jobs)),
-        ("link", lambda: step_link(r, repo, install)),
-        ("done", lambda: step_done(r, repo, install)),
-    ]
+    # Two shapes of the same tree. A package carries runtime/xc2_rt.dll and tools/{python,build/zig}, so nothing is
+    # built here and no toolchain has to exist; a checkout builds the runtime with cmake and clang-cl.
+    tools = package_tools(repo)
+    if tools:
+        r.log("mode    package: the runtime and the compilers travel with it")
+        steps = [
+            ("doctor", lambda: step_doctor_package(r, repo, tools)),
+            ("ingest", lambda: step_ingest(r, repo, install, nup, dump, exefs_in, romfs_in)),
+            ("lift", lambda: step_lift_package(r, repo, install, tools[0], a.jobs)),
+            ("link", lambda: step_link_package(r, repo, install, tools[1], tools[2], a.jobs)),
+            ("done", lambda: step_done_package(r, repo, install)),
+        ]
+    else:
+        r.log("mode    checkout: the runtime is built here")
+        import_toolchain(r)
+        steps = [
+            ("doctor", lambda: step_doctor(r, repo)),
+            ("sources", lambda: step_sources(r, repo)),
+            ("runtime", lambda: step_runtime(r, repo)),
+            ("ingest", lambda: step_ingest(r, repo, install, nup, dump, exefs_in, romfs_in)),
+            ("lift", lambda: step_lift(r, repo, install, a.jobs)),
+            ("link", lambda: step_link(r, repo, install)),
+            ("done", lambda: step_done(r, repo, install)),
+        ]
     for name, fn in steps:
         if name in skip:
             r.end_step(name, time.time(), True, "skipped")
