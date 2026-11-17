@@ -17,7 +17,8 @@ param(
     [switch]$SkipDll,
     [switch]$SkipExe,
     [switch]$SkipHarness,
-    [switch]$SkipPython
+    [switch]$SkipPython,
+    [ValidateSet('auto', 'fma', 'compat')][string]$Cpu = 'auto'
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot            # xc2
@@ -131,7 +132,38 @@ if ($SkipExe) { return }
 # ---- 2. compile the lift with Zig ------------------------------------------------------------------------
 $inc = Join-Path $repo 'third_party\nxrecomp\recomp\include'
 $objRoot = Join-Path $root 'build\obj-zig'
-$flags = @('-target', 'x86_64-windows-gnu', '-mcpu=x86_64+cx16+fma', '-std=c++20', '-O1', '-w',
+
+# The processor variant. '+fma' needs FMA3 (Haswell / Piledriver or newer); an older CPU executing it dies with an
+# illegal instruction, so 'auto' reads what this processor actually has from zig itself and picks the slower set
+# when FMA3 is missing. Same two variants as upstream's fefw_build.py.
+$variants = @{
+    fma    = @{ mcpu = 'x86_64+cx16+fma';          needs = @('cx16', 'sse4_2', 'avx', 'fma') }
+    compat = @{ mcpu = 'x86_64+cx16+sse4_2+popcnt'; needs = @('cx16', 'sse4_2', 'popcnt') }
+}
+function Get-HostCpuFeatures {
+    try {
+        $out = (& $Zig targets 2>$null) -join "`n"
+    } catch { return $null }
+    $i = $out.IndexOf('.native')
+    $j = if ($i -ge 0) { $out.IndexOf('.features', $i) } else { -1 }
+    if ($j -lt 0) { return $null }
+    $end = $out.IndexOf('}', $j)
+    $seg = $out.Substring($j, $end - $j)
+    $feats = @([regex]::Matches($seg, '"([^"]+)"') | ForEach-Object { $_.Groups[1].Value })
+    if (-not $feats.Count) { return $null }
+    return $feats
+}
+if ($Cpu -eq 'auto') {
+    $feats = Get-HostCpuFeatures
+    if (-not $feats) { $Cpu = 'fma'; Write-Host 'cpu: cannot read the processor features, assuming fma' }
+    elseif (@($variants.fma.needs | Where-Object { $feats -notcontains $_ }).Count -eq 0) { $Cpu = 'fma' }
+    else { $Cpu = 'compat' }
+}
+$missing = @($variants[$Cpu].needs | Where-Object { $feats -and $feats -notcontains $_ })
+Write-Host ("cpu: {0} (-mcpu={1}){2}" -f $Cpu, $variants[$Cpu].mcpu,
+    $(if ($missing.Count) { ': this processor lacks ' + ($missing -join ', ') } else { '' }))
+
+$flags = @('-target', 'x86_64-windows-gnu', "-mcpu=$($variants[$Cpu].mcpu)", '-std=c++20', '-O1', '-w',
            '-fno-exceptions', '-fno-rtti', '-fno-strict-aliasing', '-ffp-contract=off', '-fno-math-errno',
            '-fno-threadsafe-statics', '-DNX_INLINE_INDIRECT')
 $todo = @()
