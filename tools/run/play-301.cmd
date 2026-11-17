@@ -50,6 +50,7 @@ if /i "%~1"=="-shadowalways" (set SHADOWALWAYS=1& shift& goto args)
 if /i "%~1"=="-qsplit" (set QSPLIT=%~2& shift& shift& goto args)
 if /i "%~1"=="-fbdebug" (set FBDEBUG=1& shift& goto args)
 if /i "%~1"=="-dry" (set DRYRUN=1& shift& goto args)
+if /i "%~1"=="-noprefill" (set XC2_NOPREFILL=1& shift& goto args)
 if /i "%~1"=="-shots" (set SHOTS=1& set SHOTRANGE=%~2& shift& shift& goto args)
 if /i "%~1"=="-texdump" (set TEXDUMP=1& shift& goto args)
 if /i "%~1"=="-dump" (set DUMP=1& shift& goto args)
@@ -150,6 +151,13 @@ if errorlevel 1 (echo cannot enter "%ROOT%\xc2\build\boot"& exit /b 1)
 rem XC2_EXE runs a different build with the same environment: the point of a clean-room build is to compare it with
 rem this one, and comparing means launching both the same way.
 if not defined XC2_EXE set XC2_EXE=%ROOT%\xc2\build\boot-301\xc2_boot.exe
+rem A fresh cache renders with gaps - the title screen is black - until the game has been run once and the blocks it
+rem asked for are translated. Do that collection headless here, so the FIRST launch is already complete. Once per
+rem cache (work\.prefilled); -noprefill skips it.
+if not defined XC2_NOPREFILL (
+    if not defined NXRT_NVN_SHADER_CACHE set NXRT_NVN_SHADER_CACHE=%NXRT_NVN_SHADER_CACHE_DIR%\spirv
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\tools\run\prefill.ps1" -Exe "%XC2_EXE%" -Exefs "%ROOT%\xc2\game\xc2ns301" -Cache "%NXRT_NVN_SHADER_CACHE%" -Work "%ROOT%\work"
+)
 rem Every block the game asks for and the cache lacks is written to work\missing-301, and ds_debug records which
 rem samplers need their type corrected (format-07753). After the game exits, fill-cache translates and installs both,
 rem so the NEXT launch is complete - including the shaders that only appear when a new area is entered.
