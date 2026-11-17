@@ -72,6 +72,10 @@ graphics shell above deliberately turns off.
 
 ### 4.2 lift and compile the guest modules (13 s + 4 s for `main`, longer for the rest)
 
+The lifter also needs the hook sites: `xc2/sites/sites-<module>.txt` ship with the repository and are picked up
+automatically. Put your own additions in `xc2/build/sites-<module>.txt`, which takes precedence — see
+[xc2/sites/README.md](../xc2/sites/README.md).
+
 ```powershell
 .\xc2\scripts\build.ps1 -Exefs xc2\game\xc2ns301 -Run:$false `
     -Modules 'main,sdk,subsdk0,subsdk1,subsdk2,subsdk3,rtld'    # quoted or bare, both parse to the seven names

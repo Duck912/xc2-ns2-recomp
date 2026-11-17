@@ -71,6 +71,7 @@ The first launch compiles pipelines: about 22 seconds with no frame, then it nev
 | `no python` | Python is not on `PATH` and `XC2_PYTHON` is unset |
 | `ForEach-Object : ... -Parallel` | you are on Windows PowerShell 5.1; use `pwsh` (PowerShell 7) |
 | `missing ...\nxrt_game_xc2ns2_core.lib` | step 3's second `cmake` block was skipped |
+| the log has no `hook` lines at all | `xc2/sites/` is missing (it ships with the repository) |
 | `ExeFS not found` | same as the first row |
 | the window opens and closes | read the log: a missing romfs path (`NXRT_FS_ROMFS`) is the usual cause |
 | 30 fps | add `-60`; the default is the game's 30 Hz step |

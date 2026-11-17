@@ -7,6 +7,7 @@
 #   . .\scripts\build.ps1 -Clean          # drop build\obj and build\bin first
 #
 # Inputs: the ExeFS modules (default <repo>\game\xc2ns2, override with -Exefs or $env:XC2_EXEFS).
+# Hook sites: build\sites-<module>.txt if present, else the shipped xc2\sites\sites-<module>.txt.
 # Toolchain: clang-cl and llvm-lib on PATH (Visual Studio Build Tools + LLVM), or point $env:XC2_ENV at a script
 # that sets them up. Python: $env:XC2_PYTHON, else `python` on PATH.
 param(
@@ -59,11 +60,14 @@ if (-not $SkipLift) {
                      ((Test-Path $stampFile) -and ((Get-Content $stampFile -Raw).Trim() -eq $base))
             if ($fresh) { Write-Host "lift $m : up to date (base $base)"; continue }
             $t = [Diagnostics.Stopwatch]::StartNew()
-            # Site list (entry/mid hooks compiled into the lifted code): build\sites-<module>.txt. Without --sites the
-            # lifter emits no nx_hook_entry, so every hook_add_entry in xc2_boot.cpp silently stops firing.
-            $sites = Join-Path $build "sites-$m.txt"
+            # Site list (entry/mid hooks compiled into the lifted code). build\sites-<module>.txt wins if it exists, so a
+            # local experiment can add hooks without touching the repository; otherwise the shipped xc2\sites\ copy is
+            # used. Without --sites the lifter emits no nx_hook_entry, and every hook_add_entry in xc2_boot.cpp silently
+            # does nothing.
             $sitesArg = @()
-            if (Test-Path $sites) { $sitesArg = @('--sites', $sites) }
+            foreach ($cand in @((Join-Path $build "sites-$m.txt"), (Join-Path $root "sites\sites-$m.txt"))) {
+                if (Test-Path $cand) { $sitesArg = @('--sites', $cand); break }
+            }
             # Frame counters converted to the game's time (HANDOVER 59, scripts\fps_counters.txt): main only. The list
             # names stores of build\fps_sites.txt, which the census scanner writes; without it the lift is unchanged.
             if ($m -eq 'main') {
