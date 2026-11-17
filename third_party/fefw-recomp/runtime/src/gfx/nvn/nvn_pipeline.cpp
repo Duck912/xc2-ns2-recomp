@@ -61,7 +61,7 @@ bool g_cache_big = false;                       // the file loaded at start was 
 std::map<std::pair<const ShaderInfo*, std::vector<uint32_t>>, VkShaderModule> g_variants;
 std::unordered_map<const ShaderInfo*, VkShaderModule> g_dual_src;
 std::unordered_map<const ShaderInfo*, std::pair<VkShaderModule, bool>> g_no_out;   // (module, owned by this map)      // fragment shaders with private outputs (passes without colour attachments)
-std::unordered_map<const ShaderInfo*, std::pair<VkShaderModule, uint32_t>> g_xfb_mod;   // vertex shaders with the captured outputs, their stride       // fragment shaders with the second blend source at Location 0, Index 1
+std::map<std::pair<const ShaderInfo*, size_t>, std::pair<VkShaderModule, uint32_t>> g_xfb_mod;   // vertex shaders with the captured outputs (+ how many integer attributes were patched in), their stride       // fragment shaders with the second blend source at Location 0, Index 1
 // One pipeline per key. `up`: a linked pipeline (nvn_gpl.cpp) that a background thread is replacing with an optimised one; the lookup swaps it in.
 struct GfxEntry {
     GraphicsKey first;
@@ -291,15 +291,29 @@ VkShaderModule shader_module(const ShaderInfo* s) {
     return m;
 }
 
-static const std::pair<VkShaderModule, uint32_t>& xfb_variant(const ShaderInfo* vs) {
+// The transform feedback variant, and on top of it the integer vertex attributes when this draw feeds any: a
+// stream-out draw still has to declare a uint input where the attribute is an integer format, or the pipeline is
+// VUID-VkGraphicsPipelineCreateInfo-Input-08733 (the transform and the attribute patch touch different things, so
+// both apply).
+static const std::pair<VkShaderModule, uint32_t>& xfb_variant(const ShaderInfo* vs, const std::vector<SpvIntSlot>& ints) {
     std::lock_guard<std::recursive_mutex> lk(g_module_mu);
-    auto it = g_xfb_mod.find(vs);
+    const auto key = std::make_pair(vs, ints.size());
+    auto it = g_xfb_mod.find(key);
     if (it != g_xfb_mod.end()) return it->second;
     std::vector<uint32_t> patched;
     std::vector<SpvXfbOutput> lay;
     uint32_t stride = 0;
     VkShaderModule m = VK_NULL_HANDLE;
     if (spirv_add_xfb(vs->spirv, patched, &lay, &stride)) {
+        if (!ints.empty()) {
+            std::vector<uint32_t> with_int;
+            if (spirv_int_attributes(patched, ints, with_int)) {
+                patched.swap(with_int);
+            } else {
+                NXLOG_W(kTag, "%s: the integer vertex attributes could not be patched into the transform feedback variant",
+                        vs->hash.c_str());
+            }
+        }
         m = create_module(patched, vs->hash.c_str());
         std::string desc;
         for (const SpvXfbOutput& o : lay) desc += " loc" + std::to_string(o.location) + "x" + std::to_string(o.components) + "@" + std::to_string(o.offset);
@@ -307,10 +321,10 @@ static const std::pair<VkShaderModule, uint32_t>& xfb_variant(const ShaderInfo* 
     } else {
         NXLOG_W(kTag, "%s: no transform feedback variant could be made (no Location outputs?)", vs->hash.c_str());
     }
-    return g_xfb_mod.emplace(vs, std::make_pair(m, stride)).first->second;
+    return g_xfb_mod.emplace(key, std::make_pair(m, stride)).first->second;
 }
 
-uint32_t xfb_stride(const ShaderInfo* vs) { return vs ? xfb_variant(vs).second : 0; }
+uint32_t xfb_stride(const ShaderInfo* vs) { return vs ? xfb_variant(vs, {}).second : 0; }
 
 static VkShaderModule no_output_module(const ShaderInfo* fs) {
     std::lock_guard<std::recursive_mutex> lk(g_module_mu);
@@ -627,7 +641,10 @@ const ProgLayout* prog_layout(const ShaderInfo* const stages[6]) {
 std::vector<SpvIntSlot> key_int_slots(const GraphicsKey& key) {
     // vertex inputs the shader declares as floats but the game feeds with integer attributes (key formats UINT / SINT)
     std::vector<SpvIntSlot> int_slots;
-    if (key.stage[0] && !key.xfb)
+    // A vertex attribute with an integer format feeding a float shader input is legal on the console (the bits land in
+    // the float register) but not in Vulkan: the module has to declare the input as uint (spirv_int_attributes).
+    // Stream-out draws need it too - xfb_variant applies both transforms - so there is no xfb exception here.
+    if (key.stage[0])
         for (uint32_t k = 0; k < key.attr_count && k < 16; ++k) {
             const VkFormat f = static_cast<VkFormat>(key.attr[k].format);
             if (!vk_format_is_integer(f)) continue;
@@ -653,7 +670,7 @@ bool resolve_stage_modules(const GraphicsKey& key, StageModules* out) {
         if (!key.stage[i]) continue;
         if (key.xfb && i != 0) continue;     // stream-out draws run the vertex stage only
         if (key.xfb) {
-            VkShaderModule m = xfb_variant(key.stage[0]).first;
+            VkShaderModule m = xfb_variant(key.stage[0], int_slots).first;
             if (!m) return false;
             out->m[0] = m;
             continue;
@@ -1584,9 +1601,13 @@ void pipeline_hot_shader_changed(const ShaderInfo* s) {
             if (it->second.second) drop(it->second.first);
             g_no_out.erase(it);
         }
-        if (auto it = g_xfb_mod.find(s); it != g_xfb_mod.end()) {
+        for (auto it = g_xfb_mod.begin(); it != g_xfb_mod.end();) {                // transform feedback variants: (shader, slots)
+            if (it->first.first != s) {
+                ++it;
+                continue;
+            }
             drop(it->second.first);
-            g_xfb_mod.erase(it);
+            it = g_xfb_mod.erase(it);
         }
         for (auto it = g_variants.begin(); it != g_variants.end();) {            // producer modules: (shader, slots)
             if (it->first.first != s) {
