@@ -47,10 +47,13 @@
 #include <vector>
 
 #include "xc2ns2/xc2ns2_game.h"
+#include "xc2_modules.h"
 
 extern "C" {
 void xc2_opus301_install();    // x2_opus301.cpp: hardware Opus -> the sdk's software OpusDecoder (HANDOVER 90)
 void xc2_audio301_install();   // x2_audio301.cpp: nn::audio OutputStream -> the runtime's audio sink (HANDOVER 90)
+#ifndef XC2_RT_DLL
+// The lifted modules live in the player's exe, not in this DLL: see xc2_modules.h.
 extern const NxModule nxmod_main, nxmod_sdk, nxmod_subsdk0, nxmod_rtld;
 extern const uint32_t nxmod_main_abi, nxmod_sdk_abi, nxmod_subsdk0_abi, nxmod_rtld_abi;
 #ifdef XC2_MODULES_7
@@ -60,6 +63,7 @@ extern const uint32_t nxmod_main_abi, nxmod_sdk_abi, nxmod_subsdk0_abi, nxmod_rt
 extern const NxModule nxmod_subsdk1, nxmod_subsdk2, nxmod_subsdk3;
 extern const uint32_t nxmod_subsdk1_abi, nxmod_subsdk2_abi, nxmod_subsdk3_abi;
 #endif
+#endif  // XC2_RT_DLL
 }
 
 namespace {
@@ -68,12 +72,28 @@ static uint32_t g_main_handle = 0;   // set after main_thread_adopt; the SDK boo
 
 constexpr uint64_t kMainBase = 0x7100000000ull;
 
-struct ModEntry {
-    const char *file;
-    const NxModule *nx;
-    const uint32_t *abi;
+// Module bases, filled from the table the exe hands over. File scope because the hook callbacks below are plain
+// function pointers and cannot capture anything.
+static uint64_t g_main_base = 0, g_sdk_base = 0, g_rtld_base = 0;
+
+// The module table: the exe owns it (it links the lifted libraries) and the DLL is handed it, so a small range
+// wrapper lets the loop below read the same in both builds.
+struct ModuleTable {
+    const ModEntry *first;
+    int count;
+    const ModEntry *begin() const { return first; }
+    const ModEntry *end() const { return first + count; }
 };
 
+#ifdef XC2_RT_DLL
+static const ModEntry *g_modules = nullptr;
+static int g_module_count = 0;
+extern "C" __declspec(dllexport) void xc2_rt_set_modules(const ModEntry *mods, int count) {
+    g_modules = mods;
+    g_module_count = count;
+}
+static ModuleTable module_table() { return ModuleTable{g_modules, g_module_count}; }
+#else
 // The console loader's order: rtld first (it is the entry), then main, the subsdks, sdk.
 #ifdef XC2_MODULES_7
 const ModEntry kModules[] = {
@@ -93,6 +113,8 @@ const ModEntry kModules[] = {
     {"sdk", &nxmod_sdk, &nxmod_sdk_abi},
 };
 #endif
+static ModuleTable module_table() { return ModuleTable{kModules, int(sizeof(kModules) / sizeof(kModules[0]))}; }
+#endif  // XC2_RT_DLL
 
 [[noreturn]] void die(const char *fmt, ...) {
     va_list ap;
@@ -1490,7 +1512,14 @@ static void arm_ns2_mem_probe(uint64_t main_base) {
             static_cast<unsigned long long>(scale), probe ? 1 : 0, root_set ? std::getenv("XC2_NS2_ROOT") : "-");
 }
 
+// The release split (upstream's fefw_rt.dll / fefw_stub.cpp): the runtime and this boot code live in a DLL and
+// the player's exe only hands it the process. Built with XC2_RT_DLL the entry is exported under a C name so the
+// stub can find it; without the define this is still the exe entry it always was.
+#ifdef XC2_RT_DLL
+extern "C" __declspec(dllexport) int xc2_rt_main(int argc, char **argv) {
+#else
 int main(int argc, char **argv) {
+#endif
     std::string exefs;
     std::string link = "host";
     std::string entry_mode = "rtld";
@@ -1678,7 +1707,7 @@ int main(int argc, char **argv) {
     }
 
     // 1+2. map and register
-    for (const ModEntry &g : kModules) {
+    for (const ModEntry &g : module_table()) {
         const std::string path = exefs + "\\" + g.file;
         if (!file_exists(path)) die("module file not found: %s", path.c_str());
         nxrt::LoadOptions lo;
@@ -1694,17 +1723,28 @@ int main(int argc, char **argv) {
         NXLOG_I("boot", "module %s at 0x%llx", g.file, static_cast<unsigned long long>(m->base()));
     }
 
+    // In the DLL build the lifted modules come from the exe, so ask the table rather than naming nxmod_*.
+    const auto module_base = [&](const char *name) -> uint64_t {
+        for (const ModEntry &g : module_table())
+            if (!std::strcmp(g.file, name)) return g.nx->base;
+        die("the module table handed to the runtime has no %s", name);
+    };
+    const uint64_t main_base = module_base("main");
+    g_main_base = main_base;
+    g_sdk_base = module_base("sdk");
+    g_rtld_base = module_base("rtld");
+
     // Model-spawn probe (XC2_MODEL_PROBE=1): "did the engine ever create this model?", logged with its arguments. Works
     // without a re-lift: both site addresses are already in build\sites-main.txt (HANDOVER 19.9, step P3).
-    if (std::getenv("XC2_MODEL_PROBE")) arm_model_probe(nxmod_main.base);
-    arm_frame_rate(nxmod_main.base);
+    if (std::getenv("XC2_MODEL_PROBE")) arm_model_probe(main_base);
+    arm_frame_rate(main_base);
     // XC2_BUMP_MENU_RESOURCE=<bytes>: raise the compiled-in MenuResource budget (HANDOVER 84, DIAGNOSTIC). The 3.0.0 content
     // needs more than the 76,800 KB this build was built with, and the 64 region budgets use only 5,440 MiB of the 10,642 MiB
     // heap, so there is ~5.1 GiB of slack. The midhook sits on the bl that creates the region: x1 is the size.
     if (const char* v = std::getenv("XC2_BUMP_MENU_RESOURCE")) {
         const uint64_t bytes = std::strtoull(v, nullptr, 0);
         if (bytes) {
-            nxrt::hook_add_mid(nxmod_main.base + 0x6fa790, [](Ctx* c, uint64_t, void* u) -> int {
+            nxrt::hook_add_mid(main_base + 0x6fa790, [](Ctx* c, uint64_t, void* u) -> int {
                 static bool logged = false;
                 const uint64_t want = reinterpret_cast<uint64_t>(u);
                 if (!logged) {
@@ -1717,14 +1757,14 @@ int main(int argc, char **argv) {
             }, reinterpret_cast<void*>(bytes));
         }
     }
-    arm_shared_step(nxmod_main.base);
-    arm_fps_counters(nxmod_main.base);
-    arm_fps_census(nxmod_main.base);
-    arm_delta_scan(nxmod_main.base);
-    arm_period_probe(nxmod_main.base);
-    arm_obj_scan(nxmod_main.base);
-    arm_ns1_probe(nxmod_main.base);
-    arm_ns2_mem_probe(nxmod_main.base);
+    arm_shared_step(main_base);
+    arm_fps_counters(main_base);
+    arm_fps_census(main_base);
+    arm_delta_scan(main_base);
+    arm_period_probe(main_base);
+    arm_obj_scan(main_base);
+    arm_ns1_probe(main_base);
+    arm_ns2_mem_probe(main_base);
 
     // Bring-up probe (XC2_TRACE_LAUNCHER=1): which apps::FrameworkLauncher work function runs each frame. The engine draws a
     // frame with no geometry; this tells a standby (waiting for the applet/user) apart from a scene that failed to build.
@@ -1745,7 +1785,7 @@ int main(int argc, char **argv) {
             {"App::wkRender", 0x1fc4, new unsigned(0)},      {"App::wkUpdate", 0x1fc0, new unsigned(0)},
         };
         for (Site& s : sites) {
-            nxrt::hook_add_entry(nxmod_main.base + s.off, [](Ctx*, uint64_t, void* user) -> int {
+            nxrt::hook_add_entry(main_base + s.off, [](Ctx*, uint64_t, void* user) -> int {
                 ++*static_cast<unsigned*>(user);
                 return 0;
             }, s.n);
@@ -1755,7 +1795,7 @@ int main(int argc, char **argv) {
         static uint64_t g_groups[8] = {};
         static int g_group_n = 0;
         static uint64_t g_mt_this = 0, g_mt_group = 0;
-        nxrt::hook_add_entry(nxmod_main.base + 0x7570d4, [](Ctx* c, uint64_t, void*) -> int {
+        nxrt::hook_add_entry(main_base + 0x7570d4, [](Ctx* c, uint64_t, void*) -> int {
             const uint64_t g = c->x[1];
             g_mt_this = c->x[0];
             g_mt_group = g;
@@ -1767,7 +1807,7 @@ int main(int argc, char **argv) {
         // ml::MicroThread::createHandle(MLTHG*, unsigned int): the groups microthreads are actually created in.
         static uint64_t g_handles[8] = {};
         static int g_handle_n = 0;
-        nxrt::hook_add_entry(nxmod_main.base + 0x756908, [](Ctx* c, uint64_t, void*) -> int {
+        nxrt::hook_add_entry(main_base + 0x756908, [](Ctx* c, uint64_t, void*) -> int {
             const uint64_t g = c->x[0];
             for (int i = 0; i < g_handle_n; i++)
                 if (g_handles[i] == g) return 0;
@@ -1776,14 +1816,14 @@ int main(int argc, char **argv) {
         });
         // Was the sleeping microthread ever released (removed from its group) or destroyed?
         static unsigned g_rel = 0, g_dst = 0;
-        nxrt::hook_add_entry(nxmod_main.base + 0x756bdc, [](Ctx*, uint64_t, void*) -> int { ++g_rel; return 0; });
-        nxrt::hook_add_entry(nxmod_main.base + 0x756614, [](Ctx*, uint64_t, void*) -> int { ++g_dst; return 0; });
+        nxrt::hook_add_entry(main_base + 0x756bdc, [](Ctx*, uint64_t, void*) -> int { ++g_rel; return 0; });
+        nxrt::hook_add_entry(main_base + 0x756614, [](Ctx*, uint64_t, void*) -> int { ++g_dst; return 0; });
         // XC2_TRACE_MEMMGR=1: log the big requests into mtl::MemManager (HANDOVER 80/81). pkg7 dies because
         // FileHandleTh::setReadBuffer asks a 320 KB region for up to 1.79 MB, so the interesting datum is which ALLOC_HANDLE
         // (which named region) the request goes to and how big it is. mtl::MemManager::allocate(ALLOC_HANDLE handle, size,
         // align, bool, name, line): x0 points at the handle word, x1 = size, x2 = align.
         if (std::getenv("XC2_TRACE_MEMMGR")) {
-            nxrt::hook_add_entry(nxmod_main.base + 0x781798, [](Ctx* c, uint64_t, void*) -> int {
+            nxrt::hook_add_entry(main_base + 0x781798, [](Ctx* c, uint64_t, void*) -> int {
                 static std::atomic<int> n{0};
                 const uint64_t hp = c->x[0];
                 const uint64_t size = c->x[1], align = c->x[2];
@@ -1797,7 +1837,7 @@ int main(int argc, char **argv) {
             });
             // Every region the game creates, with its name: mtl::MemManager::create(void*/HANDLE, size, char const* name, bool)
             // keeps the size in x1 and the name in x2, so base and pkg7 can be compared region by region.
-            for (uint64_t a : {nxmod_main.base + 0x77fc6c, nxmod_main.base + 0x77ff84}) {
+            for (uint64_t a : {main_base + 0x77fc6c, main_base + 0x77ff84}) {
                 nxrt::hook_add_entry(a, [](Ctx* c, uint64_t, void*) -> int {
                     const uint64_t size = c->x[1];
                     const uint64_t np = c->x[2];
@@ -1831,7 +1871,7 @@ int main(int argc, char **argv) {
         // XC2_SKIP_MT_SLEEP=1: make ml::MicroThread::sleep a no-op. Experiment only: if the launcher's build thread then
         // reaches the applet, the microthread scheduler is the blocker; it does not prove the rest of the boot is right.
         if (std::getenv("XC2_SKIP_MT_SLEEP")) {
-            nxrt::hook_add_entry(nxmod_main.base + 0x756ef4, [](Ctx* c, uint64_t, void*) -> int {
+            nxrt::hook_add_entry(main_base + 0x756ef4, [](Ctx* c, uint64_t, void*) -> int {
                 c->x[0] = 0;
                 return 1;   // handled: the lifted function returns at once
             });
@@ -1840,16 +1880,16 @@ int main(int argc, char **argv) {
         // switchThread: after the "current fiber" call (x0 = its result, x19 = the target fiber) and at the bail target.
         static unsigned g_sw_bail = 0;
         static uint64_t g_sw_curfib = 0, g_sw_tgt = 0;
-        nxrt::hook_add_mid(nxmod_main.base + 0x75680c, [](Ctx* c, uint64_t, void*) -> int {
+        nxrt::hook_add_mid(main_base + 0x75680c, [](Ctx* c, uint64_t, void*) -> int {
             g_sw_curfib = c->x[0];
             g_sw_tgt = c->x[19];
             return 0;
         });
-        nxrt::hook_add_mid(nxmod_main.base + 0x756824, [](Ctx*, uint64_t, void*) -> int { ++g_sw_bail; return 0; });
+        nxrt::hook_add_mid(main_base + 0x756824, [](Ctx*, uint64_t, void*) -> int { ++g_sw_bail; return 0; });
         // ml::MicroThreadNx::switchThread(MTHREAD* cur, MTHREAD* next): what update() picked. x1 = cur, x2 = next.
         static uint64_t g_sw_last = 0, g_sw_cur = 0;
         static unsigned g_sw_n = 0;
-        nxrt::hook_add_entry(nxmod_main.base + 0x756728, [](Ctx* c, uint64_t, void*) -> int {
+        nxrt::hook_add_entry(main_base + 0x756728, [](Ctx* c, uint64_t, void*) -> int {
             g_sw_cur = c->x[1];
             g_sw_last = c->x[2];
             ++g_sw_n;
@@ -1858,14 +1898,14 @@ int main(int argc, char **argv) {
         // ml::MicroThreadNx::setupThread(MTHREAD*, entry): x1 is the MTHREAD the launcher's build thread lives in.
         // Watching its fields over time tells whether the sleep counter ever expires and whether the state changes.
         static uint64_t g_mt = 0;
-        nxrt::hook_add_entry(nxmod_main.base + 0x7564cc, [](Ctx* c, uint64_t, void*) -> int {
+        nxrt::hook_add_entry(main_base + 0x7564cc, [](Ctx* c, uint64_t, void*) -> int {
             if (!g_mt) g_mt = c->x[1];
             return 0;
         });
         // ml::MicroThread::createThread(MLTHG* group, entry, arg): the group the launcher's build thread is created in.
         static uint64_t g_cthreads[8] = {};
         static int g_cthread_n = 0;
-        nxrt::hook_add_entry(nxmod_main.base + 0x75749c, [](Ctx* c, uint64_t, void*) -> int {
+        nxrt::hook_add_entry(main_base + 0x75749c, [](Ctx* c, uint64_t, void*) -> int {
             const uint64_t g = c->x[1];   // member function: x0 = this (the manager), x1 = the MLTHG* group
             for (int i = 0; i < g_cthread_n; i++)
                 if (g_cthreads[i] == g) return 0;
@@ -1874,7 +1914,7 @@ int main(int argc, char **argv) {
         });
         // midhook inside ml::MicroThread::update (update+0x128, site `midhook 71007571fc`): x27 = the MTHREAD under
         // test, [x27+0x28] = sleep frames left, [sp+12] = elapsed time. Shows why a sleeping microthread is not picked.
-        nxrt::hook_add_mid(nxmod_main.base + 0x7571fc, [](Ctx* c, uint64_t, void*) -> int {
+        nxrt::hook_add_mid(main_base + 0x7571fc, [](Ctx* c, uint64_t, void*) -> int {
             static int n = 0;
             if (n++ < 40) {
                 const uint64_t mt = c->x[27];
@@ -1966,15 +2006,15 @@ int main(int argc, char **argv) {
     }
 
     // Debug: log the arguments of Monolith's allocator (the site is compiled in by --sites build\sites-main.txt).
-    nxrt::hook_add_entry(nxmod_sdk.base + 0x8f514, [](Ctx* c, uint64_t, void*) -> int {
+    nxrt::hook_add_entry(g_sdk_base + 0x8f514, [](Ctx* c, uint64_t, void*) -> int {
         std::fprintf(stderr, "heap impl: SetHeapSize(out=0x%llx size=0x%llx)\n", (unsigned long long)c->x[1], (unsigned long long)c->x[2]);
         return 0;
     });
-    nxrt::hook_add_mid(nxmod_sdk.base + 0x8f52c, [](Ctx* c, uint64_t, void*) -> int {
+    nxrt::hook_add_mid(g_sdk_base + 0x8f52c, [](Ctx* c, uint64_t, void*) -> int {
         std::fprintf(stderr, "heap impl: svcSetHeapSize result=0x%x\n", static_cast<uint32_t>(c->x[0]));
         return 0;
-    });    nxrt::hook_add_entry(nxmod_sdk.base + 0x8e514, [](Ctx*, uint64_t, void*) -> int {
-        *reinterpret_cast<uint32_t*>(static_cast<uintptr_t>(nxmod_sdk.base + 0x92ccf0)) = g_main_handle;
+    });    nxrt::hook_add_entry(g_sdk_base + 0x8e514, [](Ctx*, uint64_t, void*) -> int {
+        *reinterpret_cast<uint32_t*>(static_cast<uintptr_t>(g_sdk_base + 0x92ccf0)) = g_main_handle;
         std::fprintf(stderr, "boot: boot-parameter hook wrote g_OsBootParamter[0] = 0x%x\\n", g_main_handle);
         return 0;
     });
@@ -1986,8 +2026,8 @@ int main(int argc, char **argv) {
     // nn::diag::detail::AbortImpl runs (measured: the abort predicate resolves through import slot 0xe7cba0). Writing the handle
     // main_thread_adopt gave the main thread into the block before the ctor reads it makes both correct.
     if (std::getenv("XC2_301_BOOTPARAM")) {
-        nxrt::hook_add_entry(nxmod_sdk.base + 0x170030, [](Ctx*, uint64_t, void*) -> int {
-            const uint64_t pptr = nxmod_sdk.base + 0xe75408;
+        nxrt::hook_add_entry(g_sdk_base + 0x170030, [](Ctx*, uint64_t, void*) -> int {
+            const uint64_t pptr = g_sdk_base + 0xe75408;
             uint64_t block = 0;
             if (nxrt::mem::is_mapped(pptr, 8))
                 std::memcpy(&block, reinterpret_cast<const void*>(static_cast<uintptr_t>(pptr)), 8);
@@ -2009,7 +2049,7 @@ int main(int argc, char **argv) {
     // Call the initializer once, right before the first AllocateAddressRegion, with the manager that call was handed - what
     // nn::os::Initialize does on the console. The whole register context is put back afterwards.
     if (std::getenv("XC2_301_VAMM")) {
-        nxrt::hook_add_entry(nxmod_sdk.base + 0x16dcc0, [](Ctx* c, uint64_t, void*) -> int {
+        nxrt::hook_add_entry(g_sdk_base + 0x16dcc0, [](Ctx* c, uint64_t, void*) -> int {
             const uint64_t mgr = c->x[0];
             uint64_t inited = 0;
             if (nxrt::mem::is_mapped(mgr + 0x40, 8))
@@ -2025,7 +2065,7 @@ int main(int argc, char **argv) {
                 static std::atomic<int> n{0};
                 const Ctx saved = *c;
                 c->x[0] = mgr;
-                nxrt::dispatch_call(c, nxmod_sdk.base + 0x16daa0);
+                nxrt::dispatch_call(c, g_sdk_base + 0x16daa0);
                 *c = saved;
                 uint64_t after = 0;
                 if (nxrt::mem::is_mapped(mgr + 0x40, 8))
@@ -2040,22 +2080,22 @@ int main(int argc, char **argv) {
         NXLOG_W("boot", "VAMM init hook armed at sdk+0x16dcc0 (XC2_301_VAMM)");
     }
     // rtld 0x1470: flag-setting helper (writes 1 at rtld+0x3000, returns to its caller). Handled in the host.
-    nxrt::hook_add_entry(nxmod_rtld.base + 0x1470, [](Ctx*, uint64_t, void*) -> int {
-        *reinterpret_cast<uint32_t*>(static_cast<uintptr_t>(nxmod_rtld.base + 0x3000)) = 1;
+    nxrt::hook_add_entry(g_rtld_base + 0x1470, [](Ctx*, uint64_t, void*) -> int {
+        *reinterpret_cast<uint32_t*>(static_cast<uintptr_t>(g_rtld_base + 0x3000)) = 1;
         std::fprintf(stderr, "rtld: flag helper -> [rtld+0x3000] = 1\n");
         return 1;
-    });    nxrt::hook_add_entry(nxmod_main.base + 0x77ef28, [](Ctx* c, uint64_t, void*) -> int {
+    });    nxrt::hook_add_entry(main_base + 0x77ef28, [](Ctx* c, uint64_t, void*) -> int {
         std::fprintf(stderr, "MM: initialize(this=0x%llx)\n", (unsigned long long)c->x[0]); return 0; });
-    nxrt::hook_add_entry(nxmod_main.base + 0x77f770, [](Ctx* c, uint64_t, void*) -> int {
+    nxrt::hook_add_entry(main_base + 0x77f770, [](Ctx* c, uint64_t, void*) -> int {
         std::fprintf(stderr, "MM: create(name=0x%llx)\n", (unsigned long long)c->x[0]); return 0; });
-    nxrt::hook_add_entry(nxmod_main.base + 0x77ff84, [](Ctx* c, uint64_t, void*) -> int {
+    nxrt::hook_add_entry(main_base + 0x77ff84, [](Ctx* c, uint64_t, void*) -> int {
         std::fprintf(stderr, "MM: create(h=0x%x size=0x%llx name=0x%llx type=0x%llx)\n",
                      static_cast<uint32_t>(c->x[0]), (unsigned long long)c->x[1], (unsigned long long)c->x[2], (unsigned long long)c->x[5]); return 0; });
-    nxrt::hook_add_entry(nxmod_main.base + 0x77fc6c, [](Ctx* c, uint64_t, void*) -> int {
+    nxrt::hook_add_entry(main_base + 0x77fc6c, [](Ctx* c, uint64_t, void*) -> int {
         std::fprintf(stderr, "MM: create x0=0x%llx x1=0x%llx x2=0x%llx x3=0x%llx x4=0x%llx x5=0x%llx\n",
                      (unsigned long long)c->x[0], (unsigned long long)c->x[1], (unsigned long long)c->x[2],
                      (unsigned long long)c->x[3], (unsigned long long)c->x[4], (unsigned long long)c->x[5]); return 0; });
-    nxrt::hook_add_entry(nxmod_main.base + 0x77fb44, [](Ctx* c, uint64_t, void*) -> int {
+    nxrt::hook_add_entry(main_base + 0x77fb44, [](Ctx* c, uint64_t, void*) -> int {
         std::fprintf(stderr, "MM: Region::initialize x0=0x%llx x1=0x%llx x2=0x%llx x3=0x%llx x4=0x%llx x5=0x%llx\n",
                      (unsigned long long)c->x[0], (unsigned long long)c->x[1], (unsigned long long)c->x[2],
                      (unsigned long long)c->x[3], (unsigned long long)c->x[4], (unsigned long long)c->x[5]); return 0; });    nxrt::hook_add_entry(0x7100781798ull, [](Ctx* c, uint64_t, void*) -> int {
@@ -2086,17 +2126,17 @@ int main(int argc, char **argv) {
     Ctx *ctx = nxrt::kernel::current_ctx();
 
     // 5. The console path enters rtld at 0x7700000000; the experiments below skip rtld.
-    uint64_t entry = entry_mode == "main" ? (nxmod_main.base + 0x69fb7c) : kModules[0].nx->base;
+    uint64_t entry = entry_mode == "main" ? (main_base + 0x69fb7c) : module_base("rtld");
     if (addr_override) entry = addr_override;
     g_main_handle = h;   // the SDK boot-parameter hook (ThreadManagerImplByHorizon) needs it
     uint64_t a0 = 0, a1 = 0, a2 = 0, a3 = 0;
     if (entry_mode == "start") {
         // What the console loader does after relocation: run main's DT_INIT (the C++ constructors), then
         // nn::init::Start(0, main thread handle, nnMain, UserExceptionHandler).
-        entry = nxmod_sdk.base + 0x68668;                 // nn::init::Start
+        entry = module_base("sdk") + 0x68668;             // nn::init::Start
         a1 = h;
-        a2 = nxmod_main.base + 0x69fb7c;                  // nnMain
-        a3 = nxmod_sdk.base + 0x8fea4;                    // nn::os::detail::UserExceptionHandler
+        a2 = main_base + 0x69fb7c;                  // nnMain
+        a3 = module_base("sdk") + 0x8fea4;                // nn::os::detail::UserExceptionHandler
     }
     if (!nxrt::fn_lookup(entry)) die("the lifted module has no function at 0x%llx", (unsigned long long)entry);
     ctx->x[0] = a0;
