@@ -95,4 +95,5 @@ The first launch compiles pipelines: about 22 seconds with no frame, then it nev
 
 - [docs/BUILD.md](BUILD.md) — the full build, including how to rebuild the shader cache
 - [docs/COMPATIBILITY.md](COMPATIBILITY.md) — measured frame rates and the known issues
+- [docs/TROUBLESHOOTING.md](TROUBLESHOOTING.md) — it builds and runs but the screen is wrong, the driver crashes, or the frame rate is off
 - [docs/ENVIRONMENT.md](ENVIRONMENT.md) — the toolchain in detail, and the pitfalls

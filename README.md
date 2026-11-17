@@ -78,6 +78,7 @@ Vulkan SDK, Python 3.12), then
 * [docs/QUICKSTART.md](docs/QUICKSTART.md) — ten minutes from a clean clone to the title screen
 * [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the lift, the runtime and the shader pipeline fit together
 * [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) — what runs, what does not, and the measured frame rate
+* [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) — symptom first: black screen, driver crashes, wrong frame rate
 * [docs/INVARIANTS.md](docs/INVARIANTS.md) — the three rules the project holds itself to
 * [CONTRIBUTING.md](CONTRIBUTING.md) — reporting a problem, building, opening a pull request
 * [CHANGELOG.md](CHANGELOG.md) — dated milestones
