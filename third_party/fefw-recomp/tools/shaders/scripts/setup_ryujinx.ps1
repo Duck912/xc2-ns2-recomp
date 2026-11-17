@@ -39,7 +39,9 @@ if (-not (Test-Path (Join-Path $Ryubing 'src\Ryujinx.Common'))) {
     }
 }
 
-$dst = Join-Path $PSScriptRoot '..\third_party\ryubing'
+# robocopy does not create intermediate directories when the destination still contains '..': it exits 16 and copies
+# nothing, which is what a clean checkout hits (the workspace already had the folders).
+$dst = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\third_party\ryubing'))
 New-Item -ItemType Directory -Force "$dst\src" | Out-Null
 foreach ($p in 'Ryujinx.Common','Spv.Generator','Ryujinx.Graphics.Shader') {
     robocopy "$Ryubing\src\$p" "$dst\src\$p" /MIR /XD obj bin /NFL /NDL /NJH /NJS /NP | Out-Null

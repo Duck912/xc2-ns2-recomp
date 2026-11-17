@@ -26,6 +26,7 @@ which gets renamed when the archive is swapped. A stale pair failed silently - 5
 failed to inflate and the tool reported zero rows as success.
 """
 import argparse
+import os
 import struct
 import sys
 import time
@@ -121,6 +122,9 @@ def main(argv):
         print("ERROR: no xbc1 record found; is this a bf2.ard?", file=sys.stderr)
         return 1
 
+    folder = os.path.dirname(os.path.abspath(a.out))
+    if folder:
+        os.makedirs(folder, exist_ok=True)   # the example in the docstring writes into work\, which may not exist yet
     with open(a.out, "w", encoding="utf-8", newline="\n") as f:
         f.write("offset\tname\tunc\tcomp\tchecksum\n")
         for off, name, unc, comp, ck in records:
