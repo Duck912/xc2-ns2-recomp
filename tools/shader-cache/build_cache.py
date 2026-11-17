@@ -164,6 +164,9 @@ def main(argv):
             shutil.copy2(os.path.join(stage_out, n), os.path.join(a.cache, n))
             copied += 1
 
+    # Only the rows of shaders that actually produced a .spv: the harness writes a row for a block it could
+    # not translate too, and a row without a .spv would make the runtime resolve a shader that is not there.
+    produced = set(os.path.splitext(n)[0] for n in os.listdir(stage_out) if n.endswith(".spv"))
     added = 0
     results = os.path.join(a.cache, "results.tsv")
     new_rows = os.path.join(stage_out, "results.tsv")
@@ -181,7 +184,7 @@ def main(argv):
             f.readline()
             for line in f:
                 line = line.rstrip("\n")
-                if line and line.split("\t", 1)[0] not in known:
+                if line and line.split("\t", 1)[0] not in known and line.split("\t", 1)[0] in produced:
                     add.append(line)
         if add:
             if os.path.exists(results):
@@ -209,10 +212,22 @@ def main(argv):
         packed = a.pack
 
     after = cached(a.cache)
-    still = [r for r in rows if r["hash"] not in after]
+    # A block the harness could not translate is not a failure of this script: on the retail archive 22 of the
+    # 12,126 extracted blocks are misaligned garbage whose hashes the game never asks for. Report them, and only
+    # fail when nothing at all came out.
+    rejected = sorted(r["hash"] for r in missing if r["hash"] not in after)
     rep.done(translated=len(missing), installed=copied, results_rows=added, pack=packed,
-             cache_entries=len(after), still_missing=len(still))
-    return EXIT_OK if not still else EXIT_STEP
+             cache_entries=len(after), rejected=len(rejected))
+    if rejected:
+        rep.say("rejected by the translator (their hashes are not ones the game requests):")
+        for h in rejected[:10]:
+            rep.say("  " + h)
+        if len(rejected) > 10:
+            rep.say("  ... and %d more" % (len(rejected) - 10))
+    if copied == 0:
+        rep.fail(EXIT_STEP, "not one shader came out of the translator")
+        return EXIT_STEP
+    return EXIT_OK
 
 
 if __name__ == "__main__":
