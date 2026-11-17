@@ -36,6 +36,25 @@ HEADER = 0x30
 CHUNK = 64 * 1024 * 1024
 
 
+def looks_valid(f, off, comp):
+    """Cheap check that the payload really is a zlib stream.
+
+    The four magic bytes can occur by chance inside compressed data (2 of 75,648 on the retail archive).
+    Decompressing the first 64 output bytes is enough to tell a real record from a coincidence, and it
+    costs well under a second for a whole archive.
+    """
+    pos = f.tell()
+    try:
+        f.seek(off + HEADER)
+        raw = f.read(min(comp, 4096))
+        d = zlib.decompressobj()
+        return bool(d.decompress(raw, 64))
+    except Exception:
+        return False
+    finally:
+        f.seek(pos)
+
+
 def scan(path):
     """Return (records, rejected, size); a record is (offset, name, unc, comp, checksum)."""
     records = []
@@ -62,7 +81,7 @@ def scan(path):
                 if len(head) == HEADER:
                     unc, comp, ck = struct.unpack_from("<III", head, 8)
                     name = head[0x14:HEADER].split(b"\x00", 1)[0].decode("utf-8", "replace")
-                    if comp and off + HEADER + comp <= size:
+                    if comp and off + HEADER + comp <= size and looks_valid(f, off, comp):
                         records.append((off, name, unc, comp, ck))
                     else:
                         rejected += 1
