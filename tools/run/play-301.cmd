@@ -124,10 +124,13 @@ set NXRT_DLSS_HOT_FILE=%ROOT%\work\dlss_hot.txt
 if exist "%NXRT_DLSS_HOT_FILE%" del /q "%NXRT_DLSS_HOT_FILE%"
 echo upscaler = taau> "%NXRT_DLSS_HOT_FILE%"
 rem The preload pack is read BEFORE the loose .spv files, so a pack built before a shader was replaced hides that
-rem replacement: the change looks like it did nothing. Drop the pack when any loose module is newer than it. Costs
-rem one stat sweep per launch and saves the afternoon it cost to notice.
-set NXRT_NVN_SHADER_CACHE_DIR=%ROOT%\xc2\build\boot\shader_cache
-powershell -NoProfile -Command "$c='%NXRT_NVN_SHADER_CACHE_DIR%'; $p=Join-Path $c 'spirv.preload.pack'; if (Test-Path $p) { $pt=(Get-Item $p).LastWriteTime; $n=Get-ChildItem (Join-Path $c 'spirv') -Filter *.spv -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1; if ($n -and $n.LastWriteTime -gt $pt) { Remove-Item $p,(Join-Path $c 'spirv.preload.pack.new') -Force -ErrorAction SilentlyContinue } }" >NUL 2>&1
+rem replacement: the change looks like it did nothing. It is dropped on every launch, unconditionally, because the
+rem mtime heuristic that used to guard it is wrong exactly when it matters - Copy-Item keeps the source's timestamp,
+rem so restoring a backup makes the module look older than the pack. Measured cost: 0.6 s of preload against 0.4 s
+rem from the pack.
+rem The cache can be pointed elsewhere (NXRT_NVN_SHADER_CACHE), and then %ROOT% is the wrong place to look: the pack
+rem sits next to the directory that is actually in use, not next to this checkout.
+powershell -NoProfile -Command "$d=$env:NXRT_NVN_SHADER_CACHE; if (-not $d) { $d=Join-Path '%ROOT%' 'xc2\build\boot\shader_cache\spirv' }; $c=Split-Path $d -Parent; foreach ($n in 'spirv.preload.pack','spirv.preload.pack.new') { $p=Join-Path $c $n; if (Test-Path $p) { Remove-Item $p -Force -ErrorAction SilentlyContinue } }" >NUL 2>&1
 set NXRT_NVN_HOT_STATE_FILE=%ROOT%\work\hot_state.txt
 if not exist "%NXRT_NVN_HOT_STATE_FILE%" (echo front_face=%FFMODE%> "%NXRT_NVN_HOT_STATE_FILE%")
 set NXRT_SYSTEM_LANGUAGE=%LANGCODE%
