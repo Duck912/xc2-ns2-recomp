@@ -595,6 +595,12 @@ bool Device::init(const DeviceDesc& desc, std::string* error) {
     const bool x_vids = add_ext(VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME, &avids);
     const bool x_drua = add_ext(VK_EXT_DYNAMIC_RENDERING_UNUSED_ATTACHMENTS_EXTENSION_NAME, &adrua);
     const bool x_tfb = add_ext(VK_EXT_TRANSFORM_FEEDBACK_EXTENSION_NAME, &atfb);
+    // Compute shader derivatives. Some of the game's compute shaders declare SPV_KHR_compute_shader_derivatives
+    // (ComputeDerivativeGroupLinearKHR); without the extension and its feature the module itself is invalid
+    // (VUID-VkShaderModuleCreateInfo-pCode-08740 and -08742). Enabled only when the driver advertises it.
+    VkPhysicalDeviceComputeShaderDerivativesFeaturesKHR acsd = {
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COMPUTE_SHADER_DERIVATIVES_FEATURES_KHR};
+    add_ext(VK_KHR_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME, &acsd);
     // 8-bit index buffers (the EXT and the KHR extension share the feature struct)
     const bool x_u8 = add_ext(VK_EXT_INDEX_TYPE_UINT8_EXTENSION_NAME, &au8) || add_ext("VK_KHR_index_type_uint8", &au8);
     // pipelines linked from separately compiled shader parts (nvn_gpl.cpp): needs VK_KHR_pipeline_library next to the extension itself

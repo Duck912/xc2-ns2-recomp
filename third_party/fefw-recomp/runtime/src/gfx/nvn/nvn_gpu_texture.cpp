@@ -317,10 +317,14 @@ VkImageCreateFlags base_flags(const Shape& s, VkFormat fmt) {
     if (s.cube) f |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
     if (s.type == VK_IMAGE_TYPE_3D) f |= VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT;   // 2D views of the slices
     if (srgb_partner(fmt) != VK_FORMAT_UNDEFINED || bit_alias_class(fmt)) f |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
-    // NOTE (2026-11-17): giving a combined depth-stencil image MUTABLE_FORMAT silences the image-view VUID but changes
-    // what the fog and cloud passes sample - the stencil views that used to fall back to the dummy view become real,
-    // and the fog shimmers. Reverted. The descriptor-type mismatch it was meant to help with is fixed in the shaders
-    // instead (see docs/internal/handover/45-*).
+    // A combined depth-stencil image is read per aspect: a stencil-only view is VK_FORMAT_S8_UINT, which is not the
+    // image's own format, so the image has to be created mutable or every such view is invalid
+    // (VUID-VkImageViewCreateInfo-image-12397 / -01761).
+    //
+    // 2026-11-17: this was added, blamed for a cloud-sea shimmer, and reverted. The shimmer was the upscaler (fsr3
+    // instead of TAAU, see docs/internal/handover/46-*), not this. Put back.
+    if (fmt == VK_FORMAT_D24_UNORM_S8_UINT || fmt == VK_FORMAT_D32_SFLOAT_S8_UINT)
+        f |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
     return f;
 }
 
