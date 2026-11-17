@@ -92,7 +92,10 @@ code and the notes stay cross-referenced, but the notes themselves are not publi
 ## Credits
 
 * [nxrecomp](https://github.com/drakolordx7/nxrecomp) — the static recompiler used to lift the game
-* [fefw-recomp](third_party/fefw-recomp) — the Switch runtime (NVN/NVN2 → Vulkan) this build links against
+* **[Goldoire/fefw-recomp](https://github.com/Goldoire/fefw-recomp)** — the Switch runtime this project is built on,
+  and the reason it exists at all: the NVN/NVN2 replay layer, the service HLE, the shader pipeline and the
+  exe+DLL packaging split all started there. Our fork lives in [third_party/fefw-recomp](third_party/fefw-recomp)
+  and every change to it is listed in its `MODIFICATIONS.md`.
 * Ryujinx (MIT) — the Maxwell shader translator used by the offline shader harness
 * SDL3, Vulkan-Headers, VMA, and the other vendored dependencies (see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md))
 * [AksharDP/xc2-recomp](https://github.com/AksharDP/xc2-recomp) and the [Lichii](https://github.com/zortos293/Lichii) PRs — read for reference findings, no code copied
@@ -127,3 +130,6 @@ code, no game assets and no keys, and gives no help in obtaining them.
   **不随仓库分发**，只能本地构建。
 * 当前状态：能启动、读 2022 通关存档、进游戏；港口与多数区域 **59–60 fps**，大平原 43–52 fps，4K 输出几乎零成本。已知问题见 `docs/COMPATIBILITY.md`。
 * 构建方法见 `docs/BUILD.md`；工具链见 `docs/ENVIRONMENT.md`；架构见 `docs/ARCHITECTURE.md`。
+* **本项目的运行时来自 [Goldoire 的 fefw-recomp](https://github.com/Goldoire/fefw-recomp)**：NVN/NVN2 重放层、
+  服务层 HLE、着色器管线、exe + DLL 的打包形态都奠基其上。没有那个项目，就没有这次重编译。我们的分支在
+  `third_party/fefw-recomp`，改动逐条记在它的 `MODIFICATIONS.md`。
