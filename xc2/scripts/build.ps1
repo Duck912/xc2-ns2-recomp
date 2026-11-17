@@ -95,52 +95,12 @@ if (-not $SkipLift) {
             }
             if (-not $useSites -and (Test-Path $shipped)) { $useSites = $shipped }
             if ($useSites) { $sitesArg = @('--sites', $useSites) }
-            # Frame counters converted to the game's time (HANDOVER 59, scripts\fps_counters.txt): main only.
-            #
-            # The site list is PER BINARY. Its own header names the module it was scanned from, and a list made from a
-            # different main instruments addresses that are not stores there: the counters then read arbitrary registers
-            # as pointers. Measured 2026-11-17 - build\fps_sites.txt had been scanned from the 4-module dev dump
-            # (xc2ns2) while the lift was the retail 3.0.1 main, 9,962 of its 9,997 sites were not stores in that
-            # binary, and the game died in fps_fs reading address 0x3 eight seconds in. So: regenerate when the header
-            # does not name this module, and drop counters whose store is not a site of it.
-            if ($m -eq 'main') {
-                $counters = Join-Path $PSScriptRoot 'fps_counters.txt'
-                $sitesPath = Join-Path $build 'fps_sites.txt'
-                $mainNso = Join-Path $Exefs 'main'
-                $wantLeaf = Split-Path (Split-Path $mainNso -Parent) -Leaf
-                $stale = $true
-                if (Test-Path $sitesPath) {
-                    $head = Get-Content -LiteralPath $sitesPath -TotalCount 8 -ErrorAction SilentlyContinue
-                    $srcLine = @($head | Where-Object { $_ -match '^#\s*python -m nxrecomp\.fps\s+(\S+)' })
-                    if ($srcLine.Count -and $srcLine[0] -match [regex]::Escape($wantLeaf)) { $stale = $false }
-                }
-                if ($stale -and (Test-Path $mainNso)) {
-                    Write-Host ("fps sites: build\fps_sites.txt is not a scan of " + $wantLeaf + ": rescanning it now")
-                    & $py -m nxrecomp.fps $mainNso --base $base --out $sitesPath 2>&1 | ForEach-Object { Write-Host "  $_" }
-                    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $sitesPath)) { throw 'the frame-counter site scan failed' }
-                }
-                if ((Test-Path $counters) -and (Test-Path $sitesPath)) {
-                    $sites = @{}
-                    foreach ($line in Get-Content -LiteralPath $sitesPath) {
-                        if ($line -and -not $line.StartsWith('#')) { $sites[$line.Split(' ')[0]] = $true }
-                    }
-                    $kept = New-Object System.Collections.Generic.List[string]
-                    $dropped = 0
-                    foreach ($line in Get-Content -LiteralPath $counters) {
-                        if (-not $line.Trim() -or $line.TrimStart().StartsWith('#')) { $kept.Add($line); continue }
-                        if ($sites.ContainsKey(($line.Trim() -split '\s+')[0])) { $kept.Add($line) } else { $dropped++ }
-                    }
-                    if ($dropped) {
-                        Write-Host ("counters: {0} of the listed stores are not sites of this binary: skipped. Re-read them for it (HANDOVER 59.3)" -f $dropped)
-                        $counters = Join-Path $build 'fps_counters.txt'
-                        Set-Content -LiteralPath $counters -Value $kept -Encoding ascii
-                        Write-Host ("counters: the usable ones are in " + $counters)
-                    }
-                    $sitesArg += @('--fps-sites', $sitesPath, '--fps-counters', $counters)
-                } elseif (-not (Test-Path $sitesPath)) {
-                    Write-Host 'counters: no site list and no ExeFS main: the lift runs without frame counters'
-                }
-            }
+            # No frame-counter instrumentation, deliberately. The retail 3.0.1 main paces itself by real time, not
+            # by a fixed 1/30 s a frame: measured 2026-11-17, at 59.1 fps with the counters effectively off (45 of the
+            # 46 were dropped, the list having been scanned from the 4-module dev dump) the game ran at the right
+            # speed on screen. The scaling this build used to apply had nothing to correct, and it was the only way
+            # the game could die inside fps_fs (0xC0000005 reading address 0x3, eight seconds in), so the path is
+            # gone rather than repaired. xc2_boot.cpp no longer carries the helpers or the census either.
             & $py -m nxrecomp lift $src $out --game xc2ns2 --name $m --base $base --jobs $Jobs @sitesArg 2>&1 |
                 ForEach-Object { Write-Host "  $_" }
             if ($LASTEXITCODE -ne 0) { throw "lift failed for $m" }
