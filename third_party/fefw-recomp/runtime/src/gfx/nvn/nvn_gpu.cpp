@@ -293,11 +293,13 @@ void flush_batch() {
     }
     if (r != VK_SUCCESS) {
         NXLOG_E(kTag, "vkQueueSubmit2 failed (%d): the device is lost or out of memory", static_cast<int>(r));
-        // keep the timeline moving so waiters do not hang: signal from the host
-        VkSemaphoreSignalInfo ssi = {VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
-        ssi.semaphore = g->timeline;
-        ssi.value = serial;
-        vkSignalSemaphore(g->dev->device(), &ssi);
+        // A host signal used to "keep the timeline moving" here. It cannot: once the device is lost the semaphore
+        // belongs to it, the signal fails too, and the attempt is a spec violation anyway - the value being
+        // signalled is still pending on the queue (VUID-VkSemaphoreSignalInfo-value-03259). Report it once and
+        // leave the timeline alone.
+        static std::atomic<bool> told{false};
+        if (!told.exchange(true))
+            NXLOG_E(kTag, "the GPU timeline can no longer be signalled: the device is gone. Restart the game.");
     }
     g->flushed = serial;
     g->flushed_pub.store(serial);
