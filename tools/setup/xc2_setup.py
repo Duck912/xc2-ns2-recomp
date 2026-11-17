@@ -49,6 +49,10 @@ class Runner:
         self.status = {"state": "idle", "step": "", "note": "", "started_at": now(), "steps": []}
         self.live = {"detail": "", "percent": None}
         self.last_write = 0.0
+        # Steps finished and steps in the page's list: the launcher paints its bar from "@progress" lines, and without
+        # them it had nothing to paint (an empty bar that never moved, measured 2026-11-18).
+        self.done_steps = 0
+        self.total_steps = 0
         if not dry:
             self.state_dir.mkdir(parents=True, exist_ok=True)
 
@@ -68,12 +72,17 @@ class Runner:
             tmp.write_text(json.dumps(self.status, indent=1), encoding="utf-8")
             os.replace(tmp, self.status_path)
 
+    def announce(self):
+        """One "@progress setup <done> <total>" line: the launcher's bar, and nothing else reads it."""
+        print("@progress setup %d %d" % (self.done_steps, self.total_steps), flush=True)
+
     def step(self, name):
         self.live = {"detail": "", "percent": None}
         self.last_write = 0.0
         self.write_status(state="running", step=name, note="", progress=None)
         self.log("@step " + name)
         self.log("STEP: %s" % name)
+        self.announce()
         return time.time()
 
     def end_step(self, name, started, ok, note=""):
@@ -84,8 +93,11 @@ class Runner:
             self.status["steps"].append(row)
         row.update(state="done" if ok else "failed", seconds=seconds, note=note)
         self.live = {"detail": "", "percent": None}
+        if ok:
+            self.done_steps += 1
         self.write_status(note=note, progress=None)
         self.log("STEP: %s %s %ss %s" % (name, "done" if ok else "FAILED", seconds, note))
+        self.announce()
         return ok
 
     def note_progress(self, detail, percent=None):
@@ -502,6 +514,23 @@ def find_romfs(dump, explicit):
     return None
 
 
+def link_dlc(install, r):
+    """Link the dump's add-on content in: without it the game loads no DLC at all.
+
+    The launcher hands the folder over as XC2_AOC_DIR, because it is the side that scanned the dump; the game reads
+    <install>/game/dlc-301, so that path gets the junction. A dump without add-ons is not an error.
+    """
+    src = os.environ.get("XC2_AOC_DIR", "")
+    if not src or not Path(src).is_dir():
+        r.log("  dlc: none in the dump (the game runs without add-on content)")
+        return
+    game = install / "game"
+    if not r.dry:
+        game.mkdir(parents=True, exist_ok=True)
+    if junction(game / "dlc-301", Path(src), r) == 0:
+        r.log("  dlc: linked %s" % src)
+
+
 def step_ingest(r, repo, install, nup, dump, exefs_in, romfs_in):
     started = r.step("ingest")
     exefs = install / "exefs"
@@ -526,6 +555,7 @@ def step_ingest(r, repo, install, nup, dump, exefs_in, romfs_in):
             return r.end_step("ingest", started, False, "could not link exefs")
         if junction(romfs, rom, r) != 0:
             return r.end_step("ingest", started, False, "could not link romfs")
+        link_dlc(install, r)
     elif dump:
         found = dump if (dump / "main").is_file() else dump / "exefs"
         if not have_modules(found):
@@ -538,9 +568,52 @@ def step_ingest(r, repo, install, nup, dump, exefs_in, romfs_in):
                               "no romfs found (looked in %s, its romfs/, and its parent); pass --romfs" % dump)
         if junction(romfs, rom, r) != 0:
             return r.end_step("ingest", started, False, "could not link romfs")
+        link_dlc(install, r)
     else:
         return r.end_step("ingest", started, False, "give --nup or --dump")
     return r.end_step("ingest", started, True)
+
+
+# The switches the retail 3.0.1 build needs before it runs at all. xc2/src/xc2_boot.cpp reads the first two - they arm
+# hooks at fixed sdk offsets, which is why they stay opt-in rather than default-on - and the sdk reads the rest.
+# tools/run/play-301.cmd sets the same list for a checkout. A headless run without them dies in 0.6 s, names no block,
+# and looks exactly like "the archive scan was already complete": measured 2026-11-18, 0 of 5 collected.
+GAME_ENV = {
+    "XC2_301_BOOTPARAM": "1",
+    "XC2_301_VAMM": "1",
+    "XC2_301_OPUS": "1",
+    "XC2_301_AUDIO": "1",
+    "NXRT_PROCESS_SYSTEM_RESOURCE_SIZE": "0x6000000",
+    "NXRT_TITLE_DISPLAY_VERSION": "3.0.1",
+    "NXRT_IPC_STUB_RESULT": "0",
+    "NXRT_MEMORY_LIMIT_GB": "24",
+    "NXRT_XC2_FPS": "60",
+    "NXRT_NVN_PRESENT_INTERVAL_HZ": "60",
+    "NXRT_NVN_QUAD_SPLIT": "16",
+    # The deferred lighting pass is one full-screen triangle with cull BACK; with the wrong front face it is culled and
+    # the whole frame stays at the G-buffer's albedo (flat, untextured, black-looking). tools/run/play-301.cmd uses 2;
+    # the runtime default is 1, so a launcher that forgets this renders the scene wrong.
+    "NXRT_NVN_FRONT_FACE_MODE": "2",
+    "NXRT_SYSTEM_LANGUAGE": "zh-Hans",
+    "NXRT_TITLE_SUPPORTED_LANGUAGES": "Japanese,AmericanEnglish,BritishEnglish,French,German,Italian,Spanish,"
+                                       "LatinAmericanSpanish,Chinese,Taiwanese,Korean,SimplifiedChinese,TraditionalChinese",
+}
+
+
+def launch_env(install):
+    """Write <install>/launch.env from GAME_ENV and hand it back.
+
+    The launcher starts the game on its own (the package must not need anything outside itself), so the switches have
+    to exist somewhere both it and the headless prefill can read. Keeping them in a file the engine writes avoids the
+    second copy in Rust that would drift the first time one side changed.
+    """
+    path = install / "launch.env"
+    text = ("# The switches the retail 3.0.1 build needs. Written by tools/setup/xc2_setup.py from GAME_ENV on every\n"
+            "# setup and read by the launcher (Play) and by the headless prefill, so there is one list, not two.\n")
+    for k in sorted(GAME_ENV):
+        text += "%s=%s\n" % (k, GAME_ENV[k])
+    path.write_text(text, encoding="utf-8", newline="\n")
+    return dict(GAME_ENV)
 
 
 def step_shaders_package(r, repo, install, py, jobs):
@@ -553,27 +626,40 @@ def step_shaders_package(r, repo, install, py, jobs):
     """
     started = r.step("shaders")
     spirv = install / "shader_cache" / "spirv"
-    if (spirv / "results.tsv").is_file() and any(spirv.glob("*.spv")):
-        return r.end_step("shaders", started, True, "the shader cache is already there")
-    tool = repo / "tools" / "shader-cache" / "build_cache.py"
     harness = repo / "tools" / "spirv_harness" / "spirv_harness.exe"
-    ard = install / "romfs" / "bf2.ard"
-    if not tool.is_file():
-        return r.end_step("shaders", started, False, "the package has no tools/shader-cache/build_cache.py")
-    if not harness.is_file():
-        return r.end_step("shaders", started, False, "the package has no shader harness")
-    if not ard.is_file():
-        return r.end_step("shaders", started, False, "no bf2.ard under " + str(install / "romfs"))
-    n = jobs if jobs > 0 else max(2, (os.cpu_count() or 4) - 1)
-    r.log("  reading the archive and translating what the cache lacks; this is the long step")
-    rc = r.run([str(py), str(tool), "--ard", str(ard), "--cache", str(spirv), "--harness", str(harness),
-                "--work", str(install / "build" / "shader-cache"), "--jobs", str(n)],
-               cwd=repo, on_line=shader_progress(r))
-    if rc != 0:
-        return r.end_step("shaders", started, False, "the shader chain failed")
-    r.log("  %d shader(s) from the archive" % len(list(spirv.glob("*.spv"))))
+    # Two halves, two markers: results.tsv says the archive was walked, "prefilled" says the headless run named what no
+    # file contains. They are separate on purpose - a setup that dies between them used to look finished (12,132 in the
+    # cache, 5 missing, black title) and every later setup skipped the step entirely.
+    scanned = (spirv / "results.tsv").is_file() and any(spirv.glob("*.spv"))
+    prefilled = install / "build" / "prefilled"
+    if scanned and prefilled.is_file():
+        return r.end_step("shaders", started, True, "the shader cache is already there")
+    if not scanned:
+        tool = repo / "tools" / "shader-cache" / "build_cache.py"
+        ard = install / "romfs" / "bf2.ard"
+        if not tool.is_file():
+            return r.end_step("shaders", started, False, "the package has no tools/shader-cache/build_cache.py")
+        if not harness.is_file():
+            return r.end_step("shaders", started, False, "the package has no shader harness")
+        if not ard.is_file():
+            return r.end_step("shaders", started, False, "no bf2.ard under " + str(install / "romfs"))
+        n = jobs if jobs > 0 else max(2, (os.cpu_count() or 4) - 1)
+        r.log("  reading the archive and translating what the cache lacks; this is the long step")
+        rc = r.run([str(py), str(tool), "--ard", str(ard), "--cache", str(spirv), "--harness", str(harness),
+                    "--work", str(install / "build" / "shader-cache"), "--jobs", str(n)],
+                   cwd=repo, on_line=shader_progress(r))
+        if rc != 0:
+            return r.end_step("shaders", started, False, "the shader chain failed")
+        r.log("  %d shader(s) from the archive" % len(list(spirv.glob("*.spv"))))
+    else:
+        # Re-walking the archive only retries the 22 blocks the translator rejects, and build_cache.py treats "not one
+        # shader came out" as a hard failure - measured 2026-11-18. The scan half is done; only the prefill is missing.
+        r.log("  the archive scan is already there; only the headless prefill is missing")
     prefill_package(r, repo, install, py, harness, spirv, jobs=jobs)
     r.log("  %d shader(s) in the cache" % len(list(spirv.glob("*.spv"))))
+    if not prefilled.is_file():
+        return r.end_step("shaders", started, False,
+                          "the headless prefill named no block; the cache has the archive's share only")
     return r.end_step("shaders", started, True)
 
 
@@ -589,19 +675,26 @@ def prefill_package(r, repo, install, py, harness, spirv, seconds=40, jobs=0):
         r.log("  prefill: no xc2_boot.exe yet, skipping")
         return
     missing = install / "build" / "missing"
+    prefilled = install / "build" / "prefilled"
     if missing.is_dir():
         shutil.rmtree(missing, ignore_errors=True)
     missing.mkdir(parents=True, exist_ok=True)
     env = {
         "NXRT_NVN_DUMP_MISSING": str(missing),
+        # Names the samplers that read the stencil plane through a float one, one line per (shader, binding); the patcher
+        # below turns those into legal uint samplers. A fresh cache has no such lines without this (handover 125).
+        "NXRT_NVN_DS_DEBUG": "1",
         "NXRT_NVN_SHADER_CACHE": str(spirv),
-        "NXRT_FS_ROMFS": str(install / "game" / "romfs-301"),
+        # <install>/romfs, not game/romfs-301: that junction is made by the done step, which runs *after* this one, so a
+        # fresh install had nothing there and the game died on RomFS 0x7D402 five seconds in (measured 2026-11-18).
+        "NXRT_FS_ROMFS": str(install / "romfs"),
         "NXRT_FS_SAVE_DIR": str(install / "save"),
     }
     log = install / "setup" / "prefill.log"
     argv = [str(exe), "--exefs", str(install / "exefs"), "--link", "host", "--gfx", "headless", "--log", str(log)]
     r.log("  prefill: the game runs headless for up to %d s to name the blocks no file contains" % seconds)
     full = os.environ.copy()
+    full.update(launch_env(install))
     full.update(env)
     try:
         p = subprocess.Popen(argv, cwd=str(install), env=full,
@@ -617,12 +710,21 @@ def prefill_package(r, repo, install, py, harness, spirv, seconds=40, jobs=0):
             seen = n
             r.note_progress("prefill: %d block(s) collected" % n)
         time.sleep(1)
-    if p.poll() is None:
+    finished = p.poll()
+    if finished is None:
         p.kill()
         p.wait()
     blocks = sorted(missing.glob("code_*.bin"))
     r.log("  prefill: collected %d block(s)" % len(blocks))
     if not blocks:
+        # Nothing missing is the normal second run. A non-zero exit is a crash, and the two must not look the same:
+        # that is how the missing switches went unnoticed.
+        if finished is not None and finished != 0:
+            r.log("  prefill: the headless run exited with code %s and named no block - the cache stays as the archive left it"
+                  % finished)
+            return
+        retype_ds_samplers(r, repo, py, spirv, log)
+        prefilled.write_text("0 collected: nothing was missing\n", encoding="utf-8")
         return
     n = jobs if jobs > 0 else max(2, (os.cpu_count() or 4) - 1)
     rc = r.run([str(py), str(repo / "tools" / "shader-cache" / "build_cache.py"), "--blocks", str(missing),
@@ -630,6 +732,28 @@ def prefill_package(r, repo, install, py, harness, spirv, seconds=40, jobs=0):
                on_line=shader_progress(r))
     if rc != 0:
         r.log("  prefill: the collected blocks did not translate; the game will still run")
+        return
+    retype_ds_samplers(r, repo, py, spirv, log)
+    prefilled.write_text("%d collected and translated\n" % len(blocks), encoding="utf-8")
+
+def retype_ds_samplers(r, repo, py, spirv, log):
+    """Retype the stencil-plane samplers the prefill's ds_debug lines named (format-07753).
+
+    A cache translated from the archive alone declares those samplers as float while the runtime binds an S8_UINT
+    view, so the descriptor never matches and the deferred lighting's class mask reads black: characters and the
+    background come out untextured. The old flow needed a second full play session to get these lines; the prefill
+    run produces them, so the first launch is already correct.
+    """
+    patch = repo / "tools" / "shader" / "patch_ds_samplers.py"
+    if not patch.is_file():
+        r.log("  prefill: no tools/shader/patch_ds_samplers.py in the package; stencil samplers stay as they are")
+        return
+    rc = r.run([str(py), str(patch), "--cache", str(spirv), "--log", str(log)], cwd=repo)
+    if rc == 0:
+        r.log("  prefill: stencil-plane samplers retyped from the ds_debug lines")
+    else:
+        r.log("  prefill: no stencil sampler needed retyping (exit %d)" % rc)
+
 
 def shader_progress(r):
     """build_cache.py reports each stage on its own line; pass those on so the page shows movement."""
@@ -642,6 +766,9 @@ def shader_progress(r):
 def step_done_package(r, repo, install):
     """The package runs the exe from <install>, which looks for game/romfs-301 there (not under a build folder)."""
     started = r.step("done")
+    # Also here, not only in the shaders step: a package whose cache was already complete skips that step entirely,
+    # and the launcher still needs the switches.
+    launch_env(install)
     game = install / "game"
     if not r.dry:
         game.mkdir(parents=True, exist_ok=True)
@@ -713,6 +840,8 @@ def main():
             ("link", lambda: step_link(r, repo, install)),
             ("done", lambda: step_done(r, repo, install)),
         ]
+    r.total_steps = len(steps)
+    r.announce()
     for name, fn in steps:
         if name in skip:
             r.end_step(name, time.time(), True, "skipped")

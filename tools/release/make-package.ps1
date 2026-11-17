@@ -81,6 +81,10 @@ Copy-Item (Join-Path $root 'tools\setup\xc2_setup.py') (Join-Path $Out 'engine')
 # them a package has an empty cache and the first launch renders with gaps.
 New-Item -ItemType Directory -Force (Join-Path $Out 'tools\shader-cache') | Out-Null
 Copy-Item (Join-Path $root 'tools\shader-cache\*.py') (Join-Path $Out 'tools\shader-cache') -Force
+# The stencil-plane retype (format-07753): the prefill runs with ds_debug and this rewrites the samplers it names.
+# Without it in the package a first run renders characters and the background untextured.
+New-Item -ItemType Directory -Force (Join-Path $Out 'tools\shader') | Out-Null
+Copy-Item (Join-Path $root 'tools\shader\patch_ds_samplers.py') (Join-Path $Out 'tools\shader') -Force
 # The engine's --nup path runs this with the bundled Python (zstandard is in it), for a player whose dump is a .nup.
 New-Item -ItemType Directory -Force (Join-Path $Out 'tools\analysis') | Out-Null
 Copy-Item (Join-Path $root 'tools\analysis\nup_extract.py') (Join-Path $Out 'tools\analysis') -Force
