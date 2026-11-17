@@ -2,6 +2,22 @@
 
 Ten minutes from a clean clone to the title screen. If a step fails, see [Common failures](#common-failures).
 
+## If you downloaded the release package
+
+The release is a self-contained package: no MSVC, no Python, no .NET, no Zig — nothing to install.
+
+1. Unzip `XC2-package-dist.zip` anywhere (491.7 MB; the game itself is unpacked next to it, about 30 GB).
+2. Run `xc2-launcher.exe`.
+3. **Game files**: press `.nup` and pick your package, or pick a folder holding `exefs/` and `romfs/`; then
+   press **Use these game files**.
+4. **Set up** — 8–15 minutes. It recompiles the game's own code from your dump (537 translation units), links
+   it, translates about 12,150 shader programs and collects the few that exist in no file. The step list and the
+   log below it move the whole time; a slower machine takes longer, and it is not hung.
+5. **Play**. The first launch after that compiles GPU pipelines for about 20 seconds, once per driver.
+
+DLC is picked up from the dump automatically; saves land in `save/` next to the launcher. Everything below is
+the source path — clone and build it yourself.
+
 ## Before you start
 
 | you need | why |
