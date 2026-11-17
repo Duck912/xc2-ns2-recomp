@@ -79,7 +79,10 @@ New-Item -ItemType Directory -Force (Join-Path $Out 'engine') | Out-Null
 Copy-Item (Join-Path $root 'tools\setup\xc2_setup.py') (Join-Path $Out 'engine') -Force
 New-Item -ItemType Directory -Force (Join-Path $Out 'tools\shaders') | Out-Null
 Copy-Item (Join-Path $root 'third_party\fefw-recomp\tools\shaders\ampere\extract_corpus.py') (Join-Path $Out 'tools\shaders') -Force
-Say 'engine        xc2_setup.py + extract_corpus.py'
+# The engine's --nup path runs this with the bundled Python (zstandard is in it), for a player whose dump is a .nup.
+New-Item -ItemType Directory -Force (Join-Path $Out 'tools\analysis') | Out-Null
+Copy-Item (Join-Path $root 'tools\analysis\nup_extract.py') (Join-Path $Out 'tools\analysis') -Force
+Say 'engine        xc2_setup.py + extract_corpus.py + nup_extract.py'
 New-Item -ItemType Directory -Force (Join-Path $Out 'xc2\sites') | Out-Null
 Copy-Item (Join-Path $root 'xc2\sites\*.txt') (Join-Path $Out 'xc2\sites') -Force
 New-Item -ItemType Directory -Force (Join-Path $Out 'xc2\src') | Out-Null
