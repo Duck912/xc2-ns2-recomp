@@ -39,6 +39,11 @@ def now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _redact_home(text):
+    home = os.path.expanduser("~")
+    return text.replace(home, "%USERPROFILE%") if home and home in text else text
+
+
 class Runner:
     def __init__(self, install, dry):
         self.install = install
@@ -58,7 +63,8 @@ class Runner:
 
     def log(self, line):
         stamp = datetime.now().strftime("%H:%M:%S")
-        text = "[%s] %s" % (stamp, line)
+        # The log gets pasted into issue reports: the home folder (an account name) is not something to hand out.
+        text = "[%s] %s" % (stamp, _redact_home(line))
         print(text, flush=True)
         if not self.dry:
             with open(self.log_path, "a", encoding="utf-8") as f:
