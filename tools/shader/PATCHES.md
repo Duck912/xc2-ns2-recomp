@@ -29,7 +29,16 @@ Measured on the retail 3.0.1 cache: five shaders, one sample instruction each.
 
 | shader | what it changes | why it is still manual |
 |---|---|---|
-| `87d073eae1cc6f14` | also its **location 1** output: `vec4` + `intBitsToFloat(_150)` becomes `uvec4` + `uint(_150)` | the same shader is used with an integer target and (elsewhere) a float one, so a static patch is only right for the integer case |
+| `87d073eae1cc6f14` | also its **location 1** output: `vec4` + `intBitsToFloat(_150)` becomes `uvec4` + `uint(_150)` | it is a per-shader edit with no rule behind it |
+
+**Verified necessary on 2026-11-17.** With the module at 23,088 bytes (stencil sampler only) the validation layer reports
+`ShaderFragmentOutputMismatch` at **location 1 and location 0**; at 23,120 bytes (with the output fix) only
+**location 0** remains, which is a different shader. So this is not dead weight the way the froxel patch was.
+
+The remaining location 0 belongs to `d3aa3541df429da5` (the light list) and **cannot be a static patch**: the same
+shader also renders into `R32G32_SFLOAT` elsewhere, so declaring its output integer breaks that case - tried, and the
+VUID simply changed direction. Fixing it properly means teaching `spirv_outputs_to_uint` to bitcast sint to uint,
+which touches a 400-line patcher and the source of early-Z's light list (handover 47, section 101.9).
 
 ### Retired: the froxel patch, `2649526f56d9b5b6`
 
