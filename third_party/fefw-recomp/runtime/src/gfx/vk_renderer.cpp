@@ -807,7 +807,13 @@ void Renderer::end_frame(SubmitPrefix* prefix) {
     {
         std::lock_guard<std::mutex> lk(s.dev->queue_mutex());
         VkResult r = vkQueueSubmit2(s.dev->queue(), 1, &si, slot.fence);
-        if (r != VK_SUCCESS) NXLOG_E(kTag, "vkQueueSubmit2 failed (%d)", static_cast<int>(r));
+        if (r != VK_SUCCESS) {
+            // once, for the same reason as the NVN submit path: one lost device produced 21,872 identical lines
+            static std::atomic<bool> told{false};
+            if (!told.exchange(true))
+                NXLOG_E(kTag, "vkQueueSubmit2 failed (%d) - further present-path submit failures are not logged",
+                        static_cast<int>(r));
+        }
         else if (probe_value) s.probe_published.store(probe_value);
         if (prefix) prefix->submitted = r == VK_SUCCESS;
         if (!s.headless) {
