@@ -20,7 +20,19 @@ class Config(GameConfig):
     name = 'xc2ns2'
     title_id = '0100E95004038000'
     version = 'NS2 Edition (NUP v1, v0)'
-    build_id = '5087AF2917D85858A0FD49CB4D6EED67'      # of main, from the NSO header
+    # Build ids of the 3.0.1 exefs, from the NSO headers (offset 0x40). `main` is the one people check; the rest are
+    # recorded so a dump from another region or revision is easy to spot. Not enforced anywhere: the lift is
+    # module-relative, and a matching sdk/subsdk* layout is what actually matters.
+    build_id = '8BEF68ED1EEBC24BF7278040E63B83F6E417E2E2'      # main
+    build_ids = {
+        'main': '8BEF68ED1EEBC24BF7278040E63B83F6E417E2E2',
+        'sdk': '41D4DE4A3B78214AD20C896960DF0E5EA0ED595F',
+        'subsdk0': '593524E167FECD3C7A42A184C9DA3963B207F7C4',
+        'subsdk1': 'E07DB55579B1943E3CD867967ED9A05A309BF2CD',
+        'subsdk2': '9A28F421C8E4E9FDA325FDCD963C93F9AA05E12B',
+        'subsdk3': '07E685D1C23A77A389FD205288AE904C34E059A0',
+        'rtld': 'D7A368B573CE3DEF3C8EF1ADEBE16D91DC45608F',
+    }
     modules = [
         ModuleSpec('main', 0x7100000000, 'main'),
         ModuleSpec('sdk', 0x7500000000, 'sdk'),
