@@ -7,7 +7,8 @@ You need your own dump: the ExeFS of the 3.0.1 program and its romfs. No game da
 ## Requirements
 
 - Windows 10 or later, x86-64 with AVX2
-- a GPU with Vulkan 1.3 (`VK_EXT_external_memory_host`); AMD RDNA 2 tested, NVIDIA untested
+- a GPU with Vulkan 1.3 (`VK_EXT_external_memory_host`); tested on an AMD RDNA 2 card only (the development
+  machine has one), NVIDIA and Intel untested
 - 16 GB of RAM; the 3.0.1 romfs alone is 25.6 GB, and the build needs roughly as much again for the generated
   C++ and objects, so keep about 60 GB free during the build
 - your own copy of the game and its 3.0.1 update
