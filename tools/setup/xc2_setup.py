@@ -20,6 +20,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -46,6 +47,8 @@ class Runner:
         self.log_path = self.state_dir / LOG_FILE
         self.status_path = self.state_dir / STATE_FILE
         self.status = {"state": "idle", "step": "", "note": "", "started_at": now(), "steps": []}
+        self.live = {"detail": "", "percent": None}
+        self.last_write = 0.0
         if not dry:
             self.state_dir.mkdir(parents=True, exist_ok=True)
 
@@ -66,7 +69,9 @@ class Runner:
             os.replace(tmp, self.status_path)
 
     def step(self, name):
-        self.write_status(state="running", step=name, note="")
+        self.live = {"detail": "", "percent": None}
+        self.last_write = 0.0
+        self.write_status(state="running", step=name, note="", progress=None)
         self.log("@step " + name)
         self.log("STEP: %s" % name)
         return time.time()
@@ -78,11 +83,33 @@ class Runner:
             row = {"name": name}
             self.status["steps"].append(row)
         row.update(state="done" if ok else "failed", seconds=seconds, note=note)
-        self.write_status(note=note)
+        self.live = {"detail": "", "percent": None}
+        self.write_status(note=note, progress=None)
         self.log("STEP: %s %s %ss %s" % (name, "done" if ok else "FAILED", seconds, note))
         return ok
 
-    def run(self, argv, cwd=None, env=None):
+    def note_progress(self, detail, percent=None):
+        """Say what the current step is doing, at most once a second.
+
+        A build step runs for minutes and its completion is the only other signal, so a front end polling
+        status.json had nothing to show in between - measured 223.6 s of runtime with the file frozen at
+        "runtime". The detail also goes into the step's own note, which is the field the checklist renders.
+        """
+        self.live = {"detail": detail, "percent": percent}
+        t = time.time()
+        if t - self.last_write < 1.0:
+            return
+        self.last_write = t
+        row = next((s for s in self.status["steps"] if s["name"] == self.status["step"]), None)
+        if row is None:
+            # step() does not create the row - end_step() does - so the first progress line has to make it,
+            # otherwise the detail has nowhere to go and the checklist still shows a blank step.
+            row = {"name": self.status["step"], "state": "running", "seconds": 0, "note": ""}
+            self.status["steps"].append(row)
+        row["note"] = detail
+        self.write_status(progress=dict(self.live))
+
+    def run(self, argv, cwd=None, env=None, on_line=None):
         shown = " ".join(str(a) for a in argv)
         self.log("  $ " + shown)
         if self.dry:
@@ -93,15 +120,41 @@ class Runner:
         with open(self.log_path, "a", encoding="utf-8") as logf:
             logf.write("  $ %s\n" % shown)
             logf.flush()
-            p = subprocess.run([str(a) for a in argv], cwd=str(cwd) if cwd else None, env=full_env,
-                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
-            for line in (p.stdout or "").splitlines():
-                logf.write("    " + line + "\n")
-            return p.returncode
+            # Streamed rather than captured: the log used to appear only when the command exited, so a four
+            # minute build looked like a hang to anyone watching setup.log.
+            p = subprocess.Popen([str(a) for a in argv], cwd=str(cwd) if cwd else None, env=full_env,
+                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                 text=True, errors="replace", bufsize=1)
+            for line in p.stdout:
+                logf.write("    " + line)
+                logf.flush()
+                if on_line is not None:
+                    on_line(line.rstrip("\r\n"))
+            return p.wait()
 
 
 def pwsh(*args):
     return ["pwsh", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", *args]
+
+
+NINJA_LINE = re.compile(r"^\[(\d+)/(\d+)\]")
+
+
+def build_progress(r, label):
+    """Turn ninja's [done/total] into a percentage, and keep the last other line as the detail.
+
+    cmake drives ninja, so every build step speaks this format; the counter is the only progress a user can
+    act on, and without it the status file said "runtime" for four minutes and nothing else.
+    """
+    def on_line(line):
+        s = line.strip()
+        m = NINJA_LINE.match(s)
+        if m:
+            done, total = int(m.group(1)), int(m.group(2))
+            r.note_progress("%s %d/%d" % (label, done, total), (done / total) if total else None)
+        elif s:
+            r.note_progress("%s: %s" % (label, s[:140]))
+    return on_line
 
 
 def import_toolchain(r):
@@ -227,14 +280,15 @@ def step_runtime(r, repo):
         if r.run(["cmake", "-S", runtime, "-B", gfx, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
                   "-DNXRT_BUILD_GFX=ON", "-DNXRT_BUILD_GAMES=OFF", "-DNXRT_BUILD_TESTS=OFF", *cc]) != 0:
             return r.end_step("runtime", started, False, "the graphics shell could not be configured")
-    if r.run(["cmake", "--build", gfx, "--target", "nxrt", "nxrt_gfx"]) != 0:
+    if r.run(["cmake", "--build", gfx, "--target", "nxrt", "nxrt_gfx"], on_line=build_progress(r, "runtime")) != 0:
         return r.end_step("runtime", started, False, "nxrt/nxrt_gfx did not build")
     if not (game / "build.ninja").is_file():
         if r.run(["cmake", "-S", runtime, "-B", game, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
                   "-DNXRT_BUILD_GFX=ON", "-DNXRT_BUILD_GAMES=ON", "-DNXRT_GAMES=xc2ns2",
                   "-DNXRT_TEST_GAME=xc2ns2", "-DNXRT_BUILD_TESTS=OFF", *cc]) != 0:
             return r.end_step("runtime", started, False, "the game module could not be configured")
-    if r.run(["cmake", "--build", game, "--target", "nxrt_game_xc2ns2_core", "nxrt_game_xc2ns2_data"]) != 0:
+    if r.run(["cmake", "--build", game, "--target", "nxrt_game_xc2ns2_core", "nxrt_game_xc2ns2_data"],
+              on_line=build_progress(r, "runtime")) != 0:
         return r.end_step("runtime", started, False, "nxrt_game_xc2ns2_* did not build")
     return r.end_step("runtime", started, True)
 
@@ -246,7 +300,8 @@ def step_lift(r, repo, install):
         return r.end_step("lift", started, True, "the libraries are already there")
     rc = r.run(pwsh(repo / "xc2" / "scripts" / "build.ps1", "-Exefs", install / "exefs", "-Run:$false",
                     "-Modules", ",".join(MODULES), "-LiftDir", repo / "xc2" / "build" / "lift-301",
-                    "-ObjDir", repo / "xc2" / "build" / "obj-301", "-LibDir", lib), cwd=repo)
+                    "-ObjDir", repo / "xc2" / "build" / "obj-301", "-LibDir", lib), cwd=repo,
+                on_line=build_progress(r, "lift"))
     return r.end_step("lift", started, rc == 0, "" if rc == 0 else "build.ps1 failed (its stub link is expected to fail)")
 
 
@@ -257,7 +312,8 @@ def step_link(r, repo, install):
         return r.end_step("link", started, True, "the boot exe is already there")
     rc = r.run(pwsh(repo / "xc2" / "scripts" / "build-boot.ps1", "-Exefs", install / "exefs",
                     "-OutDir", repo / "xc2" / "build" / "boot-301", "-LibDir", repo / "xc2" / "build" / "lib-301",
-                    "-MainLib", repo / "xc2" / "build" / "lib-301" / "main.lib", "-Defines", "XC2_MODULES_7"), cwd=repo)
+                    "-MainLib", repo / "xc2" / "build" / "lib-301" / "main.lib", "-Defines", "XC2_MODULES_7"), cwd=repo,
+                on_line=build_progress(r, "link"))
     return r.end_step("link", started, rc == 0, "" if rc == 0 else "build-boot.ps1 failed")
 
 
