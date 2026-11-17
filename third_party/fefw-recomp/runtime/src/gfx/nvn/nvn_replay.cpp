@@ -2376,7 +2376,30 @@ VkDescriptorSet build_set(const ProgLayout& pl, uint32_t set) {
             // a compute dispatch is never inside the graphics pass: a colour attachment of the last pass is an ordinary texture to it
             const bool feedback = r.tex && d.nvn_stage != kCompute && is_color_feedback(r.tex);
             if (r.tex && tex_gpu(r.tex) && !feedback) {
-                VkImageView v = tex_sampled_view(r.tex, make_request(b, r));
+                ViewRequest vr = make_request(b, r);
+                // [nvn] ds_depth_shaders = "hash16,hash16": fragment shaders that read a depth-stencil texture as a
+                // FLOAT value (luma weights, depth effects) instead of as the raw stencil byte. The game's
+                // depth_stencil_mode says which plane it means, but a shader that does arithmetic on the value wants
+                // the depth plane; taking the stencil plane gives it an S8_UINT view over a float sampler, which is
+                // VUID-vkCmdDrawIndexed-format-07753 and undefined. See tex_sampled_view for the other half of this.
+                if (vr.component == 1 && !vr.depth_aspect && S.stage[kFragment]) {
+                    static const std::string list = nxrt::config_get_str("nvn", "ds_depth_shaders", "");
+                    if (!list.empty() && list.find(S.stage[kFragment]->hash) != std::string::npos) vr.depth_aspect = true;
+                }
+                // [nvn] ds_debug: which fragment shaders read a depth-stencil texture's STENCIL plane through a float
+                // sampler. That descriptor is illegal in Vulkan (VUID-vkCmdDrawIndexed-format-07753, the view is
+                // S8_UINT and the shader declares float) but it is what reproduces Maxwell's "the integer lands in the
+                // float register unchanged". AMD tolerates it, NVIDIA is free to return anything. Each shader is
+                // reported once, so a short run names the whole set that would need a uint-sampling patch.
+                static const bool ds_debug = nxrt::config_get_bool("nvn", "ds_debug", false);
+                if (ds_debug && tex_is_depth(r.tex) && vr.component == 1 && !vr.depth_aspect && S.stage[kFragment]) {
+                    static std::set<std::string> told;
+                    const std::string& h = S.stage[kFragment]->hash;
+                    if (told.insert(h).second)
+                        NXLOG_I(kTag, "ds_debug: fs %s samples the stencil plane of texture %u through a float sampler", h.c_str(),
+                                r.tex->id);
+                }
+                VkImageView v = tex_sampled_view(r.tex, vr);
                 if (v) {
                     ii.imageView = v;
                     // GENERAL: the op also writes it as a storage image (prepare_textures left it there)
