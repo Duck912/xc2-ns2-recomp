@@ -150,7 +150,16 @@ if errorlevel 1 (echo cannot enter "%ROOT%\xc2\build\boot"& exit /b 1)
 rem XC2_EXE runs a different build with the same environment: the point of a clean-room build is to compare it with
 rem this one, and comparing means launching both the same way.
 if not defined XC2_EXE set XC2_EXE=%ROOT%\xc2\build\boot-301\xc2_boot.exe
+rem Every block the game asks for and the cache lacks is written to work\missing-301, and ds_debug records which
+rem samplers need their type corrected (format-07753). After the game exits, fill-cache translates and installs both,
+rem so the NEXT launch is complete - including the shaders that only appear when a new area is entered.
+if not defined NXRT_NVN_DUMP_MISSING set NXRT_NVN_DUMP_MISSING=%ROOT%\work\missing-301
+if not defined NXRT_NVN_DS_DEBUG set NXRT_NVN_DS_DEBUG=1
 "%XC2_EXE%" --exefs "%ROOT%\xc2\game\xc2ns301" --link host --gfx %GFXMODE% --log "%LOG%"
+set XC2_RC=%ERRORLEVEL%
+if not defined NXRT_NVN_SHADER_CACHE set NXRT_NVN_SHADER_CACHE=%NXRT_NVN_SHADER_CACHE_DIR%\spirv
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\tools\run\fill-cache.ps1" -Cache "%NXRT_NVN_SHADER_CACHE%" -Missing "%ROOT%\work\missing-301" -DsLog "%LOG%"
+set ERRORLEVEL=%XC2_RC%
 echo exit code %ERRORLEVEL%
 endlocal
 rem -snaprt takes its ids joined with '+', because a comma is also an argument separator for shift.
