@@ -1,0 +1,47 @@
+# tools/shader/PATCHES.md
+
+Every shader this project modifies, how it is made, and whether a clean build can reproduce it.
+
+**Why this file exists**: a patched shader is a modified copy of the game's own module, so it cannot be published.
+A clean build therefore gets **none** of them, and its picture is not the maintainer's picture. That difference has
+already cost us once - the `format-07753` fix only exists as patches, so a fresh clone still shows the NVIDIA
+black screen until the tool below is run.
+
+## Made by a tool (a clean build can reproduce it)
+
+### The stencil-plane samplers - `patch_ds_samplers.py`
+
+Five fragment shaders read a depth-stencil texture's **stencil plane** through a **float** sampler. The console lets
+the 8-bit value land in the float register with its bits unchanged; Vulkan cannot, and an `S8_UINT` view against a
+float sampler is `VUID-vkCmdDrawIndexed-format-07753` (AMD tolerates it, NVIDIA does not - that is the black screen).
+
+```
+pwsh -File tools/run/report.ps1          # or: $env:NXRT_NVN_DS_DEBUG = 1; .\tools\run\play-301.cmd
+python tools/shader/patch_ds_samplers.py --cache xc2\build\boot\shader_cache\spirv --log work\logs\play-301-<stamp>.log
+```
+
+The runtime names the shaders (`ds_debug:` lines with the set and binding), the tool declares the sampler `uint` and
+bitcasts the fetched value back to float, so the bits are identical and the descriptor is legal.
+
+Measured on the retail 3.0.1 cache: five shaders, one sample instruction each.
+
+## Hand-made (a clean build does NOT get these)
+
+| shader | what it changes | why it is still manual |
+|---|---|---|
+| `2649526f56d9b5b6` | the froxel pass: `_248 = _192` becomes `true` | a one-constant semantic fix for one specific shader; there is no rule to generalise |
+| `87d073eae1cc6f14` | also its **location 1** output: `vec4` + `intBitsToFloat(_150)` becomes `uvec4` + `uint(_150)` | the same shader is used with an integer target and (elsewhere) a float one, so a static patch is only right for the integer case |
+
+Both are kept in `xc2/game/shader-patch/` (git-ignored, never published). If the picture of a clean build has to
+match this one, they have to become tools too - and the second one needs a per-draw decision, not a static patch
+(see `docs/internal/handover/47-*.md` section 101.9).
+
+## Not a patch at all
+
+`tools\run\skip_uvdiv.txt` is a **skip list** consumed by `[nvn] skip_fs_file`: those shaders are not run rather
+than modified. An empty file means nothing is skipped.
+
+## The rule
+
+Before adding a hand-made patch, ask whether the change can be expressed as a **rule over the player's own cache**
+(like `patch_ds_samplers.py`) instead of a file. A rule can be published; a file cannot.
