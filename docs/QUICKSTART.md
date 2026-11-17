@@ -8,7 +8,7 @@ The release is a self-contained package: no MSVC, no Python, no .NET, no Zig —
 
 1. Unzip `XC2-package-dist.zip` anywhere (491.7 MB; the game itself is unpacked next to it, about 30 GB).
 2. Run `xc2-launcher.exe`.
-3. **Game files**: press `.nup` and pick your package, or pick a folder holding `exefs/` and `romfs/`; then
+3. **Game files**: pick the folder that holds `exefs/` and `romfs/`, or press `.nup` and pick a package; then
    press **Use these game files**.
 4. **Set up** — 8–15 minutes. It recompiles the game's own code from your dump (537 translation units), links
    it, translates about 12,150 shader programs and collects the few that exist in no file. The step list and the
