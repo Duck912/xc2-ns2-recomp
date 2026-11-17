@@ -116,9 +116,12 @@ rem   empty -> everything drawn again
 set NXRT_NVN_SKIP_FS_FILE=%ROOT%\work\skip_fs.txt
 if not exist "%NXRT_NVN_SKIP_FS_FILE%" (echo.> "%NXRT_NVN_SKIP_FS_FILE%")
 rem Live state switch: whatever is written into this file is applied within 0.25 s, no restart (toolsunf.cmd writes it).
-rem Upcaster / tuning hot switch ([dlss] hot_file): tools\run\up.cmd writes it, the runtime re-reads it 4x a second.
+rem Upscaler / tuning hot switch ([dlss] hot_file): tools\run\up.cmd writes it, the runtime re-reads it 4x a second.
+rem It OVERRIDES the ini, and it used to persist across runs: a session left on fsr3 kept fsr3 even after the ini said
+rem taau, which cost an afternoon of chasing a shimmer that the upscaler was causing. Start every run from the ini.
 set NXRT_DLSS_HOT_FILE=%ROOT%\work\dlss_hot.txt
-if not exist "%NXRT_DLSS_HOT_FILE%" (echo upscaler = taau> "%NXRT_DLSS_HOT_FILE%")
+if exist "%NXRT_DLSS_HOT_FILE%" del /q "%NXRT_DLSS_HOT_FILE%"
+echo upscaler = taau> "%NXRT_DLSS_HOT_FILE%"
 set NXRT_NVN_HOT_STATE_FILE=%ROOT%\work\hot_state.txt
 if not exist "%NXRT_NVN_HOT_STATE_FILE%" (echo front_face=%FFMODE%> "%NXRT_NVN_HOT_STATE_FILE%")
 set NXRT_SYSTEM_LANGUAGE=%LANGCODE%

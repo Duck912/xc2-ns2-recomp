@@ -197,7 +197,7 @@ bool parse_harness_resources(std::string_view text, std::vector<HarnessResource>
 size_t parse_results_tsv(std::string_view text, std::unordered_map<std::string, std::string>& out);
 // Fills the c[0] offset of each storage buffer (and anything the names did not give). False if a harness entry has
 // no matching SPIR-V binding.
-bool apply_harness(ShaderReflection& refl, const std::vector<HarnessResource>& resources);
+bool apply_harness(ShaderReflection& refl, const std::vector<HarnessResource>& resources, std::string* why = nullptr);
 
 // The "resources" text the harness would print for this reflection (after apply_harness); the test compares it.
 std::string describe_like_harness(const ShaderReflection& refl);

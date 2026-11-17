@@ -2395,9 +2395,11 @@ VkDescriptorSet build_set(const ProgLayout& pl, uint32_t set) {
                 if (ds_debug && tex_is_depth(r.tex) && vr.component == 1 && !vr.depth_aspect && S.stage[kFragment]) {
                     static std::set<std::string> told;
                     const std::string& h = S.stage[kFragment]->hash;
-                    if (told.insert(h).second)
-                        NXLOG_I(kTag, "ds_debug: fs %s samples the stencil plane of texture %u through a float sampler", h.c_str(),
-                                r.tex->id);
+                    char key[96];
+                    snprintf(key, sizeof key, "%s:s%db%d", h.c_str(), int(b.set), int(b.binding));
+                    if (told.insert(key).second)
+                        NXLOG_I(kTag, "ds_debug: fs %s samples the stencil plane of texture %u through a float sampler (s%db%d)", h.c_str(),
+                                r.tex->id, int(b.set), int(b.binding));
                 }
                 VkImageView v = tex_sampled_view(r.tex, vr);
                 if (v) {
