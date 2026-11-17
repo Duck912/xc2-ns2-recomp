@@ -16,7 +16,8 @@ param(
     [string]$LiftDir = '',
     [switch]$SkipDll,
     [switch]$SkipExe,
-    [switch]$SkipHarness
+    [switch]$SkipHarness,
+    [switch]$SkipPython
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot            # xc2
@@ -84,6 +85,45 @@ if (-not $SkipHarness) {
     $h = Join-Path $pub 'spirv_harness.exe'
     $mb = ((Get-ChildItem $pub -Recurse -File | Measure-Object Length -Sum).Sum / 1MB)
     Write-Host ("spirv_harness: {0:N0} MB self-contained in {1:N0} s -> {2}" -f $mb, $t.Elapsed.TotalSeconds, $pub)
+}
+
+# ---- 0b. an embeddable Python, so the lift does not need one installed ------------------------------------
+# Same shape as upstream's package: the interpreter, the wheels its tools import, and the lifter itself inside
+# site-packages. PYTHONPATH cannot be used for that last part - a python*._pth file makes the interpreter ignore
+# it - so nxrecomp and its games\ folder are copied in and found by name.
+if (-not $SkipPython) {
+    $pyver = '3.13.17'
+    $pydir = Join-Path $OutDir 'tools\python'
+    $zip = Join-Path $env:TEMP "python-$pyver-embed-amd64.zip"
+    if (-not (Test-Path $zip)) {
+        Write-Host "python: downloading python-$pyver-embed-amd64.zip"
+        Invoke-WebRequest -Uri "https://www.python.org/ftp/python/$pyver/python-$pyver-embed-amd64.zip" -OutFile $zip -UseBasicParsing
+    }
+    if (Test-Path $pydir) { Remove-Item $pydir -Recurse -Force }
+    New-Item -ItemType Directory -Force $pydir | Out-Null
+    [IO.Compression.ZipFile]::ExtractToDirectory($zip, $pydir)
+    $pth = Get-ChildItem $pydir -Filter 'python*._pth' | Select-Object -First 1
+    if (-not ((Get-Content $pth.FullName -Raw) -match 'Lib\\site-packages')) { Add-Content $pth.FullName 'Lib\site-packages' }
+    $site = Join-Path $pydir 'Lib\site-packages'
+    New-Item -ItemType Directory -Force $site | Out-Null
+    # The wheels are for the embedded interpreter's version and platform, not for the one running pip here.
+    $whl = Join-Path $env:TEMP "xc2-wheels-$pyver"
+    New-Item -ItemType Directory -Force $whl | Out-Null
+    $pipPy = if ($env:XC2_PYTHON) { $env:XC2_PYTHON } else { (Get-Command python -ErrorAction SilentlyContinue).Source }
+    if (-not $pipPy) { throw 'no python to run pip with: set $env:XC2_PYTHON' }
+    & $pipPy -m pip download --only-binary=:all: --python-version 3.13 --platform win_amd64 --implementation cp -d $whl capstone lz4 zstandard 2>&1 |
+        ForEach-Object { if ($_ -match 'Saved|ERROR') { Write-Host "  $_" } }
+    if ($LASTEXITCODE -ne 0) { throw 'pip download failed' }
+    foreach ($w in Get-ChildItem $whl -Filter *.whl) { [IO.Compression.ZipFile]::ExtractToDirectory($w.FullName, $site, $true) }
+    # The lifter, inside site-packages: -m nxrecomp then works with no PYTHONPATH at all.
+    $nxsrc = Join-Path $repo 'third_party\nxrecomp\recomp'
+    foreach ($part in @('nxrecomp', 'games')) {
+        $from = Join-Path $nxsrc $part
+        if (-not (Test-Path $from)) { throw "no $from (the recompiler sources are missing)" }
+        Copy-Item $from $site -Recurse -Force
+    }
+    $mb = ((Get-ChildItem $pydir -Recurse -File | Measure-Object Length -Sum).Sum / 1MB)
+    Write-Host ("python: {0:N0} MB embeddable + capstone/lz4/zstandard + nxrecomp -> {1}" -f $mb, $pydir)
 }
 
 if ($SkipExe) { return }

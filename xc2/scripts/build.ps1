@@ -43,7 +43,27 @@ if ($env:XC2_ENV) {
     if (-not (Test-Path $env:XC2_ENV)) { throw "XC2_ENV points at a file that does not exist: $env:XC2_ENV" }
     . $env:XC2_ENV | Out-Null
 }
-$py = if ($env:XC2_PYTHON) { $env:XC2_PYTHON } elseif (Get-Command python -ErrorAction SilentlyContinue) { (Get-Command python).Source } else { throw 'no python: set $env:XC2_PYTHON or put python on PATH' }
+# The interpreter the lifter runs under. The packaged one comes first: a release carries tools\python with the
+# wheels and nxrecomp inside it, so nothing has to be installed. Each candidate is asked for its version rather than
+# trusted - the Windows Store alias answers "which python" and then does nothing.
+function Test-Python([string]$p) {
+    if (-not $p -or $p -match '\\WindowsApps\\' -or -not (Test-Path $p)) { return $false }
+    try { & $p --version *> $null; return ($LASTEXITCODE -eq 0) } catch { return $false }
+}
+$py = $null
+foreach ($cand in @($env:XC2_PYTHON,
+                    (Join-Path $root 'build\release\tools\python\python.exe'),
+                    (Join-Path (Split-Path -Parent $root) 'tools\python\python.exe'))) {
+    if (Test-Python $cand) { $py = $cand; break }
+}
+if (-not $py) {
+    foreach ($name in 'python', 'python3', 'py') {
+        $c = Get-Command $name -ErrorAction SilentlyContinue
+        if ($c -and (Test-Python $c.Source)) { $py = $c.Source; break }
+    }
+}
+if (-not $py) { throw 'no working python: set $env:XC2_PYTHON, or build the package python with xc2\scripts\build-release.ps1' }
+Write-Host ("python: " + $py)
 
 # The lift runs with the nxrecomp directory as the working directory, so a relative -Exefs has to be resolved here,
 # against the directory the caller used.

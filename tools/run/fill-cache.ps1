@@ -21,6 +21,13 @@ function Test-Python([string]$p) {
 $py = $env:XC2_PYTHON
 if (-not (Test-Python $py)) {
     $py = $null
+    # The packaged interpreter first: a release carries tools\python with zstandard/lz4/capstone inside it.
+    foreach ($cand in @((Join-Path $root 'xc2\build\release\tools\python\python.exe'),
+                        (Join-Path $root 'tools\python\python.exe'))) {
+        if (Test-Python $cand) { $py = $cand; break }
+    }
+}
+if (-not $py) {
     foreach ($name in 'python', 'python3', 'py') {
         $cand = Get-Command $name -ErrorAction SilentlyContinue
         if ($cand -and (Test-Python $cand.Source)) { $py = $cand.Source; break }
@@ -53,6 +60,7 @@ if (-not $Harness -or -not (Test-Path $Harness)) {
     Write-Output '  dotnet publish third_party\fefw-recomp\tools\shaders\harness\SpirvHarness.csproj -c Release -r win-x64 --self-contained true -o third_party\fefw-recomp\tools\shaders\build\publish\win-x64'
     exit 1
 }
+Write-Output ("fill-cache: python " + $py)
 Write-Output ("fill-cache: harness " + $Harness)
 
 # the manifest dump_missing wrote is already in the corpus layout, so build_cache takes the folder as it is
