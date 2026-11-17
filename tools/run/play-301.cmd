@@ -144,7 +144,10 @@ rem to exist even on a first run: the retail build only creates boot-301.
 if not exist "%ROOT%\xc2\build\boot" mkdir "%ROOT%\xc2\build\boot"
 cd /d "%ROOT%\xc2\build\boot"
 if errorlevel 1 (echo cannot enter "%ROOT%\xc2\build\boot"& exit /b 1)
-"%ROOT%\xc2\build\boot-301\xc2_boot.exe" --exefs "%ROOT%\xc2\game\xc2ns301" --link host --gfx %GFXMODE% --log "%LOG%"
+rem XC2_EXE runs a different build with the same environment: the point of a clean-room build is to compare it with
+rem this one, and comparing means launching both the same way.
+if not defined XC2_EXE set XC2_EXE=%ROOT%\xc2\build\boot-301\xc2_boot.exe
+"%XC2_EXE%" --exefs "%ROOT%\xc2\game\xc2ns301" --link host --gfx %GFXMODE% --log "%LOG%"
 echo exit code %ERRORLEVEL%
 endlocal
 rem -snaprt takes its ids joined with '+', because a comma is also an argument separator for shift.
