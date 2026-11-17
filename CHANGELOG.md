@@ -3,6 +3,27 @@
 Dated milestones. The §-numbered evidence sections named on the right are part of the project's internal
 notes, which are not published with this repository.
 
+## 2026-11-18
+
+- **A release can be installed from a `.nup`**: pick the package in the launcher and it is unpacked into
+  `base/{exefs,romfs}`, `updates/` and `dlc/<title id>/romfs`; setup reads the game's own files from there and
+  nothing is shipped with them. Packages are still built from the player's dump.
+- **Play starts the game from the install itself.** No more `tools\run\play-301.cmd` looked up above the exe:
+  the launcher spawns `xc2_boot.exe` with the switches from `<install>\launch.env` (one list, written by the
+  setup engine), and a package always uses its own Python.
+- **DLC loads, and its openings play.** `ingest` links the dump's `dlc/` to `game\dlc-301` (all seven add-ons
+  served), and `game::Info::movie_video_decoder` is on, so the 4K AV1 `.webm` openings decode through dav1d
+  (53 packets / 14 ms each, 59.9 fps).
+- **Three picture fixes**: the deferred lighting pass now gets the front-face convention it is drawn with
+  (without it the whole frame stays at the G-buffer's albedo, which reads as black textures); the light-list
+  registration mask is derived for every shader, not the built-in eleven (the black rectangle at the stairs);
+  and `present_ahead = 0`, so the guest no longer runs a frame ahead of the replay.
+- **The shader cache is complete for the dump and grows while playing**: the archive scan installs 12,132
+  programs, the container pass adds 12 compute ones, the first headless run names the 5 that exist in no file
+  (12,149), and after every session the launcher translates whatever the game asked for and the cache lacked.
+- **Game language is a setting** (zh-Hans default, zh-Hant / en-US / ja), written to `[system] language`.
+- **Logs no longer carry the account name**: the home folder is `%USERPROFILE%` and commands are logged by
+  program name.
 ## 2026-11-16
 
 - **60 fps at 1080p, 1440p and 4K** on the port and most areas (59–60); the open plain runs 43–52 with a
