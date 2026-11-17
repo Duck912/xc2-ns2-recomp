@@ -30,12 +30,25 @@ body:
     validations:
       required: true
   - type: textarea
-    id: log
+    id: report
     attributes:
-      label: Log
+      label: Report zip
       description: |
-        Attach the log from work\logs\ (one file per launch, timestamped). If it is large,
-        attach the last 2000 lines.
+        For anything about what the game draws, run this instead of sending a log by hand:
+
+        ```
+        pwsh -File tools/run/report.ps1
+        ```
+
+        Play until the problem shows, then close the game. It writes
+        `work\reports\report-<timestamp>.zip`; attach that file. Add `-Headless` if you also want a
+        frame-time CSV.
+
+        The zip holds the validation layer's messages, the capability lines your driver reports, whether
+        the device was lost, your settings and the full log. Nothing in it is game data.
+
+        For a build-step or tooling bug, a log from `work\logs\` is enough.
+      placeholder: report-20261117-165952.zip
     validations:
       required: true
   - type: dropdown
