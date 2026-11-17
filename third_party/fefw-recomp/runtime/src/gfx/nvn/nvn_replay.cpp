@@ -125,6 +125,7 @@ struct Pass {
     VkFormat depth_fmt = VK_FORMAT_UNDEFINED;
     bool has_stencil = false;
     bool depth_ro = false;      // the depth attachment is in DEPTH_STENCIL_READ_ONLY_OPTIMAL (it is also sampled by the draws of this pass)
+    bool depth_general = false; // ... and the pass also writes its stencil: GENERAL, the only layout that is both (see depth_pass_layout)
     uint32_t samples = 1;
     float scale = 1.0f;         // resolution scale of the attachments ([gfx] render_scale): viewports and scissors are multiplied by it
 };
@@ -339,6 +340,17 @@ bool occ_ready() {
 
 uint8_t g_key_dummy_binding = 0;      // 1 + the binding that feeds the defaults of unset vertex attributes (0: none)
 bool g_want_depth_ro = false;         // some texture this draw samples is the current depth attachment
+bool g_depth_general = false;         // ... and the draw writes that attachment's stencil too, so it needs GENERAL
+
+// The layout the depth-stencil attachment has for a pass. A pass that only samples it can leave it read-only; one that
+// samples it AND writes its stencil cannot, because Vulkan has no "sampled and writable" depth layout - the descriptor
+// would say DEPTH_STENCIL_READ_ONLY_OPTIMAL while the attachment is DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+// (VUID-vkCmdDrawIndexed-imageLayout-00344). GENERAL is the one layout valid for both uses.
+VkImageLayout depth_pass_layout(bool depth_ro, bool depth_general) {
+    return depth_ro      ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
+           : depth_general ? VK_IMAGE_LAYOUT_GENERAL
+                           : VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+}
 bool g_vb_bound_in_cb = false;        // vkCmdBindVertexBuffers2 was called in this command buffer (dynamic strides need one)
 
 // [nvn] trace_frame = N (NXRT_NVN_TRACE_FRAME): every draw, clear, copy and dispatch of the frame that is presented as number N is logged
@@ -803,7 +815,7 @@ void end_pass(bool to_pass = false) {
             g_pending.push_back({Ref<Texture>::share(t), l});
         };
         for (uint32_t i = 0; i < P.ncolor; ++i) remember(P.color[i].tex, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-        if (!P.depth_ro) remember(P.depth.tex, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+        if (!P.depth_ro) remember(P.depth.tex, depth_pass_layout(P.depth_ro, P.depth_general));
     } else {
         memory_barrier(F->cb);
         g_pending.clear();
@@ -914,15 +926,17 @@ VkExtent2D viewport_extent() {
 // Starts a pass on the current render targets if none is open for them. False when there is nothing to render to. `writes`: the program
 // writes images or buffers, so a draw without render targets still has an effect; it gets a pass without attachments over its viewports
 // (Fortune's Weave's SSAO deinterleaves depth and stores its occlusion into 2D arrays from such draws).
-bool ensure_pass(bool depth_ro = false, bool writes = false) {
+bool ensure_pass(bool depth_ro = false, bool writes = false, bool depth_general = false) {
     const VkExtent2D bare = writes && !S.ncolor && !S.depth_tex ? viewport_extent() : VkExtent2D{0, 0};
-    if (P.open && targets_match() && P.depth_ro == depth_ro && bare.width <= P.extent.width && bare.height <= P.extent.height) return true;
+    if (P.open && targets_match() && P.depth_ro == depth_ro && P.depth_general == depth_general && bare.width <= P.extent.width &&
+        bare.height <= P.extent.height)
+        return true;
     end_pass(true);
     if (!g_pending.empty()) {
         bool conflict = false;
         for (uint32_t i = 0; i < S.ncolor && !conflict; ++i) conflict = pending_conflict(S.color_tex[i].get(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
         if (!conflict && S.depth_tex)
-            conflict = pending_conflict(S.depth_tex.get(), depth_ro ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+            conflict = pending_conflict(S.depth_tex.get(), depth_pass_layout(depth_ro, depth_general));
         if (conflict) {
             memory_barrier(F->cb);
             g_pending.clear();
@@ -934,6 +948,7 @@ bool ensure_pass(bool depth_ro = false, bool writes = false) {
     const float pass_scale = attach_targets(true);
     P = Pass();
     P.depth_ro = depth_ro;
+    P.depth_general = depth_general;
     P.scale = pass_scale;
     VkRenderingAttachmentInfo colors[8] = {};
     VkRenderingAttachmentInfo depth = {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
@@ -976,7 +991,7 @@ bool ensure_pass(bool depth_ro = false, bool writes = false) {
     bool have_depth = false;
     if (dt && tex_gpu(dt)) {
         const bool fresh = tex_layout(dt) == VK_IMAGE_LAYOUT_UNDEFINED;
-        const VkImageLayout dlayout = depth_ro ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        const VkImageLayout dlayout = depth_pass_layout(depth_ro, depth_general);
         tex_transition(dt, *F, dlayout);
         if (!depth_ro) tex_mark_gpu_written(dt);
         VkImageView v = tex_attachment_view(dt, P.depth.level, P.depth.layer, P.depth.layers, P.depth.view_format);
@@ -3751,7 +3766,11 @@ bool begin_draw(int mode, bool indexed, int index_type, VkPrimitiveTopology* top
         // deferred lighting's class mask reads back is lost, which is what rendered those objects black.
         static const bool stencil_under_ro = nxrt::config_get_bool("nvn", "stencil_under_ro", true);
         const bool stencil_writes = stencil_under_ro && S.ds.stencil_test && (S.stencil_wmask[0] || S.stencil_wmask[1]);
-        g_want_depth_ro = samples_depth_target(*pl) && !stencil_writes;
+        const bool samples_depth = samples_depth_target(*pl);
+        g_want_depth_ro = samples_depth && !stencil_writes;
+        // sampled and stencil-written in the same pass: the attachment has to be GENERAL, or the sampler's layout and the
+        // attachment's disagree (VUID-vkCmdDrawIndexed-imageLayout-00344). The stencil write itself is unaffected.
+        g_depth_general = samples_depth && stencil_writes;
         prepare_textures(*pl);
         if (g_trace) {   // [nvn] trace_dump_tex: also the block-compressed level 0 as the GPU holds it, to compare with the prepared data
             static const std::string dump_dir = nxrt::config_get_str("nvn", "trace_dump_tex", "");
@@ -3776,7 +3795,7 @@ bool begin_draw(int mode, bool indexed, int index_type, VkPrimitiveTopology* top
     }
     if (g_fb_seen || (g_dirty & (kDesc | kPipe))) feedback_prepare(*pl);
     rs_mark(kRsFb);
-    if (!ensure_pass(g_want_depth_ro, g_prog_writes)) {
+    if (!ensure_pass(g_want_depth_ro, g_prog_writes, g_depth_general)) {
         // which draw, and what its targets are (the first of each vertex/fragment shader pair)
         const std::string vs = S.stage[kVertex] ? S.stage[kVertex]->hash : "-", fs = S.stage[kFragment] ? S.stage[kFragment]->hash : "-";
         if (first_time_key("draw-no-target " + vs + " " + fs)) {
@@ -6032,6 +6051,7 @@ void replay_begin_submit(Frame& f) {
     g_restart_valid = false;
     g_vb_bound_in_cb = false;
     g_want_depth_ro = false;
+    g_depth_general = false;
     g_fb_use.clear();
     g_fb_seen = false;
     g_key_dummy_binding = 0;
