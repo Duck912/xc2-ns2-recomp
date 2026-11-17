@@ -91,3 +91,5 @@ git log --oneline 6f1d964..HEAD -- third_party/fefw-recomp
 
 - **runtime/games/xc2ns2** — the title facts registered for this game (program id, Switch 2 platform, save sizes),
   and ``movie_video_decoder``: the DLC openings are AV1 and play through the host movie::VideoDecoder (dav1d).
+- **runtime/src/core/runtime.cpp, runtime/src/services/common.cpp** — the startup log names the config file it
+  loaded and the language value it read, so a launcher that starts the game elsewhere can be diagnosed.
