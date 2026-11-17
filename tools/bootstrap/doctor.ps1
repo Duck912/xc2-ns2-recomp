@@ -45,7 +45,7 @@ foreach ($s in $lock.sources) {
 }
 function Add-Row([string]$name, [string]$state, [string]$detail) {
     $script:report += [pscustomobject]@{ name = $name; state = $state; detail = $detail }
-    if ($state -ne 'ok') { $script:problems += "$name : $detail" }
+    if ($state -in @('missing', 'version', 'empty', 'hash')) { $script:problems += "$name : $detail" }
 }
 
 # --- the toolchain: versions, not hashes ---------------------------------------------------------------
@@ -110,7 +110,7 @@ foreach ($s in $lock.sources) {
             if ($n -gt 0) { Add-Row $s.name 'ok' ("present at " + $s.dest + " ($n files)") }
             else { Add-Row $s.name 'empty' ($s.dest + " exists but holds no files") }
         } else {
-            Add-Row $s.name 'missing' ("not at " + $s.dest + "; run the script that fetches it (BUILD.md section 2)")
+            Add-Row $s.name $(if ($s.optional) { 'note' } else { 'missing' }) ("not at " + $s.dest + "; run the script that fetches it (BUILD.md section 2)")
         }
         continue
     }
@@ -120,7 +120,7 @@ foreach ($s in $lock.sources) {
         # "wrong hash", which reads like a supply-chain problem rather than a broken cache.
         $leaf = ($s.url -split '/')[-1]
         if ($leafOf[$leaf].Count -gt 1) {
-            Add-Row $s.name 'ambiguous' ("shares the cache file $leaf with " + (($leafOf[$leaf] | Where-Object { $_ -ne $s.name }) -join ', ') +
+            Add-Row $s.name 'note' ("shares the cache file $leaf with " + (($leafOf[$leaf] | Where-Object { $_ -ne $s.name }) -join ', ') +
                                            "; the hash cannot be attributed, check the CMake configure output instead")
             continue
         }
