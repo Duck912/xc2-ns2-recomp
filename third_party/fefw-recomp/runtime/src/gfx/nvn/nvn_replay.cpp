@@ -126,6 +126,7 @@ struct Pass {
     bool has_stencil = false;
     bool depth_ro = false;      // the depth attachment is in DEPTH_STENCIL_READ_ONLY_OPTIMAL (it is also sampled by the draws of this pass)
     bool depth_general = false; // ... and the pass also writes its stencil: GENERAL, the only layout that is both (see depth_pass_layout)
+    uint32_t color_general = 0; // bit i: colour attachment i is also a storage image of the draw, so it has to be GENERAL
     uint32_t samples = 1;
     float scale = 1.0f;         // resolution scale of the attachments ([gfx] render_scale): viewports and scissors are multiplied by it
 };
@@ -341,6 +342,8 @@ bool occ_ready() {
 uint8_t g_key_dummy_binding = 0;      // 1 + the binding that feeds the defaults of unset vertex attributes (0: none)
 bool g_want_depth_ro = false;         // some texture this draw samples is the current depth attachment
 bool g_depth_general = false;         // ... and the draw writes that attachment's stencil too, so it needs GENERAL
+uint32_t g_color_general = 0;         // bit i: colour attachment i is also a storage image of this draw (image load/store to a render target)
+std::vector<Texture*> g_storage_bound;   // the storage images prepare_textures moved to GENERAL for this draw
 
 // The layout the depth-stencil attachment has for a pass. A pass that only samples it can leave it read-only; one that
 // samples it AND writes its stencil cannot, because Vulkan has no "sampled and writable" depth layout - the descriptor
@@ -814,7 +817,8 @@ void end_pass(bool to_pass = false) {
             for (const PendingWrite& w : g_pending) if (w.tex.get() == t) return;
             g_pending.push_back({Ref<Texture>::share(t), l});
         };
-        for (uint32_t i = 0; i < P.ncolor; ++i) remember(P.color[i].tex, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        for (uint32_t i = 0; i < P.ncolor; ++i)
+            remember(P.color[i].tex, (P.color_general >> i & 1u) ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
         if (!P.depth_ro) remember(P.depth.tex, depth_pass_layout(P.depth_ro, P.depth_general));
     } else {
         memory_barrier(F->cb);
@@ -926,10 +930,10 @@ VkExtent2D viewport_extent() {
 // Starts a pass on the current render targets if none is open for them. False when there is nothing to render to. `writes`: the program
 // writes images or buffers, so a draw without render targets still has an effect; it gets a pass without attachments over its viewports
 // (Fortune's Weave's SSAO deinterleaves depth and stores its occlusion into 2D arrays from such draws).
-bool ensure_pass(bool depth_ro = false, bool writes = false, bool depth_general = false) {
+bool ensure_pass(bool depth_ro = false, bool writes = false, bool depth_general = false, uint32_t color_general = 0) {
     const VkExtent2D bare = writes && !S.ncolor && !S.depth_tex ? viewport_extent() : VkExtent2D{0, 0};
-    if (P.open && targets_match() && P.depth_ro == depth_ro && P.depth_general == depth_general && bare.width <= P.extent.width &&
-        bare.height <= P.extent.height)
+    if (P.open && targets_match() && P.depth_ro == depth_ro && P.depth_general == depth_general && P.color_general == color_general &&
+        bare.width <= P.extent.width && bare.height <= P.extent.height)
         return true;
     end_pass(true);
     if (!g_pending.empty()) {
@@ -949,6 +953,7 @@ bool ensure_pass(bool depth_ro = false, bool writes = false, bool depth_general 
     P = Pass();
     P.depth_ro = depth_ro;
     P.depth_general = depth_general;
+    P.color_general = color_general;
     P.scale = pass_scale;
     VkRenderingAttachmentInfo colors[8] = {};
     VkRenderingAttachmentInfo depth = {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
@@ -962,12 +967,16 @@ bool ensure_pass(bool depth_ro = false, bool writes = false, bool depth_general 
         P.color[i] = make_target(t, S.color_view[i], S.color_has_view[i]);
         if (!t || !tex_gpu(t)) continue;
         const bool fresh = tex_layout(t) == VK_IMAGE_LAYOUT_UNDEFINED;
-        tex_transition(t, *F, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        // a render target that the same draw writes through a storage image has to be GENERAL: the descriptor says
+        // GENERAL (prepare_textures moves storage images there), so the attachment cannot be the colour-attachment
+        // layout (VUID-vkCmdDrawIndexed-imageLayout-00344)
+        const VkImageLayout cl = (color_general >> i & 1u) ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        tex_transition(t, *F, cl);
         tex_mark_gpu_written(t);
         VkImageView v = tex_attachment_view(t, P.color[i].level, P.color[i].layer, P.color[i].layers, P.color[i].view_format, int_outputs_wanted());
         if (!v) continue;
         colors[i].imageView = v;
-        colors[i].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        colors[i].imageLayout = cl;
         colors[i].loadOp = fresh ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
         // Diagnostic (HANDOVER 31): a pass that starts on a target whose layout went back to UNDEFINED wipes it. The probe
         // list t50 is built by the probe passes and then lost before the lighting draw; this says whether the cause is here.
@@ -1588,16 +1597,16 @@ void vol3d_prepare(const ProgLayout& pl) {
 void prepare_textures(const ProgLayout& pl) {
     vol3d_prepare(pl);
     // kept from call to call (render thread; never re-entered): three heap allocations a draw otherwise
-    static std::vector<Texture*> need, need_storage, storage_bound;
+    static std::vector<Texture*> need, need_storage;
     need.clear();
     need_storage.clear();
-    storage_bound.clear();
+    g_storage_bound.clear();
     for (const BindingDesc& d : pl.bindings) {
         TexResolved tmp;
         if (d.type == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE) {
             const TexResolved& r = resolve_image_ref(d, tmp);
             if (!r.tex || !tex_gpu(r.tex) || !tex_has_storage(r.tex)) continue;
-            storage_bound.push_back(r.tex);
+            g_storage_bound.push_back(r.tex);
             if (r.tex->cpu_dirty.load() || tex_layout(r.tex) != VK_IMAGE_LAYOUT_GENERAL || tex_scale(r.tex) != 1.0f) need_storage.push_back(r.tex);
             continue;
         }
@@ -1636,7 +1645,7 @@ void prepare_textures(const ProgLayout& pl) {
     }
     // an image this op also writes (an NVN2 compute shader sampling its own image) stays in GENERAL, the layout both descriptors name
     need.erase(std::remove_if(need.begin(), need.end(),
-                              [&](Texture* t) { return std::any_of(storage_bound.begin(), storage_bound.end(), [&](Texture* s) { return shares_image(t, s); }); }),
+                              [&](Texture* t) { return std::any_of(g_storage_bound.begin(), g_storage_bound.end(), [&](Texture* s) { return shares_image(t, s); }); }),
                need.end());
     if (need.empty() && need_storage.empty()) return;
     for (Texture* t : need) out_texture_read(t);           // an upload reads game memory: compute results held there go back first
@@ -3772,6 +3781,13 @@ bool begin_draw(int mode, bool indexed, int index_type, VkPrimitiveTopology* top
         // attachment's disagree (VUID-vkCmdDrawIndexed-imageLayout-00344). The stencil write itself is unaffected.
         g_depth_general = samples_depth && stencil_writes;
         prepare_textures(*pl);
+        // A colour attachment that this draw also writes through a storage image (image load/store to a render
+        // target) cannot stay in the colour-attachment layout: the descriptor is GENERAL, so the attachment has to be
+        // too. storage_bound is what prepare_textures just moved to GENERAL.
+        g_color_general = 0;
+        for (uint32_t i = 0; i < S.ncolor; ++i)
+            for (Texture* st : g_storage_bound)
+                if (S.color_tex[i].get() == st) g_color_general |= 1u << i;
         if (g_trace) {   // [nvn] trace_dump_tex: also the block-compressed level 0 as the GPU holds it, to compare with the prepared data
             static const std::string dump_dir = nxrt::config_get_str("nvn", "trace_dump_tex", "");
             static std::unordered_map<uint32_t, bool> raw_done;
@@ -3795,7 +3811,7 @@ bool begin_draw(int mode, bool indexed, int index_type, VkPrimitiveTopology* top
     }
     if (g_fb_seen || (g_dirty & (kDesc | kPipe))) feedback_prepare(*pl);
     rs_mark(kRsFb);
-    if (!ensure_pass(g_want_depth_ro, g_prog_writes, g_depth_general)) {
+    if (!ensure_pass(g_want_depth_ro, g_prog_writes, g_depth_general, g_color_general)) {
         // which draw, and what its targets are (the first of each vertex/fragment shader pair)
         const std::string vs = S.stage[kVertex] ? S.stage[kVertex]->hash : "-", fs = S.stage[kFragment] ? S.stage[kFragment]->hash : "-";
         if (first_time_key("draw-no-target " + vs + " " + fs)) {
@@ -6052,6 +6068,7 @@ void replay_begin_submit(Frame& f) {
     g_vb_bound_in_cb = false;
     g_want_depth_ro = false;
     g_depth_general = false;
+    g_color_general = 0;
     g_fb_use.clear();
     g_fb_seen = false;
     g_key_dummy_binding = 0;
