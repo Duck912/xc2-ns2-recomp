@@ -315,7 +315,7 @@ TitleProfile load_profile() {
         if (supported_or_sibling(l, p.supported_languages, pick)) p.language = pick;
         else p.language = Language::AmericanEnglish;
         if (!named && !want.empty() && lower(want) != "auto") NXLOG_W("services", "language '%s' is not a language name; using %s", want.c_str(), from.c_str());
-        NXLOG_I("services", "language %s (from %s)", language_code(p.language), from.c_str());
+        NXLOG_I("services", "language %s (from %s; asked for '%s')", language_code(p.language), from.c_str(), want.c_str());
     }
     p.region = parse_region(config_get_str("system", "region", ""), p.region);
     p.firmware = config_get_str("system", "firmware", p.firmware.c_str());

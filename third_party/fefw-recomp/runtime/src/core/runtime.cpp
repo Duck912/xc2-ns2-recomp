@@ -45,6 +45,15 @@ bool init(const InitOptions& opt) {
     lo.path = opt.log_path;
     log_init(lo);
     NXLOG_I("runtime", "nxrt starting (ABI %s)", abi_source());
+    // Which file the settings came from. The path is resolved from the working directory unless --ini/NXRT_INI says
+    // otherwise, and a launcher that starts the game elsewhere silently loses every ini setting ([system] language
+    // included) - measured 2026-11-18, so the line stays.
+    NXLOG_I("config", "file: '%s'", config_file_path().c_str());
+    {
+        const std::string lang = config_get_str("system", "language", "<none>");
+        const char* env = std::getenv("NXRT_SYSTEM_LANGUAGE");
+        NXLOG_I("config", "[system] language = '%s', NXRT_SYSTEM_LANGUAGE = '%s'", lang.c_str(), env ? env : "<unset>");
+    }
     if (opt.load_symbols) {
         size_t n = symbols_load_map();
         NXLOG_I("runtime", "host symbols: %zu from the linker map%s%s", n, n ? " " : " (no map next to the exe or in its PDB's folder: host frames show module+offset only)", n ? symbols_map_path().c_str() : "");
