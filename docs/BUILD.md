@@ -36,7 +36,16 @@ $env:XC2_PYTHON = 'C:\path\to\python.exe'
 |---|---|
 | `third_party/nxrecomp` (the recompiler) | from the repository root: `git clone https://github.com/drakolordx7/nxrecomp.git third_party/nxrecomp` — the version this build used is commit `e7a5a54` (2026-11-14) |
 | `third_party/deps` (SDL3, Vulkan-Headers, volk, VMA, ImGui, zstd, dav1d) | fetched by CMake's `FetchContent` on the first configure (`runtime/cmake/gfx_deps.cmake`) |
-| Ryujinx's shader translator | `pwsh -File third_party/fefw-recomp/tools/shaders/scripts/setup_ryujinx.ps1 -Ryubing <checkout>`, then `dotnet build third_party/fefw-recomp/tools/shaders/harness/SpirvHarness.csproj -c Release` |
+| Ryujinx's shader translator | `pwsh -File third_party/fefw-recomp/tools/shaders/scripts/setup_ryujinx.ps1`, then `dotnet build third_party/fefw-recomp/tools/shaders/harness/SpirvHarness.csproj -c Release` |
+
+The translator script needs no arguments. It stages the three projects it uses (Ryujinx.Common, Spv.Generator,
+Ryujinx.Graphics.Shader) from a local checkout if you have one at `third_party/fefw-recomp/refs/ryubing`, and
+otherwise downloads the Ryubing fork's own archive — `git.ryujinx.app/projects/Ryubing`, commit `a82350bb77`,
+MIT, 12.2 MB, no account. That archive is the only external source besides the recompiler and CMake's deps; pass
+`-Ryubing <checkout>` to use a different one.
+
+Verified from an empty tree: the script downloads 12.2 MB in about 5 s and the harness then builds in about 15 s
+with 0 errors.
 
 ## 3. Your game files
 
