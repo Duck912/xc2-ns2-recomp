@@ -64,11 +64,29 @@ foreach ($f in $need) { if (-not (Test-Path $f)) { throw "missing $f (build it f
 $obj = Join-Path $bd 'xc2_boot.obj'
 $objOpus = Join-Path $bd 'x2_opus301.obj'
 $objAudio = Join-Path $bd 'x2_audio301.obj'
-$deps = Join-Path $repo 'third_party\deps\src'
-$volk = Join-Path $deps 'volk\volk-vulkan-sdk-1.4.363.0'
-$vkinc = Join-Path $deps 'vkheaders\Vulkan-Headers-vulkan-sdk-1.4.363.0\include'
-$vma = Join-Path $deps 'vma\VulkanMemoryAllocator-3.4.0\include'
-$sdlinc = Join-Path $deps 'sdl3\SDL3-3.4.18\include'
+# The headers of the pinned third-party libraries. CMake's FetchContent extracts them into the build directory
+# (build\runtime-gfx\_deps\<name>-src); an older layout kept them under third_party\deps\src. Look in both, and say
+# what was expected when neither is there: a clean clone that skipped the runtime configure used to fail here with a
+# bare "cannot open include file".
+function Find-Dep([string]$what, [string[]]$candidates) {
+    foreach ($c in $candidates) { if (Test-Path $c) { return $c } }
+    $msg = "missing the $what headers. Looked in:" + [Environment]::NewLine
+    foreach ($c in $candidates) { $msg += "  " + $c + [Environment]::NewLine }
+    throw ($msg + "Run the runtime configure first (docs/BUILD.md 4.1).")
+}
+$depsDir = Join-Path $gfxDir '_deps'
+$volk = Find-Dep 'volk' @(
+    (Join-Path $depsDir 'volk-src'),
+    (Join-Path $repo 'third_party\deps\src\volk\volk-vulkan-sdk-1.4.363.0'))
+$vkinc = Find-Dep 'Vulkan-Headers' @(
+    (Join-Path $depsDir 'vulkan_headers-src\include'),
+    (Join-Path $repo 'third_party\deps\src\vkheaders\Vulkan-Headers-vulkan-sdk-1.4.363.0\include'))
+$vma = Find-Dep 'VulkanMemoryAllocator' @(
+    (Join-Path $depsDir 'vma-src\include'),
+    (Join-Path $repo 'third_party\deps\src\vma\VulkanMemoryAllocator-3.4.0\include'))
+$sdlinc = Find-Dep 'SDL3' @(
+    (Join-Path $depsDir 'sdl3-src\include'),
+    (Join-Path $repo 'third_party\deps\src\sdl3\SDL3-3.4.18\include'))
 $defArgs = @()
 if ($Defines) { foreach ($d in $Defines.Split(' ')) { if ($d) { $defArgs += "/D$d" } } }
 & clang-cl.exe /nologo /std:c++20 /O2 /MT /c (Join-Path $root 'src\xc2_boot.cpp') "/Fo$obj" @defArgs `

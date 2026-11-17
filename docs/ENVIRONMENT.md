@@ -46,8 +46,8 @@ The project's own tools do **not** need them: `nso_seg.py` carries a pure-Python
 | what | command | measured |
 |---|---|---|
 | the runtime | `cmake --build third_party/fefw-recomp/build/runtime-gfx --target nxrt nxrt_gfx` | a few seconds for one file |
-| lift + compile | `xc2\scripts\build.ps1 -Exefs xc2\game\xc2ns301 -Run:$false -Modules main,sdk,subsdk0,subsdk1,subsdk2,subsdk3,rtld` | lift 13 s + compile 4 s for `main`; longer for the rest |
-| link | `xc2\scripts\build-boot.ps1 -Exefs xc2\game\xc2ns301 -OutDir xc2\build\boot-301 -LibDir xc2\build\lib -MainLib xc2\build\lib\main.lib -Defines XC2_MODULES_7` | ~50 s, 144.5 MB |
+| lift + compile | `xc2\scripts\build.ps1 -Exefs xc2\game\xc2ns301 -Run:$false -Modules 'main,sdk,subsdk0,subsdk1,subsdk2,subsdk3,rtld' -LiftDir xc2\build\lift-301 -ObjDir xc2\build\obj-301 -LibDir xc2\build\lib-301` | lift 13 s + compile 4 s for `main`; longer for the rest |
+| link | `xc2\scripts\build-boot.ps1 -Exefs xc2\game\xc2ns301 -OutDir xc2\build\boot-301 -LibDir xc2\build\lib-301 -MainLib xc2\build\lib-301\main.lib -Defines XC2_MODULES_7` | ~50 s, 144.5 MB |
 | play | `tools\run\play-301.cmd -60` | cold start 2–3 s to the title applet |
 
 The stub link at the end of `build.ps1` always fails; that is by design and does not affect `build-boot.ps1`.
@@ -81,7 +81,31 @@ The stub link at the end of `build.ps1` always fails; that is by design and does
 | GPU pass timings | `[prof] gpu_passes = 1` |
 | launch logs and session census | `work\logs\`, `tools\analysis\session_census.py` |
 
-## 6. Pitfalls
+## 6. Diagnostics
+
+Every switch lives in `nxrt.ini` next to the executable (or as an `NXRT_*` environment variable, which wins).
+
+| switch | what it prints |
+|---|---|
+| `[gfx] validation = 1` | the Vulkan validation layer's complaints, with VUIDs. **Start here for anything that looks wrong on screen**: it is the only thing that says which call the driver rejected |
+| `[gfx] log_fps = 1` | one line per second: mean/1% low/worst frame time, plus the GPU time of the present pass. A present pass of 0 ms with a black screen means the GPU is not doing the work |
+| `[nvn] replay_stats = 60` | the replay phase breakdown every 60 frames (draw setup, call, out, per-phase µs). `tools/analysis/replay_stats.py` reads these lines |
+| `[prof] gpu_passes = 1` | GPU time per render pass and per non-pass operation (feedback copies, gaps, memory writes) |
+| `[nvn] fb_debug = 1` | why a sampler binding is or is not treated as a self-sampled attachment |
+| `[nvn] gpl = 0` | turns off `VK_EXT_graphics_pipeline_library`. **The first thing to try if the device is lost** (`vkQueueSubmit2` returning -4, a TDR in the event log) |
+| `[nvn] async_submit = 0` | serialises submissions; narrows down a hang that only happens with several frames in flight |
+| `[debug] dump_ptrs` / `dump_at` | dumps memory at a crash |
+
+The log names the device's capabilities once, near the top:
+
+```
+gfx: features: geometry 1 float64 1 ... hostMemImport 1 pushDesc 1 uboRobustness 0
+gfx: swapchain 2560x1440, 4 images, format 64, color space 1000104008 (hdr10), present mode fifo
+```
+
+If a line there says a feature is 0 that you expect to be 1, that is the first thing to look at.
+
+## 7. Pitfalls
 
 1. `xc2\build\*.txt` must stay **pure ASCII** (the lifter reads those tables as ANSI).
 2. After editing `sites-<module>.txt`, delete `xc2\build\lift\<module>\.base`, or the lift is not redone

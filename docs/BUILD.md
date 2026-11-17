@@ -52,16 +52,28 @@ xc2/game/xc2ns301/       main, sdk, subsdk0, subsdk1, subsdk2, subsdk3, rtld, ma
 
 ### 4.1 the runtime (once, and after changing `third_party/fefw-recomp/runtime/**`)
 
+The graphics shell links an ASTC-to-BC7 transcoder, so its two source dependencies have to be present first. This
+fetches astc-encoder 5.7.0, bc7enc_rdo and the ISPC compiler into `tools/textures/third_party` (git-ignored):
+
+```powershell
+pwsh -File third_party\fefw-recomp\tools\textures\scripts\fetch_third_party.ps1
+```
+
+Then the two builds. Pass the compilers explicitly: a `clang.exe` on `PATH` otherwise wins over `clang-cl` and the
+build dies on MSVC-only flags.
+
 ```powershell
 # the graphics shell
 cmake -S third_party/fefw-recomp/runtime -B third_party/fefw-recomp/build/runtime-gfx `
-      -G Ninja -DCMAKE_BUILD_TYPE=Release -DNXRT_BUILD_GFX=ON -DNXRT_BUILD_GAMES=OFF -DNXRT_BUILD_TESTS=OFF
+      -G Ninja -DCMAKE_BUILD_TYPE=Release -DNXRT_BUILD_GFX=ON -DNXRT_BUILD_GAMES=OFF -DNXRT_BUILD_TESTS=OFF `
+      -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl
 cmake --build third_party/fefw-recomp/build/runtime-gfx --target nxrt nxrt_gfx
 
 # the game module the boot executable links against (nxrt_game_xc2ns2_core / _data)
 cmake -S third_party/fefw-recomp/runtime -B third_party/fefw-recomp/build/xc2-game-probe `
       -G Ninja -DCMAKE_BUILD_TYPE=Release -DNXRT_BUILD_GFX=ON -DNXRT_BUILD_GAMES=ON `
-      -DNXRT_TEST_GAME=xc2ns2 -DNXRT_BUILD_TESTS=OFF
+      -DNXRT_TEST_GAME=xc2ns2 -DNXRT_BUILD_TESTS=OFF `
+      -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl
 cmake --build third_party/fefw-recomp/build/xc2-game-probe `
       --target nxrt_game_xc2ns2_core nxrt_game_xc2ns2_data
 ```
@@ -76,9 +88,14 @@ The lifter also needs the hook sites: `xc2/sites/sites-<module>.txt` ship with t
 automatically. Put your own additions in `xc2/build/sites-<module>.txt`, which takes precedence — see
 [xc2/sites/README.md](../xc2/sites/README.md).
 
+`-LiftDir`, `-ObjDir` and `-LibDir` choose where the lift, the objects and the per-module libraries go. The
+defaults (`build\lift`, `build\obj`, `build\lib`) are the four-module development route; the retail command above
+keeps its own `-301` directories so the two never overwrite each other.
+
 ```powershell
 .\xc2\scripts\build.ps1 -Exefs xc2\game\xc2ns301 -Run:$false `
-    -Modules 'main,sdk,subsdk0,subsdk1,subsdk2,subsdk3,rtld'    # quoted or bare, both parse to the seven names
+    -Modules 'main,sdk,subsdk0,subsdk1,subsdk2,subsdk3,rtld' `
+    -LiftDir xc2\build\lift-301 -ObjDir xc2\build\obj-301 -LibDir xc2\build\lib-301
 ```
 
 The stub link at the end of `build.ps1` always fails — that is expected, `build-boot.ps1` does the real link.
@@ -87,7 +104,7 @@ The stub link at the end of `build.ps1` always fails — that is expected, `buil
 
 ```powershell
 .\xc2\scripts\build-boot.ps1 -Exefs xc2\game\xc2ns301 -OutDir xc2\build\boot-301 `
-    -LibDir xc2\build\lib -MainLib xc2\build\lib\main.lib -Defines XC2_MODULES_7
+    -LibDir xc2\build\lib-301 -MainLib xc2\build\lib-301\main.lib -Defines XC2_MODULES_7
 ```
 
 Produces `xc2\build\boot-301\xc2_boot.exe`, which is what `tools\run\play-301.cmd` runs. Without the flags the

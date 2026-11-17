@@ -16,12 +16,26 @@ param(
     [switch]$SkipLift,
     [switch]$Clean,
     [switch]$Run = $true,
-    [int]$Jobs = 10
+    [int]$Jobs = 10,
+    # Where the lift, the objects and the per-module libraries go. The defaults are the four-module development
+    # route; the retail 3.0.1 route keeps its own (build\lift-301, build\lib-301) so the two never overwrite
+    # each other. Relative paths resolve against the directory you run the script from.
+    [string]$LiftDir = '',
+    [string]$ObjDir = '',
+    [string]$LibDir = ''
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $nx = (Resolve-Path (Join-Path $root '..\third_party\nxrecomp\recomp')).Path
 $build = Join-Path $root 'build'
+function Resolve-OutDir([string]$value, [string]$fallback) {
+    $p = if ($value) { $value } else { $fallback }
+    if (-not [System.IO.Path]::IsPathRooted($p)) { $p = Join-Path (Get-Location).Path $p }
+    return $p
+}
+$liftDir = Resolve-OutDir $LiftDir (Join-Path $build 'lift')
+$objDir  = Resolve-OutDir $ObjDir  (Join-Path $build 'obj')
+$libDir  = Resolve-OutDir $LibDir  (Join-Path $build 'lib')
 
 # Optional: a script that puts clang-cl/llvm-lib/python/dotnet on PATH. It is loaded first, because it may be what
 # puts python there; a machine that already has the tools needs nothing here.
@@ -53,7 +67,7 @@ if (-not $SkipLift) {
             if (-not (Test-Path $src)) { throw "missing module: $src" }
             if (-not $bases.ContainsKey($m)) { throw "no guest base for module $m (add it to `$bases)" }
             $base = $bases[$m]
-            $out = Join-Path $build "lift\$m"
+            $out = Join-Path $liftDir $m
             $stampFile = Join-Path $out '.base'
             $fresh = (Test-Path $out) -and (Get-ChildItem $out -Filter 'module_*.cpp' -ErrorAction SilentlyContinue) -and
                      ((Get-Item (Get-ChildItem $out -Filter 'module_*.cpp' | Select-Object -First 1).FullName).LastWriteTime -gt (Get-Item $src).LastWriteTime) -and
@@ -91,8 +105,8 @@ if (-not $SkipLift) {
 $inc = Join-Path $nx 'include'
 $ccJobs = @()
 foreach ($m in $mods) {
-    $dir = Join-Path $build "lift\$m"
-    $obj = Join-Path $build "obj\$m"
+    $dir = Join-Path $liftDir $m
+    $obj = Join-Path $objDir $m
     New-Item -ItemType Directory -Force -Path $obj | Out-Null
     $sources = Get-ChildItem $dir -Filter '*.cpp'
     foreach ($s in $sources) {
@@ -117,11 +131,11 @@ if ($ccJobs.Count) {
 # ---- 3. one static library per module ------------------------------------------------------------------
 $libs = @()
 foreach ($m in $mods) {
-    $obj = Join-Path $build "obj\$m"
-    $lib = Join-Path $build "lib\$m.lib"
+    $obj = Join-Path $objDir $m
+    $lib = Join-Path $libDir "$m.lib"
     New-Item -ItemType Directory -Force -Path (Split-Path $lib) | Out-Null
     $objs = Get-ChildItem $obj -Filter '*.obj' | ForEach-Object { '"' + $_.FullName + '"' }
-    $rsp = Join-Path $build "obj\$m.rsp"
+    $rsp = Join-Path $objDir "$m.rsp"
     Set-Content -LiteralPath $rsp -Value $objs -Encoding ascii
     if ((Test-Path $lib) -and ((Get-Item $lib).LastWriteTime -gt (Get-ChildItem $obj -Filter '*.obj' | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime)) {
         Write-Host "lib $m : up to date"

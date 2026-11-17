@@ -31,25 +31,40 @@ The romfs stays wherever you keep it; the launcher reads it from `NXRT_FS_ROMFS`
 
 ## 3. Build the runtime (once)
 
+Two source dependencies first (the graphics shell links an ASTC transcoder):
+
+```powershell
+pwsh -File third_party\fefw-recomp\tools\textures\scripts\fetch_third_party.ps1
+```
+
+Then the two builds. Pass the compilers explicitly, or a `clang.exe` on `PATH` wins over `clang-cl` and the build
+dies on MSVC-only flags.
+
 ```powershell
 cmake -S third_party/fefw-recomp/runtime -B third_party/fefw-recomp/build/runtime-gfx `
-      -G Ninja -DCMAKE_BUILD_TYPE=Release -DNXRT_BUILD_GFX=ON -DNXRT_BUILD_GAMES=OFF -DNXRT_BUILD_TESTS=OFF
+      -G Ninja -DCMAKE_BUILD_TYPE=Release -DNXRT_BUILD_GFX=ON -DNXRT_BUILD_GAMES=OFF -DNXRT_BUILD_TESTS=OFF `
+      -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl
 cmake --build third_party/fefw-recomp/build/runtime-gfx --target nxrt nxrt_gfx
 
 cmake -S third_party/fefw-recomp/runtime -B third_party/fefw-recomp/build/xc2-game-probe `
       -G Ninja -DCMAKE_BUILD_TYPE=Release -DNXRT_BUILD_GFX=ON -DNXRT_BUILD_GAMES=ON `
-      -DNXRT_TEST_GAME=xc2ns2 -DNXRT_BUILD_TESTS=OFF
+      -DNXRT_TEST_GAME=xc2ns2 -DNXRT_BUILD_TESTS=OFF `
+      -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl
 cmake --build third_party/fefw-recomp/build/xc2-game-probe `
       --target nxrt_game_xc2ns2_core nxrt_game_xc2ns2_data
 ```
+
+`-DNXRT_BUILD_GAMES=ON` is required for the second configure: without it CMake builds only the built-in test game
+and `build-boot.ps1` finds no `nxrt_game_xc2ns2_core.lib`.
 
 ## 4. Lift, compile, link
 
 ```powershell
 .\xc2\scripts\build.ps1 -Exefs xc2\game\xc2ns301 -Run:$false `
-    -Modules 'main,sdk,subsdk0,subsdk1,subsdk2,subsdk3,rtld'
+    -Modules 'main,sdk,subsdk0,subsdk1,subsdk2,subsdk3,rtld' `
+    -LiftDir xc2\build\lift-301 -ObjDir xc2\build\obj-301 -LibDir xc2\build\lib-301
 .\xc2\scripts\build-boot.ps1 -Exefs xc2\game\xc2ns301 -OutDir xc2\build\boot-301 `
-    -LibDir xc2\build\lib -MainLib xc2\build\lib\main.lib -Defines XC2_MODULES_7
+    -LibDir xc2\build\lib-301 -MainLib xc2\build\lib-301\main.lib -Defines XC2_MODULES_7
 ```
 
 The `link failed` at the end of `build.ps1` is expected: that is the stub link, `build-boot.ps1` does the real one.
