@@ -1,0 +1,24 @@
+; xc2_rt.dll exports: the entry the exe calls, the module-table handover, and every function recomp's ctx.h marks
+; as runtime-provided (the lifted code compiled on the player's PC imports these). Modelled on the upstream
+; fefw_rt.def. The fps_ci/cf/fs helpers those builds exported are gone: the retail 3.0.1 main paces itself by real
+; time, so nothing instruments it any more (handover section 132).
+LIBRARY xc2_rt
+EXPORTS
+    xc2_rt_main
+    xc2_rt_set_modules
+    call_indirect
+    host_import
+    guest_trap
+    guest_unimpl
+    guest_svc
+    guest_mrs
+    guest_msr
+    nx_site_inline
+    nx_site_midhook
+    nx_hook_entry
+    stx_diag
+    nx_catch_call
+    ; the flat function table the lifted code reads at indirect call sites (recomp cxx.h, NX_INLINE_INDIRECT)
+    nx_fn_flat DATA
+    nx_fn_flat_n DATA
+    nx_fn_flat_host DATA
