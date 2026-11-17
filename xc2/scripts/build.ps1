@@ -78,10 +78,23 @@ if (-not $SkipLift) {
             # local experiment can add hooks without touching the repository; otherwise the shipped xc2\sites\ copy is
             # used. Without --sites the lifter emits no nx_hook_entry, and every hook_add_entry in xc2_boot.cpp silently
             # does nothing.
+            #
+            # An override OLDER than the shipped file is a leftover, not an experiment. It used to win anyway, so the
+            # patches it carries were either missing without a word or aimed at bytes that had since moved. Measured
+            # 2026-11-17: a sites-main.txt from two days earlier stopped a from-zero build in 0.8 s ("the code has
+            # a94257f6, the patch expects 7100731f"), and an sdk and an rtld override were quietly lifting with half
+            # their patches. Say so and use the shipped copy; touch the override to mean it.
             $sitesArg = @()
-            foreach ($cand in @((Join-Path $build "sites-$m.txt"), (Join-Path $root "sites\sites-$m.txt"))) {
-                if (Test-Path $cand) { $sitesArg = @('--sites', $cand); break }
+            $override = Join-Path $build "sites-$m.txt"
+            $shipped = Join-Path $root "sites\sites-$m.txt"
+            $useSites = $null
+            if (Test-Path $override) {
+                if ((Test-Path $shipped) -and ((Get-Item -LiteralPath $override).LastWriteTime -lt (Get-Item -LiteralPath $shipped).LastWriteTime)) {
+                    Write-Warning ("sites-$m.txt: build\sites-$m.txt is older than xc2\sites\sites-$m.txt ({0} < {1}) - using the shipped copy. Touch build\sites-$m.txt to override anyway." -f (Get-Item -LiteralPath $override).LastWriteTime.ToString('yyyy-MM-dd HH:mm'), (Get-Item -LiteralPath $shipped).LastWriteTime.ToString('yyyy-MM-dd HH:mm'))
+                } else { $useSites = $override }
             }
+            if (-not $useSites -and (Test-Path $shipped)) { $useSites = $shipped }
+            if ($useSites) { $sitesArg = @('--sites', $useSites) }
             # Frame counters converted to the game's time (HANDOVER 59, scripts\fps_counters.txt): main only. The list
             # names stores of build\fps_sites.txt, which the census scanner writes; without it the lift is unchanged.
             if ($m -eq 'main') {
