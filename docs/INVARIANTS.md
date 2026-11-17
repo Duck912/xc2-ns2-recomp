@@ -18,6 +18,9 @@ corpus (21,171 programs) and has silently shadowed hand-edited `.spv` files befo
 precedence over loose files). When a shader patch is edited, run `xc2\scripts\patch-shaders.ps1 -Check` and
 expect exit code 0.
 
+The three rules below are checked, not just written: `python tools/check_invariants.py` runs locally, a git
+hook refuses a commit that breaks them (`pwsh -File tools/install-git-hooks.ps1`), and CI runs the same checks.
+
 ## 3. No game data, lifted code, shader cache or keys are committed or released
 
 The repository contains tooling, runtime code and documentation only. The game's files, the C++ the lift

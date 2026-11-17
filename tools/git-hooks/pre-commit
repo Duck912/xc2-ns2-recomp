@@ -18,13 +18,18 @@ if [ -n "$private_paths" ]; then
     exit 1
 fi
 
+# Find a python that actually runs. The Windows Store stub answers "command -v" but exits non-zero,
+# so each candidate is probed rather than trusted.
 py=""
-for cand in python3 python py; do
-    if command -v "$cand" >/dev/null 2>&1; then py="$cand"; break; fi
+for cand in "$XC2_PYTHON" python3 python py; do
+    if [ -z "$cand" ]; then continue; fi
+    if command -v "$cand" >/dev/null 2>&1 && "$cand" -c "import sys" >/dev/null 2>&1; then
+        py="$cand"; break
+    fi
 done
-if [ -z "$py" ] && [ -n "$XC2_PYTHON" ]; then py="$XC2_PYTHON"; fi
 if [ -z "$py" ]; then
-    echo "pre-commit: no python found; skipping the invariant check (set XC2_PYTHON to enable it)" >&2
+    echo "pre-commit: no working python found; skipping the invariant check" >&2
+    echo "            (set XC2_PYTHON to the interpreter the build uses)" >&2
     exit 0
 fi
 

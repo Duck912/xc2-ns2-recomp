@@ -43,6 +43,18 @@ jobs:
           set -eu
           python3 tools/check_links.py
 
+      - name: No private path is tracked
+        run: |
+          set -eu
+          # docs/internal, work/, xc2/game and xc2/build hold the working notes, the build scratch and the
+          # player's own dump. They are git-ignored and a local hook refuses them; this is the third layer,
+          # for the case where something is committed with --no-verify or from another machine.
+          bad=$(git ls-files | grep -E '^(docs/internal/|work/|xc2/game/|xc2/build/)' || true)
+          if [ -n "$bad" ]; then
+            echo "these paths must never be published:"; echo "$bad"; exit 1
+          fi
+          python3 tools/check_invariants.py --hook
+
       - name: No loose ExeFS under xc2/game
         run: |
           set -eu
