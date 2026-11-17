@@ -15,7 +15,8 @@ param(
     [string]$DllBuildDir = '',
     [string]$LiftDir = '',
     [switch]$SkipDll,
-    [switch]$SkipExe
+    [switch]$SkipExe,
+    [switch]$SkipHarness
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot            # xc2
@@ -59,6 +60,31 @@ if (-not $SkipDll) {
     if ($LASTEXITCODE -ne 0) { throw 'xc2_rt.dll did not build' }
     Write-Host ("xc2_rt.dll: {0:N1} MB in {1:N0} s" -f ((Get-Item $dll).Length / 1MB), $t.Elapsed.TotalSeconds)
 } elseif (-not (Test-Path $dll)) { throw "no $dll and -SkipDll was given" }
+
+# ---- 0. the shader translator, published self-contained -----------------------------------------------
+# Framework-dependent would need the .NET runtime on the player's machine; this carries its own. Nothing in it is
+# derived from the game: it is Ryujinx's translator (MIT) plus our own harness code, and it reads the shader
+# bytecode from the dump at run time.
+if (-not $SkipHarness) {
+    $proj = Join-Path $rt 'tools\shaders\harness\SpirvHarness.csproj'
+    $pub = Join-Path $rt 'tools\shaders\build\publish\win-x64'
+    # Prefer the SDK the environment script points at: a bare 'dotnet' on PATH is often a runtime-only install and
+    # then 'dotnet publish' answers "No .NET SDKs were found".
+    $dn = $null
+    foreach ($cand in @((Join-Path $env:DOTNET_ROOT 'dotnet.exe'), 'dotnet')) {
+        if (-not $cand) { continue }
+        $exe = if ($cand -eq 'dotnet') { (Get-Command dotnet -ErrorAction SilentlyContinue).Source } else { $cand }
+        if ($exe -and (Test-Path $exe) -and (& $exe --list-sdks 2>$null)) { $dn = $exe; break }
+    }
+    if (-not $dn) { throw 'no .NET SDK found: set $env:DOTNET_ROOT or put the SDK on PATH' }
+    $t = [Diagnostics.Stopwatch]::StartNew()
+    & $dn publish $proj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -o $pub 2>&1 |
+        ForEach-Object { if ($_ -match 'error|-> ') { Write-Host "  $_" } }
+    if ($LASTEXITCODE -ne 0) { throw 'the shader harness did not publish' }
+    $h = Join-Path $pub 'spirv_harness.exe'
+    $mb = ((Get-ChildItem $pub -Recurse -File | Measure-Object Length -Sum).Sum / 1MB)
+    Write-Host ("spirv_harness: {0:N0} MB self-contained in {1:N0} s -> {2}" -f $mb, $t.Elapsed.TotalSeconds, $pub)
+}
 
 if ($SkipExe) { return }
 
