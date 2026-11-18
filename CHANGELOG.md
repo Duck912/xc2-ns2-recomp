@@ -3,6 +3,31 @@
 Dated milestones. The §-numbered evidence sections named on the right are part of the project's internal
 notes, which are not published with this repository.
 
+## 2026-11-18 · 0.1.2 (small update)
+
+- **The 4K openings play.** The Golden Country CG (`stream/movie/mv11010100.webm`: AV1 3840x2160 30 fps + Vorbis 48 kHz)
+  used to freeze at 1.3 s with the sound continuing; it now runs at 30 fps with lip sync. Four causes: the movie library
+  submits the whole film from the player's own thread and a synchronous 4K AV1 decode per packet left it no time to hand
+  frames over, so the player dropped every frame as late (`VideoFrame::GetBuffer` was called once); the fence it arms
+  after `AcquireOutputBuffer` has to be complete by the time the call returns, or it waits out its own timeout for
+  seconds; the image pool is read before the first picture is placed in it, and an all-zero NV12 image is bright green;
+  and the audio output runs ~100 ms behind, so the picture has to wait as well.
+- **The film's sound is decoded on the host** (`movie::AudioDecoder` on libvorbis). Before this the library waited for
+  audio frames its MediaCodec path never produced, which is what stopped the picture the moment the audio track opened.
+- **Host audio for the retail build**: SDK 21's `nn::audio::OutputStream` writes straight into the runtime's XAudio2
+  sink, and hwopus is answered by the SDK's own software Opus decoder.
+- **Defaults that make the film work out of the box**: `[media] video_decoder = library`, `movie_timer_poke = 1` (the
+  SDK's periodic timer never comes due inside the player's MultiWait, so the host marks it), `movie_pts_shift_ms = 100`
+  (video delay for the audio output latency; the launcher's audio-latency setting can override it).
+- **Credits**: the four launch switches and the host-side movie/audio replacement follow **@capibawa**'s
+  [nxnative, branch `xc2-ns2-profile`](https://github.com/capibawa/nxnative/tree/xc2-ns2-profile) (`dm/host/hle_movie.c`,
+  `dm/host/hle_audio.c`); the runtime is built on **@Goldoire**'s
+  [fefw-recomp](https://github.com/Goldoire/fefw-recomp), and the recompiler is **@drakolordx7**'s
+  [nxrecomp](https://github.com/drakolordx7/nxrecomp). Video decodes with [dav1d](https://code.videolan.org/videolan/dav1d),
+  sound with [libvorbis](https://github.com/xiph/vorbis).
+- **Known**: while the game is still loading, the film waits for it (1-20 s of stalls and an occasional audio drop at the
+  start); the first frame can flash green for a moment on some runs.
+
 ## 2026-11-18
 
 - **A release can be installed from your own dump**: point the launcher at it — a `.nup` package or a folder of

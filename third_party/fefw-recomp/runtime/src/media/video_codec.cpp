@@ -1226,7 +1226,7 @@ bool install_video_codec_hle() {
     std::call_once(once, [] {
         if (game::info().platform != game::Platform::Switch2) return;
         const bool mkw = std::strcmp(game::info().id, "mkw") == 0;
-        const std::string mode = config_get_str("media", "video_decoder", mkw ? "off" : "host");
+        const std::string mode = config_get_str("media", "video_decoder", mkw ? "off" : "library");
         if (mode == "off") {
             NXLOG_I("vcodec", "[media] video_decoder = off: nn::codec video decoders are not on the host (movies are left out)");
             return;
@@ -1236,7 +1236,9 @@ bool install_video_codec_hle() {
         // Diagnostic: the player drops a frame whose timestamp is more than a frame or so behind its own movie clock, and a software 4K
         // AV1 decode plus the pool->VideoFrame copies put every frame ~85 ms behind, so it dropped all but the first. Reporting the
         // timestamps this much later makes them look on time (at the cost of that much A/V offset).
-        g_pts_shift_ns = config_get_int("media", "movie_pts_shift_ms", 0) * 1000000;
+        // Default 100 ms: the XAudio2 output queue plus the device buffer, the amount the video has to wait to stay in lip sync.
+        // Measured 110-120 ms on the author's machine (1440p window); 100 is the safe default, the launcher can override it.
+        g_pts_shift_ns = config_get_int("media", "movie_pts_shift_ms", 100) * 1000000;
         g_pts_wallclock = config_get_bool("media", "movie_pts_wallclock", false);
         install_player_trace();   // [media] player_trace: the player's message queue and timer, logged as they are called
         for (const Import& im : kImports) {

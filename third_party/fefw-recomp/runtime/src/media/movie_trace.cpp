@@ -282,7 +282,7 @@ void install_player_trace() {
     static std::once_flag once;
     std::call_once(once, [] {
         g_on = config_get_bool("media", "player_trace", false);
-        g_poke = config_get_bool("media", "movie_timer_poke", false);
+        g_poke = config_get_bool("media", "movie_timer_poke", true);   // on by default: without it the player's per-frame timer never fires
         if (!g_on) return;
         std::thread(stall_watch).detach();
         for (const Entry& e : kEntries) {
