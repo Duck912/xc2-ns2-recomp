@@ -171,6 +171,7 @@ struct Decoder {
     int64_t clk_ts0 = 0, clk_last = 0, last_time = 0;
     double clk_t0 = 0, unit = 0;
     uint64_t skipped = 0;
+    std::atomic<int64_t> last_call{0}, last_stall{0};   // ticks of the last guest call, of the last "it stopped moving" report
     bool warned_size = false, warned_format = false, warned_mime = false, warned_error = false;
     services::ServiceEvent in_ready, out_ready;   // attached to in_ev / out_ev: any thread can signal them
     alignas(16) uint8_t in_ev[0x100]{}, out_ev[0x100]{}, fmt_ev[0x100]{};
@@ -181,6 +182,10 @@ Decoder* dec_of(uint64_t self) {
     if (!self || rd64(self + 8) != kMarker) return nullptr;
     return reinterpret_cast<Decoder*>(rd64(self));
 }
+
+// Live decoders, so the present tick can reach them without a guest call (movie_tick).
+std::mutex g_reg_mu;
+std::vector<Decoder*> g_reg;
 
 // I420 to NV12, rows packed at the picture's width, chroma interleaved.
 void to_nv12(uint8_t* o, uint32_t w, uint32_t h, const uint8_t* py, ptrdiff_t sy, const uint8_t* pu, const uint8_t* pv, ptrdiff_t suv) {
@@ -463,6 +468,10 @@ void vd_initialize(::Ctx* c) {   // (self, void* mem, size_t size, MediaMimeType
     const int mime = static_cast<int>(A(3)), fmt = static_cast<int>(A(4)), mode = static_cast<int>(A(5));
     if (!self) { RET(0); return; }
     auto* d = new Decoder();
+    {
+        std::lock_guard<std::mutex> lk(g_reg_mu);
+        g_reg.push_back(d);
+    }
     d->mime = mime;
     wr64(self, reinterpret_cast<uint64_t>(d));
     wr64(self + 8, kMarker);
@@ -550,6 +559,7 @@ void vd_stop(::Ctx* c) { RET(0); }
 
 void vd_decode_async(::Ctx* c) {   // (self, const nn::movie::Buffer*)
     Decoder* d = dec_of(A(0));
+    if (d) d->last_call = static_cast<int64_t>(GetTickCount64());
     const uint64_t buf = A(1);
     if (!d || !buf) { RET(0); return; }
     const uint64_t data = rd64(buf + kBufData), n = rd64(buf + kBufFilled);
@@ -579,6 +589,7 @@ void vd_decode_async(::Ctx* c) {   // (self, const nn::movie::Buffer*)
 }
 
 uint32_t acquire(Decoder* d, uint64_t* out, int* idx) {
+    d->last_call = static_cast<int64_t>(GetTickCount64());
     std::lock_guard<std::mutex> lk(d->mu);
     if (d->ready.empty()) {
         *out = 0;
@@ -623,6 +634,7 @@ void vd_acquire_index(::Ctx* c) {   // (self, VideoFrame** out, int* index)
 
 void vd_release(::Ctx* c) {   // (self, VideoFrame*)
     Decoder* d = dec_of(A(0));
+    if (d) d->last_call = static_cast<int64_t>(GetTickCount64());
     const uint64_t f = A(1);
     if (!d) { RET(0); return; }
     {
@@ -736,7 +748,38 @@ bool install_movie_decoder_hle() {
     return g_enabled;
 }
 
+
+// The present tick (nvn_present.cpp): hand decoded pictures over without waiting for the player to call in, and say so when a movie
+// stops moving. A player that waits on the output event, then finds nothing ready, waits for a signal that only a guest call would
+// have produced - with the game's frame loop driving the decoder instead, every present either delivers or reports.
+void movie_tick() {
+    if (!g_enabled.load()) return;
+    std::vector<Decoder*> live;
+    {
+        std::lock_guard<std::mutex> lk(g_reg_mu);
+        live = g_reg;
+    }
+    const int64_t now = static_cast<int64_t>(GetTickCount64());
+    for (Decoder* d : live) {
+        if (!d) continue;
+        std::lock_guard<std::mutex> lk(d->mu);
+        if (d->frames.empty()) continue;
+        deliver(*d);
+        const bool work = !d->queue.empty() || !d->decoded.empty();
+        if (work && d->last_call.load() && now - d->last_call.load() > 2000) {
+            if (now - d->last_stall.load() > 5000) {
+                d->last_stall = now;
+                NXLOG_W(kTag, "no decoder call for %lld ms: queued %zu, decoded %zu, ready %zu, free %zu, held %zu",
+                        static_cast<long long>(now - d->last_call.load()), d->queue.size(), d->decoded.size(), d->ready.size(), d->free_.size(),
+                        d->pending_free.size());
+            }
+        }
+    }
+}
+
 #else   // built without dav1d
+
+void movie_tick() {}
 
 bool install_movie_decoder_hle() {
     static bool logged = false;

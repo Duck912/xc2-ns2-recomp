@@ -59,9 +59,9 @@ if (-not $SkipDll) {
     # libvpx (BSD-3): the host VP9/VP8 decoders. Static from a vcpkg install, which CMake finds by itself only on a
     # fresh configure - a cached build keeps its first NXRT_LIBVPX_LIB-NOTFOUND answer, and the runtime then says
     # "built without libvpx" and leaves VP9 movies out (measured 2026-11-18).
-    foreach ($root in @($env:VCPKG_ROOT, 'E:\Tools\dev\vcpkg', 'C:\vcpkg')) {
-        if (-not $root) { continue }
-        $vpx = Join-Path $root 'installed\x64-windows-static\lib\vpx.lib'
+    foreach ($vcpkg in @($env:VCPKG_ROOT, 'E:\Tools\dev\vcpkg', 'C:\vcpkg')) {
+        if (-not $vcpkg) { continue }
+        $vpx = Join-Path $vcpkg 'installed\x64-windows-static\lib\vpx.lib'
         if (Test-Path $vpx) {
             $cfg += "-DNXRT_LIBVPX_ROOT=" + (Split-Path -Parent (Split-Path -Parent $vpx)).Replace('\', '/')
             break

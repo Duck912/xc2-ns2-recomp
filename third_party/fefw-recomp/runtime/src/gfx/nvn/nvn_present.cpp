@@ -12,6 +12,7 @@
 #include "nxrt/extras.h"
 #include "nxrt/game.h"
 #include "nxrt/lowlat.h"
+#include "nxrt/movie_vdec.h"
 #include "extras/output_pass.h"
 #include "extras/framegen.h"
 #include "nvn_framegen.h"
@@ -128,6 +129,9 @@ void present_on_render_thread(Window* w, int index, bool again) {
     if (!again) counters().presents.fetch_add(1, std::memory_order_relaxed);
     // the freeze watchdog counts presented frames (and the test runner its frames); a frame shown again while the game waits on the player counts too
     { NXFT("present.frame_tick"); diag_frame_tick(); }
+    // A movie's pictures go to the player here as well as in its own calls: a player that waits on the output event is then woken by
+    // the frame loop instead of depending on a signal only its previous call could have sent (the Switch 1 port's movie_tick).
+    { NXFT("present.movie_tick"); media::movie_tick(); }
     if (!rend || !pp) return;
     { NXFT("present.tex"); if (!tex_gpu(t)) return; }
     extras::pace_note_present();
