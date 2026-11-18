@@ -87,11 +87,21 @@ if (-not $SkipHarness) {
     Need $val 'spirv-val.exe (the Vulkan SDK installs it; the package ships it so players need none)'
     New-Item -ItemType Directory -Force (Join-Path $Out 'tools\spirv-val') | Out-Null
     Copy-Item $val (Join-Path $Out 'tools\spirv-val\spirv-val.exe') -Force
-    @'
-spirv-val.exe - part of SPIRV-Tools (https://github.com/KhronosGroup/SPIRV-Tools)
-Licence: Apache-2.0. Copyright (c) The Khronos Group Inc.
-It ships here only so that the shader harness can validate translated shaders on a machine without the Vulkan SDK.
-'@ | Set-Content -LiteralPath (Join-Path $Out 'tools\spirv-val\LICENSE.txt') -Encoding utf8
+    # Apache-2.0 section 4 wants a copy of the licence with the binary, not a pointer to it.
+    $lic = Join-Path $root 'licenses\Apache-2.0.txt'
+    Need $lic 'licenses\Apache-2.0.txt'
+    $head = @'
+spirv-val.exe - part of SPIRV-Tools, https://github.com/KhronosGroup/SPIRV-Tools
+Copyright (c) The Khronos Group Inc. Licensed under the Apache License, Version 2.0.
+This is an unmodified copy of the binary that ships with the Vulkan SDK (LunarG), redistributed so that the shader
+harness can validate translated shaders on a machine that has no Vulkan SDK installed.
+The full licence text follows.
+
+--------------------------------------------------------------------------------
+
+'@
+    Set-Content -LiteralPath (Join-Path $Out 'tools\spirv-val\LICENSE.txt') -Value $head -Encoding utf8
+    Add-Content -LiteralPath (Join-Path $Out 'tools\spirv-val\LICENSE.txt') -Value (Get-Content $lic -Raw) -Encoding utf8
     Say ("spirv-val     {0:N1} MB  (Apache-2.0, validates every translated shader)" -f ((Get-Item $val).Length / 1MB))
 }
 Need (Join-Path $Zig 'zig.exe') 'zig.exe'
