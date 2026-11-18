@@ -14,9 +14,11 @@
 // video queue's later messages; timer lines come from the player only (the game's own 5 ms timer is in main's data, not the heap).
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -45,6 +47,7 @@ constexpr const char* kHolderTimer = "_ZN2nn2os25InitializeMultiWaitHolderEPNS0_
 constexpr const char* kLink = "_ZN2nn2os19LinkMultiWaitHolderEPNS0_13MultiWaitTypeEPNS0_19MultiWaitHolderTypeE";
 
 bool g_on = false;
+bool g_poke = false;   // [media] movie_timer_poke: mark a started periodic timer due from the host (diagnostic)
 std::mutex g_seen_mu;
 std::unordered_map<uint64_t, uint32_t> g_send_seen, g_recv_seen, g_any_seen, g_holder_seen;
 
@@ -112,6 +115,20 @@ void start_timer(::Ctx* c) {   // (TimerEventType*, TimeSpan first, TimeSpan per
     const uint64_t r = call_original(c, fn);
     if (g_on && (from_main(lr) || heap_address(t)) && seen(g_holder_seen, t, 20))
         NXLOG_I(kTag, "timer start: 0x%llx, first %lld ns, period %lld ns, lr 0x%llx, -> 0x%llx", t, (long long)i1, (long long)i2, lr, r);
+    // Diagnostic: the MultiWait's timer holder reads the timer's own signalled byte (+0x12) and its deadline, and in this runtime the
+    // deadline comparison never turns it due (no ClearTimerEvent follows the player's StartPeriodicTimerEvent). Mark it due every
+    // period from the host instead, so the movie can say whether the rest of the player works. Bounded in time; stops when the
+    // timer's state byte (+0x13) clears.
+    if (g_poke && heap_address(t) && i2 > 0 && i2 <= 1000000000) {
+        NXLOG_I(kTag, "timer poke: 0x%llx every %lld ns", t, (long long)i2);
+        std::thread([t, period = i2] {
+            for (int i = 0; i < 40000; ++i) {   // at most ~160 s at 4 ms
+                std::this_thread::sleep_for(std::chrono::nanoseconds(period));
+                if (rd8(t + 19) == 0) return;
+                wr8(t + 18, 1);
+            }
+        }).detach();
+    }
     A(0) = r;
 }
 void stop_timer(::Ctx* c) {
@@ -184,6 +201,7 @@ void install_player_trace() {
     static std::once_flag once;
     std::call_once(once, [] {
         g_on = config_get_bool("media", "player_trace", false);
+        g_poke = config_get_bool("media", "movie_timer_poke", false);
         if (!g_on) return;
         for (const Entry& e : kEntries) {
             hle_register(e.name, e.fn);
