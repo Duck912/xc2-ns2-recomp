@@ -42,6 +42,7 @@ constexpr const char* kWaitTimer = "_ZN2nn2os14WaitTimerEventEPNS0_14TimerEventT
 constexpr const char* kClearTimer = "_ZN2nn2os15ClearTimerEventEPNS0_14TimerEventTypeE";
 constexpr const char* kWaitAny = "_ZN2nn2os7WaitAnyEPNS0_13MultiWaitTypeE";
 constexpr const char* kHolderTimer = "_ZN2nn2os25InitializeMultiWaitHolderEPNS0_19MultiWaitHolderTypeEPNS0_14TimerEventTypeE";
+constexpr const char* kLink = "_ZN2nn2os19LinkMultiWaitHolderEPNS0_13MultiWaitTypeEPNS0_19MultiWaitHolderTypeE";
 
 bool g_on = false;
 std::mutex g_seen_mu;
@@ -80,6 +81,7 @@ uint64_t fn_wait() { static const uint64_t f = module_find_symbol(kWaitTimer); r
 uint64_t fn_clear() { static const uint64_t f = module_find_symbol(kClearTimer); return f; }
 uint64_t fn_wait_any() { static const uint64_t f = module_find_symbol(kWaitAny); return f; }
 uint64_t fn_holder_timer() { static const uint64_t f = module_find_symbol(kHolderTimer); return f; }
+uint64_t fn_link() { static const uint64_t f = module_find_symbol(kLink); return f; }
 
 void send_msg(::Ctx* c) {   // (nn::os::MessageQueueType*, u64 value) -> nn::Result
     const uint64_t q = A(0), v = A(1), lr = c->x[30];
@@ -146,6 +148,15 @@ void holder_timer(::Ctx* c) {   // (MultiWaitHolderType*, TimerEventType*)
         NXLOG_I(kTag, "MultiWaitHolder(timer): holder 0x%llx <- timer 0x%llx, lr 0x%llx", h, t, lr);
     A(0) = r;
 }
+void link_holder(::Ctx* c) {   // (MultiWaitType*, MultiWaitHolderType*): which multi a holder lands in
+    const uint64_t m = A(0), h = A(1), lr = c->x[30];
+    const uint64_t fn = fn_link();
+    if (!fn) { A(0) = 0; return; }
+    const uint64_t r = call_original(c, fn);
+    if (g_on && seen(g_holder_seen, (m << 8) ^ (h & 0xff), 30))
+        NXLOG_I(kTag, "LinkMultiWaitHolder: multi 0x%llx <- holder 0x%llx, lr 0x%llx", m, h, lr);
+    A(0) = r;
+}
 void wait_any(::Ctx* c) {   // (MultiWaitType*) -> MultiWaitHolder*
     const uint64_t m = A(0), lr = c->x[30];
     const uint64_t fn = fn_wait_any();
@@ -163,6 +174,7 @@ struct Entry {
 const Entry kEntries[] = {
     {kSend, send_msg},        {kRecv, recv_msg},           {kStartTimer, start_timer},   {kStopTimer, stop_timer},
     {kWaitTimer, wait_timer}, {kClearTimer, clear_timer},  {kWaitAny, wait_any},         {kHolderTimer, holder_timer},
+    {kLink, link_holder},
 };
 
 }  // namespace
