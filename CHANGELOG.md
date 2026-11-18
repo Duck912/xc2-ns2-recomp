@@ -9,6 +9,8 @@ notes, which are not published with this repository.
   `exefs/ + romfs/` — and it is unpacked into `base/{exefs,romfs}`, `updates/` and `dlc/<title id>/romfs`; setup
   reads the game's own files from there and nothing is shipped with them. Packages are still built from the
   player's dump.
+- **The package carries `spirv-val.exe`** (SPIRV-Tools, Apache-2.0): the shader harness spawns it once per
+  translated block, and without it Set up failed on any machine that had no Vulkan SDK installed.
 - **Play starts the game from the install itself.** No more `tools\run\play-301.cmd` looked up above the exe:
   the launcher spawns `xc2_boot.exe` with the switches from `<install>\launch.env` (one list, written by the
   setup engine), and a package always uses its own Python.
