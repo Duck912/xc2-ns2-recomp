@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <atomic>
 #include <thread>
@@ -366,6 +367,24 @@ uint32_t wait_process_wide_key(uint64_t mutex, uint64_t key, uint32_t tag, int64
         return kTimedOut;
     }
     return me.wait_result;
+}
+
+namespace {
+std::mutex g_watch_mu;
+std::vector<uint64_t> g_watch;
+}  // namespace
+
+void watch_system_event(uint64_t ev) {
+    if (!ev) return;
+    std::lock_guard<std::mutex> lk(g_watch_mu);
+    if (g_watch.size() < 8 && std::find(g_watch.begin(), g_watch.end(), ev) == g_watch.end()) g_watch.push_back(ev);
+}
+
+size_t watched_system_events(uint64_t* out, size_t max) {
+    std::lock_guard<std::mutex> lk(g_watch_mu);
+    const size_t n = std::min(max, g_watch.size());
+    std::copy(g_watch.begin(), g_watch.begin() + static_cast<ptrdiff_t>(n), out);
+    return n;
 }
 
 bool any_waiter_on(uint64_t key) {

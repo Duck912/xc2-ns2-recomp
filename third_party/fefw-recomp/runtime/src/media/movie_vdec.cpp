@@ -898,12 +898,14 @@ void movie_tick() {
         std::lock_guard<std::mutex> lk(g_reg_mu);
         live = g_reg;
     }
+    bool handed = false;
     const int64_t now = static_cast<int64_t>(GetTickCount64());
     for (Decoder* d : live) {
         if (!d) continue;
         std::lock_guard<std::mutex> lk(d->mu);
         if (d->frames.empty()) continue;
         deliver(*d);
+        if (!d->ready.empty()) handed = true;
         if (g_log) {
             static std::atomic<uint64_t> ticks{0};
             const uint64_t t = ticks.fetch_add(1);
@@ -922,6 +924,13 @@ void movie_tick() {
                         d->pending_free.size());
             }
         }
+    }
+    // The player waits on a SystemEvent of its own (one the library this port replaces would signal); any frame handed over is a
+    // reason to wake it, so it re-checks what it was waiting for (work/MOVIE-FREEZE-NOTES.md).
+    if (handed) {
+        uint64_t evs[8];
+        const size_t n = kernel::watched_system_events(evs, 8);
+        for (size_t i = 0; i < n; ++i) kernel::signal_system_event(evs[i]);
     }
 }
 
