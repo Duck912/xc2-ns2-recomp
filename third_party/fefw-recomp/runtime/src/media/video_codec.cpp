@@ -788,6 +788,11 @@ void props_write(uint64_t pw, uint64_t ph, uint64_t pa, uint64_t pb, uint64_t pp
     if (pb) wr16(pb, b.h);
     if (ppts) wr64(ppts, static_cast<uint64_t>(b.pts));
     if (peos) *reinterpret_cast<uint8_t*>(peos) = b.eos ? 1 : 0;
+    if (g_log) {
+        static std::atomic<uint32_t> n{0};
+        if (n.fetch_add(1, std::memory_order_relaxed) < 30)
+            NXLOG_I("vcodec", "output properties: %ux%u, pts %lld, eos %d", b.w, b.h, static_cast<long long>(b.pts), b.eos ? 1 : 0);
+    }
 }
 BufInfo props_of(uint64_t dec, uint32_t index) {
     BufInfo b;

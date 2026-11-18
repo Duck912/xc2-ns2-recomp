@@ -45,6 +45,8 @@ constexpr const char* kClearTimer = "_ZN2nn2os15ClearTimerEventEPNS0_14TimerEven
 constexpr const char* kWaitAny = "_ZN2nn2os7WaitAnyEPNS0_13MultiWaitTypeE";
 constexpr const char* kHolderTimer = "_ZN2nn2os25InitializeMultiWaitHolderEPNS0_19MultiWaitHolderTypeEPNS0_14TimerEventTypeE";
 constexpr const char* kLink = "_ZN2nn2os19LinkMultiWaitHolderEPNS0_13MultiWaitTypeEPNS0_19MultiWaitHolderTypeE";
+constexpr const char* kGetTs = "_ZN5movie10VideoFrame12GetTimeStampEPN2nn8TimeSpanE";
+constexpr const char* kGetBuf = "_ZN5movie10VideoFrame9GetBufferEPPvPm";
 
 bool g_on = false;
 bool g_poke = false;   // [media] movie_timer_poke: mark a started periodic timer due from the host (diagnostic)
@@ -85,6 +87,8 @@ uint64_t fn_clear() { static const uint64_t f = module_find_symbol(kClearTimer);
 uint64_t fn_wait_any() { static const uint64_t f = module_find_symbol(kWaitAny); return f; }
 uint64_t fn_holder_timer() { static const uint64_t f = module_find_symbol(kHolderTimer); return f; }
 uint64_t fn_link() { static const uint64_t f = module_find_symbol(kLink); return f; }
+uint64_t fn_get_ts() { static const uint64_t f = module_find_symbol(kGetTs); return f; }
+uint64_t fn_get_buf() { static const uint64_t f = module_find_symbol(kGetBuf); return f; }
 
 void send_msg(::Ctx* c) {   // (nn::os::MessageQueueType*, u64 value) -> nn::Result
     const uint64_t q = A(0), v = A(1), lr = c->x[30];
@@ -165,6 +169,33 @@ void holder_timer(::Ctx* c) {   // (MultiWaitHolderType*, TimerEventType*)
         NXLOG_I(kTag, "MultiWaitHolder(timer): holder 0x%llx <- timer 0x%llx, lr 0x%llx", h, t, lr);
     A(0) = r;
 }
+void frame_timestamp(::Ctx* c) {   // (VideoFrame*, nn::TimeSpan* out): what clock domain the player paces against
+    const uint64_t f = A(0), out = A(1), lr = c->x[30];
+    const uint64_t fn = fn_get_ts();
+    if (!fn) { A(0) = 0; return; }
+    const uint64_t r = call_original(c, fn);
+    if (g_on) {
+        int64_t ts = 0;
+        if (out && mem::is_mapped(out, 8)) std::memcpy(&ts, reinterpret_cast<const void*>(out), 8);
+        if (seen(g_any_seen, 0x1000, 60)) NXLOG_I(kTag, "VideoFrame::GetTimeStamp(0x%llx) -> %lld ns, lr 0x%llx", f, (long long)ts, lr);
+    }
+    A(0) = r;
+}
+void frame_buffer(::Ctx* c) {   // (VideoFrame*, void** data, size_t* size): does the player ever read pixels?
+    const uint64_t f = A(0), pdata = A(1), psize = A(2), lr = c->x[30];
+    const uint64_t fn = fn_get_buf();
+    if (!fn) { A(0) = 0; return; }
+    const uint64_t r = call_original(c, fn);
+    if (g_on) {
+        uint64_t data = 0, size = 0;
+        if (pdata && mem::is_mapped(pdata, 8)) std::memcpy(&data, reinterpret_cast<const void*>(pdata), 8);
+        if (psize && mem::is_mapped(psize, 8)) std::memcpy(&size, reinterpret_cast<const void*>(psize), 8);
+        if (seen(g_any_seen, 0x2000, 40))
+            NXLOG_I(kTag, "VideoFrame::GetBuffer(0x%llx) -> %llx bytes, data 0x%llx, lr 0x%llx", f, (unsigned long long)size,
+                    (unsigned long long)data, lr);
+    }
+    A(0) = r;
+}
 void link_holder(::Ctx* c) {   // (MultiWaitType*, MultiWaitHolderType*): which multi a holder lands in
     const uint64_t m = A(0), h = A(1), lr = c->x[30];
     const uint64_t fn = fn_link();
@@ -191,7 +222,7 @@ struct Entry {
 const Entry kEntries[] = {
     {kSend, send_msg},        {kRecv, recv_msg},           {kStartTimer, start_timer},   {kStopTimer, stop_timer},
     {kWaitTimer, wait_timer}, {kClearTimer, clear_timer},  {kWaitAny, wait_any},         {kHolderTimer, holder_timer},
-    {kLink, link_holder},
+    {kLink, link_holder},     {kGetTs, frame_timestamp},   {kGetBuf, frame_buffer},
 };
 
 }  // namespace
