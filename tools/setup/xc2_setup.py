@@ -17,6 +17,7 @@ State lives in <install>/setup/status.json (the launcher reads it) and setup/set
 Nothing is written into the dump; the romfs is linked, never copied.
 """
 import argparse
+import collections
 import hashlib
 import json
 import os
@@ -662,11 +663,24 @@ def step_shaders_package(r, repo, install, py, jobs):
             return r.end_step("shaders", started, False, "no bf2.ard under " + str(install / "romfs"))
         n = jobs if jobs > 0 else max(2, (os.cpu_count() or 4) - 1)
         r.log("  reading the archive and translating what the cache lacks; this is the long step")
+        # The progress filter drops everything that is not a stage line, which also dropped the child's traceback:
+        # a failing shader step used to say "the shader chain failed" and nothing else (issue #5, 2026-11-18). Keep the
+        # tail and print it when the child exits non-zero.
+        tail = collections.deque(maxlen=40)
+        progress = shader_progress(r)
+
+        def keep(line, tail=tail, progress=progress):
+            tail.append(line)
+            progress(line)
+
         rc = r.run([str(py), str(tool), "--ard", str(ard), "--cache", str(spirv), "--harness", str(harness),
                     "--work", str(install / "build" / "shader-cache"), "--jobs", str(n)],
-                   cwd=repo, on_line=shader_progress(r))
+                   cwd=repo, on_line=keep)
         if rc != 0:
-            return r.end_step("shaders", started, False, "the shader chain failed")
+            r.log("  the shader chain exited with code %d; its last lines:" % rc)
+            for ln in tail:
+                r.log("  | " + ln.rstrip()[:300])
+            return r.end_step("shaders", started, False, "the shader chain failed (exit %d); see the lines above" % rc)
         r.log("  %d shader(s) from the archive" % len(list(spirv.glob("*.spv"))))
     else:
         # Re-walking the archive only retries the 22 blocks the translator rejects, and build_cache.py treats "not one
