@@ -368,6 +368,11 @@ uint32_t wait_process_wide_key(uint64_t mutex, uint64_t key, uint32_t tag, int64
     return me.wait_result;
 }
 
+bool any_waiter_on(uint64_t key) {
+    Guard g;
+    return std::any_of(g_cv_waiters.begin(), g_cv_waiters.end(), [&](KThread* t) { return t->wait_key == key; });
+}
+
 void signal_system_event(uint64_t ev) {
     if (!ev) return;
     // +0x20 is the futex word of nn::os::SystemEventType: waiters park on it, so signal there as the console does. The handle
@@ -384,7 +389,14 @@ void signal_system_event(uint64_t ev) {
         if (k < 8 || k % 600 == 0) NXLOG_I("kernel", "signal_system_event 0x%llx: futex 0x%llx (call %llu)", static_cast<unsigned long long>(ev),
                                           static_cast<unsigned long long>(ev + 0x20), static_cast<unsigned long long>(k));
     }
-    signal_process_wide_key(ev + 0x20, 1);
+    // The SDK signals under the event's critical section at +0x1C, which makes check-and-sleep atomic against a signal. We are
+    // outside guest code, so a signal that lands between the waiter's check and its sleep is lost: set the word and wake again
+    // while a waiter is still parked there (a bounded retry, not a spin).
+    for (int attempt = 0; attempt < 4 && any_waiter_on(ev + 0x20); ++attempt) {
+        *reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(ev + 0x10)) = 1;
+        signal_process_wide_key(ev + 0x20, 1);
+        if (attempt + 1 < 4) SwitchToThread();
+    }
     const uint32_t h = *reinterpret_cast<const uint32_t*>(static_cast<uintptr_t>(ev));
     if (h) {
         auto k = handle_as<KEvent>(h);

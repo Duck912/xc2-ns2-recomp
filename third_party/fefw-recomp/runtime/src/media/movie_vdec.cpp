@@ -119,7 +119,7 @@ uint64_t gcall(::Ctx* c, uint64_t fn, uint64_t a0, uint64_t a1 = 0, uint64_t a2 
 }
 
 struct Fns {
-    uint64_t create_event, attach_event, get_int32, set_int32, set_size;
+    uint64_t create_event, attach_event, get_int32, set_int32, set_size, signal_event;
 };
 const Fns& fns() {
     static const Fns f = [] {
@@ -129,6 +129,7 @@ const Fns& fns() {
         o.get_int32 = module_find_symbol("_ZNK2nn5movie13MediaProperty8GetInt32EPiPKc");
         o.set_int32 = module_find_symbol("_ZN2nn5movie13MediaProperty8SetInt32EPKci");
         o.set_size = module_find_symbol("_ZN2nn5movie13MediaProperty7SetSizeEPKcm");
+        o.signal_event = module_find_symbol("_ZN2nn2os17SignalSystemEventEPNS0_15SystemEventTypeE");
         if (!o.create_event || !o.attach_event || !o.get_int32 || !o.set_int32 || !o.set_size)
             NXLOG_E(kTag, "guest nn::os / nn::movie::MediaProperty functions missing: movies will not play");
         return o;
@@ -794,6 +795,41 @@ bool install_movie_decoder_hle() {
 }
 
 
+// The same delivery, run on the guest thread that presents (nvnQueuePresentTexture): the console's player signals its events from
+// guest code, and the SDK's SignalSystemEvent takes the event's own critical section - a wake from a host thread can land in the
+// window between the waiter's check and its sleep and be lost (that is what the Switch 1 ports avoid by signalling on the
+// presenting guest thread).
+void movie_tick_guest(::Ctx* c) {
+    if (!g_enabled.load() || !c) return;
+    std::vector<Decoder*> live;
+    {
+        std::lock_guard<std::mutex> lk(g_reg_mu);
+        live = g_reg;
+    }
+    for (Decoder* d : live) {
+        if (!d) continue;
+        bool ready = false;
+        {
+            std::lock_guard<std::mutex> lk(d->mu);
+            if (d->frames.empty()) continue;
+            deliver(*d);
+            ready = !d->ready.empty();
+        }
+        // SignalSystemEvent asserts (svcBreak) on a type byte other than 0 or 1, and our event was attached with a host handle
+        // (nn::os::AttachReadableHandleToSystemEvent), which leaves the type the library's own: only those two go through guest code.
+        const uint8_t type = *reinterpret_cast<const uint8_t*>(reinterpret_cast<uintptr_t>(d->out_ev) + 0x28);
+        if (ready && fns().signal_event && type <= 1) {
+            gcall(c, fns().signal_event, reinterpret_cast<uint64_t>(d->out_ev));
+        } else if (ready) {
+            static bool told = false;
+            if (!told) {
+                told = true;
+                NXLOG_I(kTag, "output event type %d: signalled from the host instead of guest code", type);
+            }
+        }
+    }
+}
+
 // The present tick (nvn_present.cpp): hand decoded pictures over without waiting for the player to call in, and say so when a movie
 // stops moving. A player that waits on the output event, then finds nothing ready, waits for a signal that only a guest call would
 // have produced - with the game's frame loop driving the decoder instead, every present either delivers or reports.
@@ -825,6 +861,7 @@ void movie_tick() {
 #else   // built without dav1d
 
 void movie_tick() {}
+void movie_tick_guest(::Ctx*) {}
 
 bool install_movie_decoder_hle() {
     static bool logged = false;

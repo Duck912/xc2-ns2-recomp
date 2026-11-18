@@ -190,6 +190,8 @@ uint32_t wait_process_wide_key(uint64_t mutex, uint64_t key, uint32_t tag, int64
 // Wakes a guest nn::os::SystemEvent from the host: its futex word (a process-wide key at +0x20 of the type) is where
 // TimedWaitSystemEvent parks, and the handle alone leaves that waiter asleep.
 void signal_system_event(uint64_t ev);
+// True while a guest thread is parked on this process-wide key (used to retry a signal a waiter may have missed).
+bool any_waiter_on(uint64_t key);
 uint32_t signal_process_wide_key(uint64_t key, int32_t count);
 uint32_t wait_for_address(uint64_t addr, uint32_t arb_type, int32_t value, int64_t timeout_ns);     // 0 less, 1 dec+less, 2 equal
 uint32_t signal_to_address(uint64_t addr, uint32_t signal_type, int32_t value, int32_t count);     // 0 signal, 1 +1 if equal, 2 modify by waiting

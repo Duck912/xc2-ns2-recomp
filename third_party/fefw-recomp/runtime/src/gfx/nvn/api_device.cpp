@@ -29,6 +29,8 @@
 
 #include "nxrt/extras.h"
 #include "nxrt/game.h"
+#include "nxrt/movie_vdec.h"
+#include "nvn_abi.h"
 #include "nvn_cmd.h"
 #include "nvn_gpu.h"
 #include "nvn_impl.h"
@@ -315,6 +317,9 @@ void nvnQueuePresentTexture(NVNqueue* queue, NVNwindow* window, int index) {
         return;
     }
     if (index < 4) w->present_serial[index].store(be::gpu::last_serial());
+    // A movie's pictures are handed over here, on the presenting guest thread, so the player's events are signalled from guest code
+    // as the console does (media::movie_tick_guest).
+    media::movie_tick_guest(abi::current_ctx());
     be::gpu::present(w, index);
 }
 

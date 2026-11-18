@@ -131,11 +131,20 @@ void cmdmem_run_pending(::Ctx* c);
 template <auto Fn>
 struct Thunk;
 
+// The Ctx of the HLE call this thread is inside, or null (thread_local, set by the thunks below).
+inline thread_local ::Ctx* t_ctx = nullptr;
+inline ::Ctx* current_ctx() { return t_ctx; }
+
 template <class R, class... A, R (*Fn)(A...)>
 struct Thunk<Fn> {
     static constexpr char kRet = class_of<R>();
     static constexpr char kArgs[sizeof...(A) + 1] = {class_of<A>()..., '\0'};
     static void call(::Ctx* c) {
+        // The Ctx of the call this thread is inside, so a deep callee (the movie player's tick on the presenting thread) can call
+        // guest code: the runtime holds no other handle on it inside an HLE function.
+        Ctx* const outer = t_ctx;
+        t_ctx = c;
+        struct Restore { Ctx* prev; ~Restore() { t_ctx = prev; } } restore{outer};
         ArgReader rd{c};
         if constexpr (std::is_void_v<R>) {
             std::apply(Fn, std::tuple<A...>{rd.template next<A>()...});
