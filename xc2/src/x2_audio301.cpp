@@ -75,10 +75,8 @@ void default_device(Ctx* c) {   // (AudioDeviceName*)
 // caller that waits (the movie player does) blocks for ever, which froze the 4K CG at its first frame (measured 2026-11-18).
 void signal_event(uint64_t ev) {
     if (!ev || !nxrt::mem::is_mapped(ev, 4)) return;
-    const uint32_t h = *reinterpret_cast<const uint32_t*>(static_cast<uintptr_t>(ev));
-    if (!h) return;
-    auto k = nxrt::kernel::handle_as<nxrt::kernel::KEvent>(h);
-    if (k) k->state->signaled = true;
+    // The SDK's SystemEvent parks its waiters on a futex inside the type, so the handle alone is not enough.
+    nxrt::kernel::signal_system_event(ev);
 }
 
 void watch_start();

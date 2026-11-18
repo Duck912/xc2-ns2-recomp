@@ -49,4 +49,10 @@ target_link_libraries(xc2_rt PRIVATE
     kernel32 user32 gdi32 winmm imm32 ole32 oleaut32 version uuid advapi32 setupapi shell32 dinput8 psapi)
 # No /DEBUG: a release DLL should not carry a PDB path. /HIGHENTROPYVA:NO keeps the guest ranges at 0x71_0000_0000
 # free, which is what the runtime needs to map the game's address space.
-target_link_options(xc2_rt PRIVATE /HIGHENTROPYVA:NO /DEBUG:NONE /Brepro)
+target_link_options(xc2_rt PRIVATE /HIGHENTROPYVA:NO /DEBUG "/PDB:${CMAKE_CURRENT_BINARY_DIR}/xc2_rt.pdb" "/MAP:${CMAKE_CURRENT_BINARY_DIR}/xc2_rt.map")
+# A local diagnostic build (not shipped): keep a PDB so a freeze dump's xc2_rt.dll+0x... frames can be named with llvm-pdbutil.
+# A freeze report alone says which host function a stuck thread is in, which is otherwise guesswork.
+option(NXRT_DLL_SYMBOLS "Link xc2_rt.dll with a PDB for the crash dump's offsets" OFF)
+if(NXRT_DLL_SYMBOLS)
+    target_link_options(xc2_rt PRIVATE /DEBUG "/PDB:${CMAKE_CURRENT_BINARY_DIR}/xc2_rt.pdb")
+endif()

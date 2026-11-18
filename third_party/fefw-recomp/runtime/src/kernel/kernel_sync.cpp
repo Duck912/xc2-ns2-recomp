@@ -349,6 +349,33 @@ uint32_t wait_process_wide_key(uint64_t mutex, uint64_t key, uint32_t tag, int64
     return me.wait_result;
 }
 
+void signal_system_event(uint64_t ev) {
+    if (!ev) return;
+    // +0x20 is the futex word of nn::os::SystemEventType: waiters park on it, so signal there as the console does. The handle
+    // covers the callers that wait on the readable handle instead (services attach host events that way).
+    // The type byte at +0x28 picks manual (0) or auto (1) clear; both keep the signalled word at +0x10 and park waiters on the
+    // process-wide key at +0x20 - read off the lifted nn::os::SignalSystemEvent (sdk 0x75000866f8): it locks +0x1C, sets the low
+    // byte of +0x10 when that is 0, then wakes +0x20. A wake without that byte leaves the waiter sleeping again (measured: the
+    // movie player stayed parked on its own key for 10 s while every signal arrived).
+    if (!(*reinterpret_cast<const uint8_t*>(static_cast<uintptr_t>(ev + 0x10))))
+        *reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(ev + 0x10)) = 1;
+    {
+        static std::atomic<uint64_t> n{0};
+        const uint64_t k = n.fetch_add(1);
+        if (k < 8 || k % 600 == 0) NXLOG_I("kernel", "signal_system_event 0x%llx: futex 0x%llx (call %llu)", static_cast<unsigned long long>(ev),
+                                          static_cast<unsigned long long>(ev + 0x20), static_cast<unsigned long long>(k));
+    }
+    signal_process_wide_key(ev + 0x20, 1);
+    const uint32_t h = *reinterpret_cast<const uint32_t*>(static_cast<uintptr_t>(ev));
+    if (h) {
+        auto k = handle_as<KEvent>(h);
+        if (k) {
+            k->state->signaled = true;
+            notify_waitable_changed();
+        }
+    }
+}
+
 uint32_t signal_process_wide_key(uint64_t key, int32_t count) {
     if (key & 3) return kInvalidAddress;
     Guard g;

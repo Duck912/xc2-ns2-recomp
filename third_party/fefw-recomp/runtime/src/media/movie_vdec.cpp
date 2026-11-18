@@ -40,6 +40,7 @@
 #include "nxrt/config.h"
 #include "nxrt/dispatch.h"
 #include "nxrt/game.h"
+#include "nxrt/kernel.h"
 #include "nxrt/log.h"
 #include "nxrt/module.h"
 #include "nxrt/movie_vdec.h"
@@ -158,6 +159,7 @@ struct Decoder {
     std::vector<uint8_t> config;             // the track's av1C record (Configure): its OBUs go to dav1d ahead of the first packet
     int w = 1920, h = 1080, color[3] = {0, 0, 0};
     std::vector<uint64_t> frames, free_;     // registered VideoFrames; free_ is used as a stack
+    std::vector<uint64_t> owned;             // frames we made when the player registered only one (their buffers are ours too)
     std::deque<uint64_t> ready;              // frames with a picture, not acquired yet
     std::deque<Packet> queue;                // packets not decoded yet
     std::deque<Picture> decoded;             // pictures waiting for a free frame
@@ -277,6 +279,7 @@ void deliver(Decoder& d) {
     }
     if (any) {
         d.out_ready.signal();
+        kernel::signal_system_event(reinterpret_cast<uint64_t>(d.out_ev));
         d.cv.notify_all();   // room in `decoded` again
     }
 }
@@ -528,7 +531,30 @@ void vd_register_frames(::Ctx* c) {   // (self, VideoFrame** frames, int n)
     d->pending_free.clear();
     d->ready.clear();
     for (int i = 0; i < n; ++i) d->frames.push_back(rd64(list + 8ull * i));
-    for (int i = n - 1; i >= 0; --i) d->free_.push_back(d->frames[i]);
+    // A 4K movie gets one frame: the player sizes its buffers from the picture, and with a single frame it cannot hold one while it
+    // asks for the next (measured 2026-11-18: it takes the only frame, then waits for ever). The console's player owns its frames;
+    // here they are the game's, so add frames of our own with buffers we allocate - the accessors read only the fields this writes
+    // (buffer at +0x08, size at +0x48). The Switch 1 port owns four output buffers for the same reason.
+    if (n == 1) {
+        const uint64_t bytes = nv12_size(static_cast<uint32_t>(d->w), static_cast<uint32_t>(d->h));
+        for (int i = 0; i < 3; ++i) {
+            void* frame = std::calloc(1, 0x100);
+            void* buf = std::malloc(static_cast<size_t>(bytes));
+            if (!frame || !buf) {
+                std::free(frame);
+                std::free(buf);
+                break;
+            }
+            wr64(reinterpret_cast<uint64_t>(frame) + kVfBuf, reinterpret_cast<uint64_t>(buf));
+            wr64(reinterpret_cast<uint64_t>(frame) + kVfSize, bytes);
+            d->owned.push_back(reinterpret_cast<uint64_t>(frame));
+            d->frames.push_back(reinterpret_cast<uint64_t>(frame));
+        }
+        if (!d->owned.empty())
+            NXLOG_I(kTag, "one frame registered: added %zu frames of our own (%llu bytes each)", d->owned.size(),
+                    static_cast<unsigned long long>(bytes));
+    }
+    for (int i = static_cast<int>(d->frames.size()) - 1; i >= 0; --i) d->free_.push_back(d->frames[i]);
     deliver(*d);
     if (g_log) NXLOG_I(kTag, "VideoDecoder: %d frames registered", n);
     RET(0);
@@ -539,9 +565,17 @@ void vd_input_event(::Ctx* c) {   // (self, SystemEventType** out)
     if (A(1)) wr64(A(1), d ? reinterpret_cast<uint64_t>(d->in_ev) : 0);
     RET(0);
 }
-void vd_output_event(::Ctx* c) {
+void vd_output_event(::Ctx* c) {   // (self, SystemEventType** out)
     Decoder* d = dec_of(A(0));
     if (A(1)) wr64(A(1), d ? reinterpret_cast<uint64_t>(d->out_ev) : 0);
+    if (d && g_log) {
+        static bool told = false;
+        if (!told) {
+            told = true;
+            NXLOG_I(kTag, "output event at 0x%llx, its futex word at 0x%llx", static_cast<unsigned long long>(reinterpret_cast<uint64_t>(d->out_ev)),
+                    static_cast<unsigned long long>(reinterpret_cast<uint64_t>(d->out_ev) + 0x20));
+        }
+    }
     RET(0);
 }
 void vd_format_event(::Ctx* c) {   // the format never changes
@@ -597,7 +631,10 @@ uint32_t acquire(Decoder* d, uint64_t* out, int* idx) {
     }
     *out = d->ready.front();
     d->ready.pop_front();
-    if (!d->ready.empty()) d->out_ready.signal();   // one signal per wait: the next ready frame needs its own
+    if (!d->ready.empty()) {   // one signal per wait: the next ready frame needs its own
+        d->out_ready.signal();
+        kernel::signal_system_event(reinterpret_cast<uint64_t>(d->out_ev));
+    }
     if (idx) {
         *idx = -1;
         for (size_t i = 0; i < d->frames.size(); ++i)
