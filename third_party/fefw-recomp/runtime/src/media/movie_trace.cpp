@@ -17,6 +17,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
 #include <mutex>
 #include <thread>
 #include <unordered_map>
@@ -266,10 +267,15 @@ void stall_watch() {
         const int64_t last = g_last_movie_frame_ns.load(std::memory_order_relaxed);
         if (!last || g_stall_dumps.load(std::memory_order_relaxed) >= 3) continue;
         const int64_t now = now_ns();
-        if (now - last < 600'000'000ll) continue;   // the start-up stalls are ~1 s now; a 2 s threshold missed them
+        if (now - last < 300'000'000ll) continue;   // the start-up stalls are under a second now; catch them all
         if (g_stall_dumps.fetch_add(1, std::memory_order_relaxed) >= 3) continue;
         const std::string dump = nxrt::diag_thread_dump();
-        NXLOG_W(kTag, "no new movie frame for %.1f s; guest threads at that point:\n%s", (now - last) / 1e9, dump.c_str());
+        const std::string path = "stall_" + std::to_string(g_stall_dumps.load()) + ".txt";
+        {
+            std::ofstream f(path, std::ios::binary | std::ios::trunc);
+            if (f) f << "no new movie frame for " << (now - last) / 1e9 << " s\n" << dump;
+        }
+        NXLOG_W(kTag, "no new movie frame for %.1f s; guest thread dump -> %s (%zu bytes)", (now - last) / 1e9, path.c_str(), dump.size());
     }
 }
 void install_player_trace() {
