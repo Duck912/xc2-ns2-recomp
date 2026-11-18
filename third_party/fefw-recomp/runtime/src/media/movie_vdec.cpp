@@ -630,8 +630,22 @@ void vd_release(::Ctx* c) {   // (self, VideoFrame*)
         const bool known = std::find(d->frames.begin(), d->frames.end(), f) != d->frames.end();
         const bool already = std::find(d->free_.begin(), d->free_.end(), f) != d->free_.end();
         const bool pending = std::any_of(d->pending_free.begin(), d->pending_free.end(), [f](const auto& p) { return p.first == f; });
-        if (f && known && !already && !pending && d->free_.size() + d->pending_free.size() < kMaxFrames)
-            d->pending_free.emplace_back(f, nvn::be::gpu::last_serial());
+        if (f && known && !already && !pending && d->free_.size() + d->pending_free.size() < kMaxFrames) {
+            // One frame registered (a 4K movie: the player sizes its buffers from the picture, so 3840x2160 leaves it a single
+            // one): waiting for the copy's serial deadlocks the player - it cannot acquire a new frame until this one is free,
+            // and the copy is submitted with that next frame. Hand it back at once instead; the copy may still be in flight, so
+            // a frame that changes under it could tear, which is the lesser evil against a frozen picture (measured 2026-11-18).
+            if (d->frames.size() <= 1) {
+                d->free_.push_back(f);
+                static bool told = false;
+                if (!told) {
+                    told = true;
+                    NXLOG_W(kTag, "one video frame registered: handing it back without waiting for its copy (the movie may tear)");
+                }
+            } else {
+                d->pending_free.emplace_back(f, nvn::be::gpu::last_serial());
+            }
+        }
         s_released++;
         if (g_log) NXLOG_I(kTag, "ReleaseVideoFrame: %llx%s; queued %zu, decoded %zu, ready %zu, free %zu", static_cast<unsigned long long>(f),
                            known ? (already ? " (already free)" : "") : " (not registered)", d->queue.size(), d->decoded.size(), d->ready.size(),

@@ -8,6 +8,8 @@
 // sink (nxrt/audio_sink.h, the one audren uses: XAudio2 or the null sink), so the game's 48 kHz float frames are played as 16-bit
 // interleaved blocks.
 #include <windows.h>
+#include <chrono>
+#include <thread>
 
 #include <cstdint>
 #include <cstring>
@@ -19,6 +21,7 @@
 #include "nxrt/abi.h"
 #include "nxrt/audio_sink.h"
 #include "nxrt/dispatch.h"
+#include "nxrt/kernel.h"
 #include "nxrt/log.h"
 #include "nxrt/memory.h"
 #include "nxrt/module.h"
@@ -33,6 +36,7 @@ constexpr int kMaxQueuedBlocks = 8;
 struct Stream {
     int ch = 2, fmt = kFmtPcm16, cap = 0, state = 0;   // state: 0 not open, 1 open (stopped), 2 started
     uint64_t event = 0;
+    uint32_t last_queued = 0;
     std::vector<int16_t> pcm;
 };
 std::mutex g_mu;
@@ -66,6 +70,19 @@ void default_device(Ctx* c) {   // (AudioDeviceName*)
     c->x[0] = 0;
 }
 
+// The stream's system event is what the game waits on for "a buffer was played": on the console nn::audio signals it as the
+// device consumes. Our sink does the consuming, so a watcher signals the event when the queued count drops - without it a
+// caller that waits (the movie player does) blocks for ever, which froze the 4K CG at its first frame (measured 2026-11-18).
+void signal_event(uint64_t ev) {
+    if (!ev || !nxrt::mem::is_mapped(ev, 4)) return;
+    const uint32_t h = *reinterpret_cast<const uint32_t*>(static_cast<uintptr_t>(ev));
+    if (!h) return;
+    auto k = nxrt::kernel::handle_as<nxrt::kernel::KEvent>(h);
+    if (k) k->state->signaled = true;
+}
+
+void watch_start();
+
 // Reads a StreamFormat {format, channels, sample_rate} and opens the stream.
 bool open_stream(Ctx* c, uint64_t g, uint64_t fmt_p, int cap, uint64_t event) {
     int fmt = kFmtPcm16, ch = 2, rate = kRate;
@@ -91,6 +108,7 @@ bool open_stream(Ctx* c, uint64_t g, uint64_t fmt_p, int cap, uint64_t event) {
         g_streams[g] = s;
     }
     if (auto sink = nxrt::audio::sink()) sink->open(static_cast<uint32_t>(rate ? rate : kRate), static_cast<uint32_t>(ch));
+    watch_start();
     // The console's OpenOutputStream creates the stream's system event in the storage the caller passed (the game then waits on it
     // for a buffer to be released). Replacing the function means nobody creates it, and the audio thread's first
     // nn::os::TimedWaitSystemEvent on an uninitialised event asserts (HANDOVER 90), so create it here - auto-clear, as the
@@ -182,6 +200,36 @@ void write_stream(Ctx* c) {   // (g, void* data, int frames)
     c->x[0] = wrote;
 }
 
+// Signals every stream's event whenever the sink has played some of what it holds. 5 ms is well under the 40 ms a 1920-frame
+// buffer lasts at 48 kHz, so a waiting game wakes before its audio runs dry.
+void watch_loop() {
+    for (;;) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        uint32_t queued = 0;
+        if (auto sink = nxrt::audio::sink()) queued = sink->queued_frames();
+        std::vector<uint64_t> wake;
+        {
+            std::lock_guard lk(g_mu);
+            if (g_streams.empty()) continue;
+            for (auto& [g, s] : g_streams) {
+                if (!s->event) continue;
+                if (s->last_queued == 0) s->last_queued = queued;
+                else if (queued < s->last_queued) {
+                    s->last_queued = queued;
+                    wake.push_back(s->event);
+                } else if (queued == 0) {
+                    wake.push_back(s->event);   // nothing left: there is room for everything the game writes
+                }
+            }
+        }
+        for (uint64_t ev : wake) signal_event(ev);
+    }
+}
+
+void watch_start() {
+    static std::once_flag once;
+    std::call_once(once, [] { std::thread(watch_loop).detach(); });
+}
 uint64_t sym(const char* name) { return nxrt::nxmodule_find_export(name); }
 
 void force(const char* name, nxrt::HleFn fn) {
