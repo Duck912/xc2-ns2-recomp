@@ -19,12 +19,25 @@ notes, which are not published with this repository.
 - **Defaults that make the film work out of the box**: `[media] video_decoder = library`, `movie_timer_poke = 1` (the
   SDK's periodic timer never comes due inside the player's MultiWait, so the host marks it), `movie_pts_shift_ms = 100`
   (video delay for the audio output latency; the launcher's audio-latency setting can override it).
+- **Fixes reported as issues**: on NVIDIA the stencil plane is no longer offered to a float sampler, the black screen
+  and lost device of [#4](https://github.com/weile10000/xc2-ns2-recomp/issues/4) (@TheSeeOHZee) and
+  [#2](https://github.com/weile10000/xc2-ns2-recomp/issues/2) (@ffhome); a failing shader step now prints the lines that
+  failed ([#5](https://github.com/weile10000/xc2-ns2-recomp/issues/5), @bobbymalaysia); DLC is found in the package the
+  player extracted, not in a list from a dev machine ([#7](https://github.com/weile10000/xc2-ns2-recomp/issues/7),
+  @Lhw-Arthas); the freeze dump ends with the last draws the replay submitted; the log says which config file was read.
+  [#9](https://github.com/weile10000/xc2-ns2-recomp/issues/9) (@UrsineBear, the picture reading softer than the first
+  game's recomp) is under investigation.
 - **Credits**: the four launch switches and the host-side movie/audio replacement follow **@capibawa**'s
   [nxnative, branch `xc2-ns2-profile`](https://github.com/capibawa/nxnative/tree/xc2-ns2-profile) (`dm/host/hle_movie.c`,
   `dm/host/hle_audio.c`); the runtime is built on **@Goldoire**'s
   [fefw-recomp](https://github.com/Goldoire/fefw-recomp), and the recompiler is **@drakolordx7**'s
   [nxrecomp](https://github.com/drakolordx7/nxrecomp). Video decodes with [dav1d](https://code.videolan.org/videolan/dav1d),
-  sound with [libvorbis](https://github.com/xiph/vorbis).
+  sound with [libvorbis](https://github.com/xiph/vorbis). The reporters whose issues shaped this release:
+  @TheSeeOHZee ([#4](https://github.com/weile10000/xc2-ns2-recomp/issues/4)), @ffhome
+  ([#2](https://github.com/weile10000/xc2-ns2-recomp/issues/2)), @bobbymalaysia
+  ([#5](https://github.com/weile10000/xc2-ns2-recomp/issues/5)), @Lhw-Arthas
+  ([#7](https://github.com/weile10000/xc2-ns2-recomp/issues/7)) and @UrsineBear
+  ([#9](https://github.com/weile10000/xc2-ns2-recomp/issues/9)).
 - **Known**: while the game is still loading, the film waits for it (1-20 s of stalls and an occasional audio drop at the
   start); the first frame can flash green for a moment on some runs.
 
