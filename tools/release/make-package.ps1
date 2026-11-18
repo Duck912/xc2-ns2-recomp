@@ -120,6 +120,8 @@ Say ("zig           {0:N1} MB" -f (Size (Join-Path $Out 'tools\build\zig')))
 
 # --- 3b. what this folder is, so a player who unzips it has somewhere to start --------------------------------
 Copy-Item (Join-Path $PSScriptRoot 'PACKAGE-README.txt') (Join-Path $Out 'README.txt') -Force
+$notes = Join-Path $root 'docs\RELEASE-0.1.2.md'
+if (Test-Path $notes) { Copy-Item $notes (Join-Path $Out 'RELEASE-NOTES.md') -Force }
 
 # --- 3c. the support tools a player is asked to run: the report collector and the dev run scripts ---------------
 New-Item -ItemType Directory -Force (Join-Path $Out 'tools\run') | Out-Null
