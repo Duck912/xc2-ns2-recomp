@@ -56,6 +56,11 @@ if (-not $SkipDll) {
     # Reuse the runtime's fetched third-party sources instead of downloading them again.
     $deps = Join-Path $rt 'build\runtime-gfx\_deps'
     if (Test-Path $deps) { $cfg += "-DFETCHCONTENT_BASE_DIR=$deps" }
+    # libvpx (BSD-3): the host VP9/VP8 decoders. Static from a vcpkg install, which CMake finds by itself only on a
+    # fresh configure - a cached build keeps its first NXRT_LIBVPX_LIB-NOTFOUND answer, and the runtime then says
+    # "built without libvpx" and leaves VP9 movies out (measured 2026-11-18).
+    $vpx = Join-Path ($env:VCPKG_ROOT ? $env:VCPKG_ROOT : 'C:\vcpkg') 'installed\x64-windows-static\lib\vpx.lib'
+    if (Test-Path $vpx) { $cfg += "-DNXRT_LIBVPX_ROOT=" + (Split-Path -Parent (Split-Path -Parent $vpx)).Replace('\', '/') }
     & cmake @cfg 2>&1 | ForEach-Object { if ($_ -match 'error|Error') { Write-Host "  $_" } }
     if ($LASTEXITCODE -ne 0) { throw 'the release project could not be configured' }
     & cmake --build $DllBuildDir --target xc2_rt 2>&1 | ForEach-Object { if ($_ -match 'error|Linking|undefined') { Write-Host "  $_" } }
