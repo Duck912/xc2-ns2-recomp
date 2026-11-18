@@ -627,6 +627,14 @@ uint32_t acquire(Decoder* d, uint64_t* out, int* idx) {
     std::lock_guard<std::mutex> lk(d->mu);
     if (d->ready.empty()) {
         *out = 0;
+        if (g_log) {
+            static std::atomic<uint64_t> n{0};
+            const uint64_t k = n.fetch_add(1);
+            if (k < 40 || k % 200 == 0)
+                NXLOG_I(kTag, "AcquireVideoFrame: nothing ready (call %llu): frames %zu, free %zu, decoded %zu, pending %zu, queue %zu",
+                        static_cast<unsigned long long>(k), d->frames.size(), d->free_.size(), d->decoded.size(), d->pending_free.size(),
+                        d->queue.size());
+        }
         return kResultNoFrame;
     }
     *out = d->ready.front();

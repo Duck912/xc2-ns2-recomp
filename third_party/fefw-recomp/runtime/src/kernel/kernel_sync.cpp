@@ -278,11 +278,30 @@ std::string sync_wait_report() {
     std::string out = "kernel sync waiters:\n";
     char b[256];
     auto list = [&](const char* kind, const std::vector<KThread*>& v, uint64_t KThread::*field) {
+        int dumped = 0;
         for (KThread* t : v) {
             const uint64_t a = t->*field;
             std::snprintf(b, sizeof b, "  %-18s %s (guest %llu) address 0x%llx value 0x%08x tag 0x%x wake %d\n", kind, t->name.c_str(),
                           static_cast<unsigned long long>(t->id), static_cast<unsigned long long>(a), a ? load32(a) : 0u, t->wait_tag, t->wake ? 1 : 0);
             out += b;
+            // What the waiter is parked on: a SystemEvent has its type byte at +0x28 and its key at +0x20, so 0x60 bytes from
+            // the key - 0x20 show the handle and any vtable the object carries (a name is not enough: this game waits on objects
+            // of its own as well as on ours).
+            if (a && dumped < 4 && (a & 3) == 0) {
+                ++dumped;
+                for (int row = 0; row < 4; ++row) {
+                    const uint64_t base = a - 0x20 + static_cast<uint64_t>(row) * 16;
+                    char hex[3 * 16 + 1] = {};
+                    char asc[17] = {};
+                    for (int i = 0; i < 16; ++i) {
+                        const uint8_t byte = *reinterpret_cast<const uint8_t*>(static_cast<uintptr_t>(base + static_cast<uint64_t>(i)));
+                        std::snprintf(hex + i * 3, 4, "%02x ", byte);
+                        asc[i] = byte >= 32 && byte < 127 ? static_cast<char>(byte) : '.';
+                    }
+                    std::snprintf(b, sizeof b, "      %llx-20+%02x  %s %s\n", static_cast<unsigned long long>(a), row * 16, hex, asc);
+                    out += b;
+                }
+            }
         }
     };
     list("WaitForAddress", g_addr_waiters, &KThread::wait_addr);
