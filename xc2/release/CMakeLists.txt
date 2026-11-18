@@ -28,6 +28,25 @@ set(NXRT_GAMES "xc2ns2" CACHE STRING "" FORCE)
 set(NXRT_TEST_GAME "xc2ns2" CACHE STRING "" FORCE)
 set(NXRT_RECOMP_INCLUDE "${XC2_ROOT}/third_party/nxrecomp/recomp/include" CACHE PATH "")
 
+# libvorbis (BSD-3): the movie player's sound (movie::AudioDecoder). Detected before the runtime's sources are configured, because
+# movie_adec.cpp is compiled there and needs the define and the include path.
+if(NOT NXRT_VORBIS_ROOT)
+    foreach(cand "$ENV{VCPKG_ROOT}/installed/x64-windows-static" "E:/Tools/dev/vcpkg/installed/x64-windows-static" "C:/vcpkg/installed/x64-windows-static")
+        if(EXISTS "${cand}/lib/vorbis.lib")
+            set(NXRT_VORBIS_ROOT "${cand}")
+            break()
+        endif()
+    endforeach()
+endif()
+if(NXRT_VORBIS_ROOT)
+    add_compile_definitions(NXRT_HAVE_VORBIS=1)
+    include_directories("${NXRT_VORBIS_ROOT}/include")
+    link_directories("${NXRT_VORBIS_ROOT}/lib")
+    message(STATUS "nxrt: libvorbis ${NXRT_VORBIS_ROOT}/lib/vorbis.lib (movie audio)")
+else()
+    message(STATUS "nxrt: no libvorbis, movie audio is silent")
+endif()
+
 add_subdirectory("${FEFW}/runtime" runtime)
 
 add_library(xc2_rt SHARED
@@ -44,6 +63,10 @@ target_include_directories(xc2_rt PRIVATE
     "${GFX}/_deps/vma-src/include"
     "${GFX}/_deps/sdl3-src/include")
 target_compile_definitions(xc2_rt PRIVATE XC2_RT_DLL=1 XC2_MODULES_7=1)
+if(NXRT_VORBIS_ROOT)
+    target_link_libraries(xc2_rt PRIVATE "${NXRT_VORBIS_ROOT}/lib/vorbis.lib" "${NXRT_VORBIS_ROOT}/lib/ogg.lib")
+endif()
+
 target_link_libraries(xc2_rt PRIVATE
     nxrt_game_xc2ns2_core nxrt_gfx nxrt
     kernel32 user32 gdi32 winmm imm32 ole32 oleaut32 version uuid advapi32 setupapi shell32 dinput8 psapi)
