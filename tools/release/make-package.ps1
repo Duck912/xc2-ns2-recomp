@@ -45,6 +45,16 @@ New-Item -ItemType Directory -Force $Out | Out-Null
 # --- 1. the launcher ---------------------------------------------------------------------------------------------
 $exe = Join-Path $Launcher 'src-tauri\target\release\xc2-launcher.exe'
 Need $exe 'the built launcher'
+# The launcher must be built with `npm run tauri build -- --no-bundle`, never with a bare `cargo build`: the CLI is
+# what embeds the frontend, and a cargo build produces an exe that looks for the dev server on 127.0.0.1:1420 instead
+# (2026-11-18: shipped like that once, every player saw ERR_CONNECTION_REFUSED). The frontend bundle it embeds must be
+# newer than its sources, which is what the CLI guarantees and a hand-run cargo build does not.
+$dist = Join-Path (Split-Path -Parent $Launcher) 'dist\index.html'
+if (Test-Path $dist) {
+    if ((Get-Item $exe).LastWriteTime -lt (Get-Item $dist).LastWriteTime) {
+        throw "the launcher ($exe) is older than its frontend ($dist): rebuild it with 'npm run tauri build -- --no-bundle'"
+    }
+}
 Copy-Item $exe $Out -Force
 Say ("launcher      {0:N1} MB" -f ((Get-Item $exe).Length / 1MB))
 
