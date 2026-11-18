@@ -124,7 +124,11 @@ Copy-Item (Join-Path $PSScriptRoot 'PACKAGE-README.txt') (Join-Path $Out 'README
 # --- 3c. the support tools a player is asked to run: the report collector and the dev run scripts ---------------
 New-Item -ItemType Directory -Force (Join-Path $Out 'tools\run') | Out-Null
 Copy-Item (Join-Path $root 'tools\report.py') (Join-Path $Out 'tools\report.py') -Force
-Copy-Item (Join-Path $root 'tools\run\*') (Join-Path $Out 'tools\run') -Force
+# Only what a player may be asked to run. The rest of tools/run is the maintainer's A/B and probe scripts.
+foreach ($f in @('report.ps1', 'play-301.cmd', 'prefill.ps1', 'fill-cache.ps1')) {
+    $s = Join-Path $root ('tools\run\' + $f)
+    if (Test-Path $s) { Copy-Item $s (Join-Path $Out 'tools\run') -Force }
+}
 Say ("report        tools\report.py + tools\run (python, no PowerShell 7 needed)")
 
 # --- 4. the engine, the shader corpus extractor, and what the lift needs --------------------------------------
