@@ -479,6 +479,12 @@ void read_nv12(::Ctx* c) {
     const size_t uvstride = rd64(sp + 16), uvsize = rd64(sp + 24);
     s_read++;
     stats_tick();
+    if (g_log) {
+        static std::atomic<uint32_t> n{0};
+        if (n.fetch_add(1, std::memory_order_relaxed) < 6)
+            NXLOG_I("vcodec", "ReadDecoderOutputImageNv12(index %u, %ux%u at %u,%u) pool %llx", static_cast<uint32_t>(A(1)), w, h, x0, y0,
+                    (unsigned long long)A(0));
+    }
     if (!p || p->nv12.empty() || !ydst) { RET(0); return; }
     const size_t pw = p->w, ph = p->h;
     const size_t cw = x0 < pw ? std::min<size_t>(w, pw - x0) : 0;
@@ -667,6 +673,7 @@ void submission_event(::Ctx* c) {   // (SystemEventType** out, dec)
         if (started) gcall(c, os().signal_sysevent, ev);   // asked for after Start: input is accepted now (else Start signals it)
     }
     if (A(0)) wr64(A(0), ev);
+    if (g_log) NXLOG_I("vcodec", "decoder %u: submission ready event at 0x%llx (created %d)", d->id, (unsigned long long)ev, make ? 1 : 0);
     RET(0);
 }
 // SDK 3.0.1's Get*DecoderSubmissionReadyEvent(type) returns the nn::os::SystemEventType* itself (no out parameter).
@@ -689,6 +696,7 @@ void submission_event_ret(::Ctx* c) {   // (dec) -> SystemEventType*
         }
         if (started) gcall(c, os().signal_sysevent, ev);
     }
+    if (g_log) NXLOG_I("vcodec", "decoder %u: submission ready event -> 0x%llx (created %d)", d->id, (unsigned long long)ev, make ? 1 : 0);
     RET(ev);
 }
 // The body shared by the two Submit*DecoderInputBuffer shapes: SDK 3.0.1's AV1 one has no size_t* out parameter, the VP8 / VP9 one
@@ -751,13 +759,25 @@ void acquire_output(::Ctx* c) {   // (u32* index, NativeSyncHandle* fence, dec)
         wr64(A(1), d && seq ? (kSyncMarker | d->id) : 0);
         wr64(A(1) + 8, seq);
     }
+    if (g_log && d) {
+        static std::atomic<uint32_t> n{0};
+        if (n.fetch_add(1, std::memory_order_relaxed) < 12)
+            NXLOG_I("vcodec", "decoder %u: acquire -> index %u, fence %llu (ready %zu, free %zu)", d->id, index, (unsigned long long)seq,
+                    d->ready.size(), d->free.size());
+    }
     if (d) after_change(c, *d, fences);
     RET(0);
 }
 void release_output(::Ctx* c) {   // (dec, index, pre-fence)
     if (auto d = dec_of(A(0))) {
-        std::lock_guard<std::mutex> lk(d->mu);
-        d->free.push_back(static_cast<uint32_t>(A(1)));
+        {
+            std::lock_guard<std::mutex> lk(d->mu);
+            d->free.push_back(static_cast<uint32_t>(A(1)));
+        }
+        if (g_log) {
+            static std::atomic<uint32_t> n{0};
+            if (n.fetch_add(1, std::memory_order_relaxed) < 12) NXLOG_I("vcodec", "decoder %u: release index %u", d->id, static_cast<uint32_t>(A(1)));
+        }
     }
     RET(0);
 }
