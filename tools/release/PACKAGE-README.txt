@@ -34,6 +34,16 @@ The other file on the release page
                               want to read or build the launcher. You do NOT
                               need it to play.
 
+If something goes wrong
+-----------------------
+Run this and attach the zip it prints to the issue:
+
+  tools\python\python.exe tools\report.py
+
+It starts the game once with the diagnostics on, then packs the log, the
+validation output and your settings into work\reports\report-<stamp>.zip.
+No PowerShell 7, no .NET: the Python in this folder runs it.
+
 Saves, logs, cache
 ------------------
   save/                       your save data
