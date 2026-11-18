@@ -82,6 +82,8 @@ constexpr const char* kSubmitAv1 = "_ZN2nn5codec27SubmitAv1DecoderInputBufferEPN
 constexpr const char* kAcquireAv1 = "_ZN2nn5codec29AcquireAv1DecoderOutputBufferEPjPNS_2gs16NativeSyncHandleEPNS0_14Av1DecoderTypeE";
 constexpr const char* kReleaseAv1 = "_ZN2nn5codec29ReleaseAv1DecoderOutputBufferEPNS0_14Av1DecoderTypeEjNS_2gs16NativeSyncHandleE";
 constexpr const char* kPropsAv1 = "_ZN2nn5codec35GetAv1DecoderOutputBufferPropertiesEPtS1_S1_S1_PNS_8TimeSpanEPbPNS0_14Av1DecoderTypeEj";
+constexpr const char* kEventAv1 = "_ZN2nn5codec33GetAv1DecoderSubmissionReadyEventEPNS0_14Av1DecoderTypeE";
+constexpr const char* kStartAv1 = "_ZN2nn5codec15StartAv1DecoderEPNS0_14Av1DecoderTypeE";
 
 // ---- a minimal Matroska reader --------------------------------------------------------------------------------------------------
 struct Packet {
@@ -272,6 +274,11 @@ int main(int argc, char** argv) {
                               : call(kInitVp9, {P(dec), 0, m.w, m.h, 0, 0, kNv12});
     if (init != 0) { std::fprintf(stderr, "Initialize%sDecoder failed\n", av1 ? "Av1" : "Vp9"); return 6; }
     for (uint32_t i = 0; i < kBuffers; i++) call(av1 ? kRegisterAv1 : kRegister, {P(dec), i, P(pools[i]), 0});
+    if (av1) {
+        const uint64_t ev = call(kEventAv1, {P(dec)});
+        std::printf("submission ready event: 0x%llx%s\n", (unsigned long long)ev, ev ? "" : " (NULL)");
+        call(kStartAv1, {P(dec)});
+    }
     struct Acq { uint32_t index; alignas(8) uint64_t fence[2]; };
     std::vector<Acq> acquired;
     auto acquire = [&] {
