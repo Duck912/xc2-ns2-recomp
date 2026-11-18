@@ -845,6 +845,11 @@ bool install_movie_decoder_hle() {
         // [media] video_decoder = hle | guest: guest leaves every movie::VideoDecoder import to the library itself, which then drives
         // nn::codec and NVDEC. That path cannot decode anything here, but it shows which layer the player really uses (log lines from
         // the codec HLE, then the failure), which is what an implementation at the library's own level has to replace.
+        if (config_get_str("media", "video_decoder", "hle") == "library") {
+            install_movie_decoder_layer();
+            NXLOG_I(kTag, "[media] video_decoder = library: movie::Decoder on the host, VideoDecoder left to the game");
+            return;
+        }
         if (config_get_str("media", "video_decoder", "hle") == "guest") {
             NXLOG_I(kTag, "[media] video_decoder = guest: movie::VideoDecoder left to the library (diagnostic)");
             return;
