@@ -1,0 +1,150 @@
+# Mods (interface draft)
+
+Status: **draft, not implemented.** The launcher creates `mods\` and the setup engine writes its path into
+`nxrt.ini`, but nothing in the runtime reads it yet. This file is the contract we will build against; treat
+everything below as the design, not as behaviour you can rely on today.
+
+The conventions are deliberately the ones the Switch emulators and the closest port to this one already use
+([TotK Recomp's mods guide](https://github.com/valentderah/totk-pc-recomp/blob/main/docs/mods.md)), so a mod made
+for Ryujinx or yuzu can be dropped in without being repacked.
+
+## A mod is a folder
+
+```
+mods\
+  Better textures\
+    romfs\
+      ...                    ← replaces files of the game's romfs, by the same path
+  Frame rate unlock\
+    exefs\
+      patch.pchtxt         ← patches the game's own code (see "Code patches")
+  My cheats\
+    cheats\
+      8BEF68ED1EEBC24BF7278040E63B83F6E417E2E2.txt
+```
+
+One folder per mod, named by the player. Inside it, these three may appear at the top level:
+
+| folder | what it replaces |
+|---|---|
+| `romfs/` | game files, by their logical path (inside `bf2.ard` or loose, see "Where files live") |
+| `exefs/` | code patches (`.pchtxt`, `.ips`) applied when the game is built |
+| `cheats/` | one text file per build id, in Atmosphère's format |
+
+### Emulator layouts are accepted as they are
+
+Inside a mod's folder the following are found in addition to the plain layout, in this order:
+
+```
+<mod>\romfs
+<mod>\atmosphere\contents\0100E95004039000\romfs
+<mod>\contents\0100E95004039000\romfs
+<mod>\0100E95004039000\romfs
+```
+
+and the same places for `exefs` and `cheats`; `atmosphere\exefs_patches\<name>\` is accepted for code patches.
+`0100E95004039000` is the base title id of this game (the add-ons are `0100E95004039001` … `07`); files under
+another title id are ignored, so a mod folder can hold several games' content without us serving the wrong one.
+
+## Order and switches
+
+The mod list is every folder in `mods\`, in this order:
+
+1. the order named in `nxrt.ini` under `[mods] order` (a comma-separated list of folder names),
+2. then any folder that list does not name, alphabetically — a new or renamed folder is simply appended.
+
+A mod listed in `[mods] disabled` is not loaded. Both lists key on the **folder name**: renaming a folder makes it
+a new mod with its switches reset.
+
+Changes take effect at the next start; nothing is swapped mid-session.
+
+## Conflicts
+
+Two mods that provide the same file **do not merge**: the one higher in the order wins that whole file, and the
+lower mod's report counts it as covered. Merging two texture packs is the player's job, with the tools the
+community already has (TKMM and friends), and the merged result is dropped in as one folder.
+
+The runtime reports every mod it loaded:
+
+```
+mods: Better textures: 412 files replaced, 3 not found in this game version (first: romfs\monolib\ui\old.x)
+mods: Frame rate unlock: 0 files, 1 code patch, not applied (build id mismatch)
+```
+
+"not found in this game version" is the one check an emulator cannot make and we can: the archive index tells us
+whether a path exists at all, so a mod that was extracted from a different revision says so instead of silently
+doing half its job.
+
+## Where files live
+
+The game's romfs is served from a folder, but most assets are inside `bf2.ard` (about 15 GB) and the game parses
+that archive itself. A mod therefore names files by their **logical romfs path**, whether the file is loose
+(`romfs\stream\...`) or inside the archive (`romfs\monolib\...`); the runtime maps the path to an archive offset
+and serves the mod's bytes there. Cache entries that the archive keeps compressed or tiled are supported by serving
+the mod's file as-is; a mod that ships an archive-internal file uncompressed where the game expects compression is
+not.
+
+**Size table.** A file that a mod makes larger must have its size entry raised, or the game fails when it first
+loads it, long after the start. The size table for this game has not been mapped yet; until it is, a mod that grows
+a file may need the entry patched as well. If the table turns out to work like TotK's, the runtime will merge it at
+start the same way.
+
+## Code patches
+
+The game's code is lifted from the player's own dump and compiled ahead of time, so a code patch cannot be applied
+at run time. A mod's `.pchtxt` / `.ips` files are applied to a **copy of the module** at Set up, before lifting:
+
+1. a mod with code patches turns on only after Set up has run again (the launcher offers it),
+2. until then the whole mod stays off, its romfs files included,
+3. after that it switches on and off like any other mod, with no further rebuild.
+
+A patch is for one build id: `.ips` is named after it, `.pchtxt` names it on its `@nsobid` line.
+
+## Cheats
+
+`mods\<mod>\cheats\<build id>.txt`, Atmosphère's format, switched cheat by cheat. A cheat that changes code needs
+the same re-setup as a code patch; a cheat that only writes values does not.
+
+## Metadata and settings (optional)
+
+A `mod.json` beside the folders is optional. Without it the mod works; with it the launcher can show a name, a
+version, the game version it targets, and **settings the mod itself declares**:
+
+```json
+{
+  "name": "Better textures",
+  "version": "1.2",
+  "game": "3.0.1",
+  "author": "...",
+  "options": {
+    "quality": { "type": "select", "default": "high",
+                 "values": { "high": "romfs_high/...", "low": "romfs_low/..." } }
+  }
+}
+```
+
+The launcher renders `options` with the same declarative fields its own settings page uses, and the chosen values
+select which sub-tree of the mod is served. This is the "adjust" half of the interface: a mod author ships the
+schema, not an installer.
+
+## Not supported (on purpose)
+
+- **Engine hooks.** No plugin may run inside the game's logic; a mod changes files, code bytes and memory values.
+  (The port's own bring-up hooks are not a public interface.)
+- **Mid-session switching.** Mods are applied at start.
+- **Game versions other than the one installed.** A mod that names a version we do not run is reported, not guessed at.
+
+## Legal
+
+No mod, cheat or extracted asset ships with this project or its releases. Mods are the player's own files, exactly
+like the dump the game is built from; the project only provides the loader.
+
+## Implementation order
+
+| step | what | state |
+|---|---|---|
+| M1 | `mods\<name>\romfs\` overlay for loose files, load report, order and switches | not started |
+| M1.5 | the emulator layouts above | not started |
+| M2 | the archive index in the runtime: files inside `bf2.ard`, the "not found" check | not started |
+| M3 | `.pchtxt` / `.ips` applied at Set up | not started |
+| M4 | the size table, cheats, `mod.json` options | not started |

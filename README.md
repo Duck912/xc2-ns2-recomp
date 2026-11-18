@@ -86,6 +86,7 @@ Vulkan SDK, Python 3.12), then
 * The §-numbered working notes (one file per round, with every experiment and dead end) are kept outside this
 repository. Code comments and the reports refer to them as `HANDOVER N` or `§N`: those numbers are kept so the
 code and the notes stay cross-referenced, but the notes themselves are not published.
+* [docs/MODS.md](docs/MODS.md) — the mod interface: folder layout, order, conflicts, code patches (draft)
 * `docs/ENVIRONMENT.md` — toolchain, Python packages, build entries, data layout
 * `tools/README.md` — the analysis and run tools
 
