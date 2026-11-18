@@ -367,13 +367,40 @@ std::shared_ptr<Service> make_contents_manager() {
         s.add_cmd(0, "RequestContentsAuthorizationToken", refuse(kAocNotConnected, "aoc", "RequestContentsAuthorizationToken"));
     });
 }
-// The folder of the add-on content with list index 'index': <[aoc] dir>/<16-hex data id>/romfs, the layout the package extracts
-// to (HANDOVER 63). The data id of add-on content is the program id + 0x1000 + the index the list reports.
-static std::string aoc_content_romfs(uint32_t index) {
+// Nintendo's rule names an add-on content program id + 0x1000 + index, but XC2's own add-on ids are
+// program id + 1 + index (a package extracts ...039001 … 039006), so both bases are tried and the one whose folder is
+// on disk wins (issue #7, 2026-11-18: with only the 0x1000 rule no package content was ever found).
+static constexpr uint64_t kAocIdOffsets[] = {kAocBaseIdOffset, 1};
+
+static std::string aoc_romfs_dir() { return config_get_str("aoc", "dir", "game/dlc"); }
+
+static std::string aoc_romfs_of_id(uint64_t id) {
     char name[17];
-    std::snprintf(name, sizeof name, "%016llx",
-                  static_cast<unsigned long long>(profile().program_id + kAocBaseIdOffset + index));
-    return config_get_str("aoc", "dir", "game/dlc") + "/" + name + "/romfs";
+    std::snprintf(name, sizeof name, "%016llx", static_cast<unsigned long long>(id));
+    return aoc_romfs_dir() + "/" + name + "/romfs";
+}
+
+static bool aoc_is_dir(const std::string& p) {
+    std::error_code ec;
+    return std::filesystem::is_directory(std::filesystem::u8path(p), ec);
+}
+
+// The folder of the add-on content with list index 'index': <[aoc] dir>/<16-hex data id>/romfs.
+static std::string aoc_content_romfs(uint32_t index) {
+    for (uint64_t off : kAocIdOffsets) {
+        const std::string dir = aoc_romfs_of_id(profile().program_id + off + index);
+        if (aoc_is_dir(dir)) return dir;
+    }
+    return aoc_romfs_of_id(profile().program_id + kAocBaseIdOffset + index);
+}
+
+// The list index of a folder named after a data id, whichever base it uses; -1 when the id is not one of ours.
+static int aoc_index_of_id(uint64_t id) {
+    const uint64_t app = profile().program_id;
+    for (uint64_t off : kAocIdOffsets) {
+        if (id >= app + off && id - app - off < kAocBaseIdOffset) return static_cast<int>(id - app - off);
+    }
+    return -1;
 }
 
 // The add-on contents the player supplied: one index per line in <[aoc] dir>/indices.txt, reported only when its folder is on disk.
@@ -388,13 +415,13 @@ static const std::vector<uint32_t>& aoc_indices() {
             NXLOG_I("aoc", "[aoc] list = 0: reporting no add-on content");
             return v;
         }
-        const std::string dir = config_get_str("aoc", "dir", "game/dlc");
-        if (std::FILE* f = std::fopen((dir + "/indices.txt").c_str(), "r")) {
+        const std::string dir = aoc_romfs_dir();
+        std::FILE* f = std::fopen((dir + "/indices.txt").c_str(), "r");
+        if (f) {
             unsigned n = 0;
             while (std::fscanf(f, "%u", &n) == 1) {
                 const std::string romfs = aoc_content_romfs(n);
-                std::error_code ec;
-                if (std::filesystem::is_directory(std::filesystem::u8path(romfs), ec)) {
+                if (aoc_is_dir(romfs)) {
                     v.push_back(n);
                 } else {
                     NXLOG_W("aoc", "index %u: '%s' is not on disk, not reported (the guest mounts every entry it is told about)", n,
@@ -402,6 +429,28 @@ static const std::vector<uint32_t>& aoc_indices() {
                 }
             }
             std::fclose(f);
+        } else {
+            // No list: read the folder, which is what a package extracts to. Each <16-hex id> whose romfs/ is there
+            // becomes one entry, and its index comes from whichever base its name uses.
+            std::error_code ec;
+            for (const auto& e : std::filesystem::directory_iterator(std::filesystem::u8path(dir), ec)) {
+                if (!e.is_directory(ec)) continue;
+                const std::string name = e.path().filename().string();
+                if (name.size() != 16) continue;
+                uint64_t id = 0;
+                bool hex = true;
+                for (char c : name) {
+                    const int d = (c >= '0' && c <= '9') ? c - '0' : (c >= 'a' && c <= 'f') ? c - 'a' + 10
+                                                                                      : (c >= 'A' && c <= 'F') ? c - 'A' + 10 : -1;
+                    if (d < 0) { hex = false; break; }
+                    id = (id << 4) | static_cast<uint64_t>(d);
+                }
+                if (!hex || !aoc_is_dir((e.path() / "romfs").string())) continue;
+                const int index = aoc_index_of_id(id);
+                if (index >= 0) v.push_back(static_cast<uint32_t>(index));
+            }
+            std::sort(v.begin(), v.end());
+            v.erase(std::unique(v.begin(), v.end()), v.end());
         }
         std::string list;
         for (uint32_t n : v) list += (list.empty() ? "" : ",") + std::to_string(n);

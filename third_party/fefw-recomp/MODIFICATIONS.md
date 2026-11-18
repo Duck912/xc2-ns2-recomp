@@ -94,3 +94,4 @@ git log --oneline 6f1d964..HEAD -- third_party/fefw-recomp
 - **runtime/src/core/runtime.cpp, runtime/src/services/common.cpp** — the startup log names the config file it
   loaded and the language value it read, so a launcher that starts the game elsewhere can be diagnosed.
 - **runtime/src/gfx/nvn/nvn_gpu_texture.cpp** - `[nvn] ds_stencil_bits` defaults to 0 on NVIDIA: a float-declared sampler over the stencil plane is undefined there and took the device down (issue #4).
+- **runtime/src/services/misc.cpp** - add-on content is discovered from the package folder (and its ids may use either base); before this, a dump with the six add-ons reported zero.
