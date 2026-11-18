@@ -1,0 +1,532 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// movie::AudioDecoder (the Switch 2 movie library's audio decoder) on the host.
+//
+// main imports the whole AudioDecoder surface as well as VideoDecoder's. Before this file existed the library ran its own
+// implementation, which drives nn::codec and NVDEC - the path this port cannot follow: the player waited for audio frames that
+// never came and its picture stopped with them, exactly when the movie's audio stream opened (2026-11-18, 4K CG, 1.3 s in).
+#include <algorithm>
+#include <atomic>
+#include <cstdint>
+#include <cstring>
+#include <deque>
+#include <map>
+#include <mutex>
+#include <vector>
+
+#include <windows.h>
+
+#include "nxrt/abi.h"
+#include "nxrt/config.h"
+#include "nxrt/dispatch.h"
+#include "nxrt/game.h"
+#include "nxrt/kernel.h"
+#include "nxrt/log.h"
+#include "nxrt/module.h"
+#include "nxrt/movie_vdec.h"
+#include "nxrt/services.h"
+
+#if NXRT_HAVE_VORBIS
+#include <vorbis/codec.h>
+#endif
+
+namespace nxrt::media {
+namespace {
+
+#define A(i) (c->x[i])
+#define RET(v) (c->x[0] = static_cast<uint64_t>(v))
+
+constexpr const char* kTag = "movie";
+constexpr uint64_t kMarker = 0x4e58524341444331ull;
+constexpr uint32_t kResultNoFrame = 0x7b;
+constexpr uint64_t kBufData = 0x00, kBufSize = 0x08, kBufFilled = 0x10, kBufTime = 0x18, kBufFlags = 0x20;
+constexpr uint64_t kAfBuffer = 0x00, kAfChannels = 0x14;   // AudioFrame: buffer, then the channel count
+
+bool g_log = false;
+struct Fns {
+    uint64_t create_event, attach_event, get_int32, set_int32, set_size;
+};
+
+const Fns& fns() {
+    static const Fns f = [] {
+        Fns o{};
+        o.create_event = module_find_symbol("_ZN2nn2os17CreateSystemEventEPNS0_15SystemEventTypeENS0_14EventClearModeEb");
+        o.attach_event = module_find_symbol("_ZN2nn2os33AttachReadableHandleToSystemEventEPNS0_15SystemEventTypeEjbNS0_14EventClearModeE");
+        o.get_int32 = module_find_symbol("_ZNK2nn5movie13MediaProperty8GetInt32EPiPKc");
+        o.set_int32 = module_find_symbol("_ZN2nn5movie13MediaProperty8SetInt32EPKci");
+        o.set_size = module_find_symbol("_ZN2nn5movie13MediaProperty7SetSizeEPKcm");
+        return o;
+    }();
+    return f;
+}
+
+uint64_t gcall(::Ctx* c, uint64_t fn, uint64_t a0, uint64_t a1 = 0, uint64_t a2 = 0, uint64_t a3 = 0) {
+    if (!fn) return 0;
+    const ::Ctx saved = *c;
+    c->x[0] = a0;
+    c->x[1] = a1;
+    c->x[2] = a2;
+    c->x[3] = a3;
+    c->x[30] = 0;
+    dispatch_call(c, fn);
+    const uint64_t r = c->x[0];
+    *c = saved;
+    return r;
+}
+
+// One decoded chunk of sound waiting for a frame: PCM16 interleaved, and the packet time it belongs to.
+struct Sound {
+    std::vector<int16_t> pcm;
+    int64_t time = 0;
+};
+
+struct AudioDecoder {
+    std::mutex mu;
+    std::vector<uint64_t> frames, free_;
+    std::deque<uint64_t> ready;          // frames holding sound, not acquired yet
+    std::deque<Sound> sound;             // decoded chunks waiting for a free frame
+    std::vector<uint8_t> config;         // the track's codec configuration (Xiph-laced Vorbis headers)
+    uint64_t packets = 0, decoded = 0;
+    int mime = 0, fmt = 0, mode = 0, channels = 2, rate = 48000;
+    bool warned_packet = false;
+    services::ServiceEvent in_ready, out_ready;
+    alignas(16) uint8_t in_ev[0x100]{}, out_ev[0x100]{};
+#if NXRT_HAVE_VORBIS
+    vorbis_info vi{};
+    vorbis_comment vc{};
+    vorbis_dsp_state vd{};
+    vorbis_block vb{};
+    bool vorbis_open = false;
+#endif
+};
+
+std::mutex g_reg_mu;
+std::vector<AudioDecoder*> g_reg;
+
+std::mutex g_map_mu;
+std::map<uint64_t, AudioDecoder*> g_map;   // guest object -> host state; the object itself is left untouched
+
+AudioDecoder* adec_of(uint64_t self) {
+    if (!self) return nullptr;
+    std::lock_guard<std::mutex> lk(g_map_mu);
+    auto it = g_map.find(self);
+    return it == g_map.end() ? nullptr : it->second;
+}
+void attach_event(::Ctx* c, uint8_t* guest_ev, services::ServiceEvent& host) {
+    if (!fns().attach_event || !fns().create_event) return;
+    gcall(c, fns().create_event, reinterpret_cast<uint64_t>(guest_ev), 1);
+    const uint32_t h = host.new_handle();
+    gcall(c, fns().attach_event, reinterpret_cast<uint64_t>(guest_ev), h, 1, 1);
+}
+
+void adec_ctor(::Ctx* c) {
+    if (A(0)) { wr64(A(0), 0); wr64(A(0) + 8, 0); }
+}
+
+void adec_finalize(::Ctx* c) {
+    AudioDecoder* d = adec_of(A(0));
+    if (d) {
+        std::lock_guard<std::mutex> lk(d->mu);
+        d->frames.clear();
+        d->free_.clear();
+        d->ready.clear();
+    }
+    RET(0);
+}
+
+void adec_initialize(::Ctx* c) {
+    auto* d = new AudioDecoder();
+    // Initialize(void* workspace, size_t size, MediaMimeType mime, AudioDecoderOutputFormat fmt, AudioCodecMode mode)
+    d->mime = static_cast<int>(A(3));
+    d->fmt = static_cast<int>(A(4));
+    d->mode = static_cast<int>(A(5));
+    attach_event(c, d->in_ev, d->in_ready);
+    attach_event(c, d->out_ev, d->out_ready);
+    {
+        std::lock_guard<std::mutex> lk(g_map_mu);
+        g_map[A(0)] = d;
+    }
+    {
+        std::lock_guard<std::mutex> lk(g_reg_mu);
+        g_reg.push_back(d);
+    }
+    NXLOG_I(kTag, "AudioDecoder: MIME %d, output format %d, mode %d", d->mime, d->fmt, d->mode);
+    RET(0);
+}
+
+void adec_configure(::Ctx* c) {
+    AudioDecoder* d = adec_of(A(0));
+    if (!d) { RET(0); return; }
+    const uint64_t cfg = A(2);
+    const size_t n = static_cast<size_t>(A(3));
+    {
+        std::lock_guard<std::mutex> lk(d->mu);
+        d->config.assign(reinterpret_cast<const uint8_t*>(cfg), reinterpret_cast<const uint8_t*>(cfg) + (cfg && n ? n : 0));
+    }
+    NXLOG_I(kTag, "AudioDecoder: configured with %llu bytes of codec configuration", static_cast<unsigned long long>(n));
+    RET(0);
+}
+
+// The library's own decoder fills this property and the player sizes its AudioFrames from it; the names it reads are the
+// library's, so every plausible one is written - a missing key reads back as 0, and a player that then allocates nothing asserts
+// (measured 2026-11-18: the crash followed Configure by microseconds, before the first frame was registered).
+void adec_requirements(::Ctx* c) {
+    AudioDecoder* d = adec_of(A(0));
+    const uint64_t prop = A(1);
+    NXLOG_I(kTag, "AudioDecoder: GetAudioFrameRequirements(prop %llx, set_int32 %llx)", static_cast<unsigned long long>(prop),
+            static_cast<unsigned long long>(fns().set_int32));
+    if (d && prop && fns().set_int32) {
+        const auto set = [&](const char* key, uint64_t value) { gcall(c, fns().set_int32, prop, reinterpret_cast<uint64_t>(key), value); };
+        set("channels", 2);
+        set("channel-count", 2);
+        set("sample-rate", 48000);
+        set("sampling-rate", 48000);
+        set("output-buf-size", 48000 / 60 * 2 * 2);
+        set("input-buf-size", 0x40000);
+        if (fns().set_size) {
+            gcall(c, fns().set_size, prop, reinterpret_cast<uint64_t>("output-buf-size"), 48000 / 60 * 2 * 2);
+            gcall(c, fns().set_size, prop, reinterpret_cast<uint64_t>("input-buf-size"), 0x40000);
+        }
+    }
+    RET(0);
+}
+void adec_register_frames(::Ctx* c) {
+    AudioDecoder* d = adec_of(A(0));
+    const uint64_t list = A(1);
+    const int n = static_cast<int>(A(2));
+    if (!d || !list || n <= 0) { RET(0); return; }
+    std::lock_guard<std::mutex> lk(d->mu);
+    d->frames.clear();
+    d->free_.clear();
+    d->ready.clear();
+    for (int i = 0; i < n; ++i) d->frames.push_back(rd64(list + 8ull * i));
+    for (int i = n - 1; i >= 0; --i) d->free_.push_back(d->frames[i]);
+    if (d->frames.empty()) { RET(0); return; }
+    const uint64_t f = d->frames.front();
+    char line[400];
+    int used = 0;
+    for (int row = 0; row < 4; ++row) {
+        used += std::snprintf(line + used, sizeof line - static_cast<size_t>(used), "+%02x:", row * 16);
+        for (int i = 0; i < 16; ++i)
+            used += std::snprintf(line + used, sizeof line - static_cast<size_t>(used), " %02x", rd8(f + static_cast<uint64_t>(row * 16 + i)));
+        used += std::snprintf(line + used, sizeof line - static_cast<size_t>(used), " |");
+    }
+    NXLOG_I(kTag, "AudioDecoder: %d frames registered, first at %llx: %s", n, static_cast<unsigned long long>(f), line);
+    RET(0);
+}
+
+void adec_input_event(::Ctx* c) {
+    AudioDecoder* d = adec_of(A(0));
+    if (A(1)) wr64(A(1), d ? reinterpret_cast<uint64_t>(d->in_ev) : 0);
+    NXLOG_I(kTag, "AudioDecoder: input-ready event asked for");
+    RET(0);
+}
+
+void adec_output_event(::Ctx* c) {
+    AudioDecoder* d = adec_of(A(0));
+    if (A(1)) wr64(A(1), d ? reinterpret_cast<uint64_t>(d->out_ev) : 0);
+    NXLOG_I(kTag, "AudioDecoder: output-ready event asked for");
+    RET(0);
+}
+
+// Start makes the decoder ready for input: the player waits on the input-ready event before it submits a packet, so nothing
+// moves until it is signalled (the video decoder signals it here for the same reason).
+#if NXRT_HAVE_VORBIS
+// The configuration of a Vorbis track is its three headers in Xiph lacing (one count byte, then the sizes of all but the last).
+bool open_vorbis(AudioDecoder& d) {
+    if (d.vorbis_open || d.config.empty()) return d.vorbis_open;
+    if (g_log) {
+        char line[200];
+        int used = 0;
+        for (int i = 0; i < 48 && i < static_cast<int>(d.config.size()); ++i)
+            used += std::snprintf(line + used, sizeof line - static_cast<size_t>(used), " %02x", d.config[static_cast<size_t>(i)]);
+        NXLOG_I(kTag, "AudioDecoder: %zu config bytes,%s", d.config.size(), line);
+    }
+    std::vector<std::pair<const uint8_t*, size_t>> parts;
+    size_t i = 0;
+    if (d.config.size() > 7 && d.config[0] == 1 && std::memcmp(d.config.data() + 1, "vorbis", 6) == 0) {
+        // The whole extradata: the three headers one after another, the identification header first (measured 2026-11-18: 3862
+        // bytes starting 01 "vorbis"). Split them the way the format defines them rather than guessing a lacing.
+        const size_t id_len = 30;   // packet type, "vorbis", version, channels, rate, bitrates, block sizes, framing
+        size_t p = id_len;
+        if (d.config.size() > p + 7 && d.config[p] == 5) {
+            // No comment header: this container keeps only the identification and setup headers (measured 2026-11-18: byte 30 is
+            // 05, the setup header's type). Vorbis needs a comment header to reach the setup one, so an empty one is made here.
+            static const uint8_t kEmptyComment[16] = {3, 'v', 'o', 'r', 'b', 'i', 's', 0, 0, 0, 0, 0, 0, 0, 0, 1};
+            parts.push_back({d.config.data(), id_len});
+            parts.push_back({kEmptyComment, sizeof kEmptyComment});
+            parts.push_back({d.config.data() + p, d.config.size() - p});
+            if (g_log) NXLOG_I(kTag, "AudioDecoder: no comment header in the configuration; an empty one stands in");
+        } else if (d.config.size() < p + 7 + 5 || d.config[p] != 3) {
+            NXLOG_W(kTag, "AudioDecoder: no comment header where the 30-byte identification header ends (byte %zu is %02x)", p, d.config[p]);
+            return false;
+        } else {
+        size_t q = p + 7;
+        auto le32 = [&](size_t at) {
+            return static_cast<uint32_t>(d.config[at]) | (static_cast<uint32_t>(d.config[at + 1]) << 8) |
+                   (static_cast<uint32_t>(d.config[at + 2]) << 16) | (static_cast<uint32_t>(d.config[at + 3]) << 24);
+        };
+        if (q + 4 > d.config.size()) return false;
+        const uint32_t vlen = le32(q);
+        q += 4 + vlen;
+        if (q + 4 > d.config.size()) return false;
+        const uint32_t ncomments = le32(q);
+        q += 4;
+        for (uint32_t i = 0; i < ncomments; ++i) {
+            if (q + 4 > d.config.size()) return false;
+            const uint32_t clen = le32(q);
+            q += 4 + clen;
+            if (q > d.config.size()) return false;
+        }
+        ++q;   // framing bit
+        if (q >= d.config.size()) return false;
+            parts.push_back({d.config.data(), id_len});
+            parts.push_back({d.config.data() + p, q - p});
+            parts.push_back({d.config.data() + q, d.config.size() - q});
+        }
+    } else if (d.config[0] == 2) {   // three headers: count - 1 in the first byte
+        i = 1;
+        int sizes[2] = {0, 0};
+        for (int k = 0; k < 2; ++k) {
+            int v = 0, b;
+            do {
+                if (i >= d.config.size()) return false;
+                b = d.config[i++];
+                v += b;
+            } while (b == 255);
+            sizes[k] = v;
+        }
+        size_t off = i;
+        parts.push_back({d.config.data() + off, static_cast<size_t>(sizes[0])});
+        off += static_cast<size_t>(sizes[0]);
+        parts.push_back({d.config.data() + off, static_cast<size_t>(sizes[1])});
+        off += static_cast<size_t>(sizes[1]);
+        parts.push_back({d.config.data() + off, d.config.size() - off});
+    } else {
+        parts.push_back({d.config.data(), d.config.size()});   // a single header, as an older container writes it
+    }
+    vorbis_info_init(&d.vi);
+    vorbis_comment_init(&d.vc);
+    int ok = 1;
+    for (size_t k = 0; k < parts.size() && ok; ++k) {
+        ogg_packet op{};
+        op.packet = const_cast<unsigned char*>(parts[k].first);
+        op.bytes = static_cast<long>(parts[k].second);
+        op.b_o_s = k == 0 ? 1 : 0;
+        op.packetno = static_cast<ogg_int64_t>(k);
+        ok = vorbis_synthesis_headerin(&d.vi, &d.vc, &op) == 0;
+        if (g_log) NXLOG_I(kTag, "AudioDecoder: header %zu/%zu (%zu bytes) -> %s", k + 1, parts.size(), parts[k].second, ok ? "ok" : "rejected");
+    }
+    if (!ok) {
+        NXLOG_W(kTag, "AudioDecoder: the codec configuration is not Vorbis headers (%zu bytes)", d.config.size());
+        vorbis_comment_clear(&d.vc);
+        vorbis_info_clear(&d.vi);
+        return false;
+    }
+    const int si = vorbis_synthesis_init(&d.vd, &d.vi), bi = si ? 1 : vorbis_block_init(&d.vd, &d.vb);
+    if (si || bi) {
+        NXLOG_W(kTag, "AudioDecoder: vorbis synthesis did not start (synthesis_init %d, block_init %d; %d channels at %ld Hz, %zu config bytes, first %02x %02x %02x %02x)",
+                si, bi, d.vi.channels, static_cast<long>(d.vi.rate), d.config.size(), d.config[0], d.config[1], d.config[2], d.config[3]);
+        return false;
+    }
+    d.vorbis_open = true;
+    d.channels = d.vi.channels;
+    d.rate = static_cast<int>(d.vi.rate);
+    NXLOG_I(kTag, "AudioDecoder: Vorbis %d channels at %d Hz", d.channels, d.rate);
+    return true;
+}
+#endif
+
+void adec_start(::Ctx* c) {
+    AudioDecoder* d = adec_of(A(0));
+    if (d) {
+#if NXRT_HAVE_VORBIS
+        if (!open_vorbis(*d)) NXLOG_W(kTag, "AudioDecoder: no Vorbis decoder; its sound stays silent");
+#endif
+        d->in_ready.signal();
+    }
+    NXLOG_I(kTag, "AudioDecoder: Start");
+    RET(0);
+}
+void adec_stop(::Ctx* c) { RET(0); }
+
+void adec_flush(::Ctx* c) {
+    AudioDecoder* d = adec_of(A(0));
+    if (d) {
+        std::lock_guard<std::mutex> lk(d->mu);
+        d->ready.clear();
+        d->free_.clear();
+        for (size_t i = d->frames.size(); i > 0; --i) d->free_.push_back(d->frames[i - 1]);
+    }
+    RET(0);
+}
+// Moves decoded sound into free frames (caller holds the lock): PCM into the nn::movie::Buffer the AudioFrame carries, then the
+// output-ready event. A chunk larger than the frame's buffer is cut, which the player hears as a click but never as a stall.
+void deliver_sound(AudioDecoder& d) {
+    bool any = false;
+    while (!d.sound.empty() && !d.free_.empty()) {
+        const uint64_t f = d.free_.back();
+        d.free_.pop_back();
+        Sound& s = d.sound.front();
+        const uint64_t buf = rd64(f + kAfBuffer);
+        uint64_t wrote = 0;
+        if (buf) {
+            const uint64_t dst = rd64(buf + kBufData), cap = rd64(buf + kBufSize);
+            const uint64_t bytes = static_cast<uint64_t>(s.pcm.size()) * 2;
+            wrote = bytes <= cap ? bytes : cap;
+            if (dst && wrote) std::memcpy(reinterpret_cast<void*>(dst), s.pcm.data(), static_cast<size_t>(wrote));
+            wr64(buf + kBufFilled, wrote);
+            wr64(buf + kBufTime, static_cast<uint64_t>(s.time));
+        }
+        d.ready.push_back(f);
+        d.sound.pop_front();
+        any = true;
+    }
+    if (any) {
+        d.out_ready.signal();
+        kernel::signal_system_event(reinterpret_cast<uint64_t>(d.out_ev));
+    }
+}
+
+void adec_decode_async(::Ctx* c) {
+    AudioDecoder* d = adec_of(A(0));
+    const uint64_t buf = A(1);
+    if (!d || !buf) { RET(0); return; }
+    if (g_log) {
+        static std::once_flag once;
+        std::call_once(once, [&] {
+            char line[400];
+            int used = 0;
+            for (int row = 0; row < 4; ++row) {
+                used += std::snprintf(line + used, sizeof line - static_cast<size_t>(used), "+%02x:", row * 16);
+                for (int i = 0; i < 16; ++i)
+                    used += std::snprintf(line + used, sizeof line - static_cast<size_t>(used), " %02x", rd8(buf + static_cast<uint64_t>(row * 16 + i)));
+                used += std::snprintf(line + used, sizeof line - static_cast<size_t>(used), " |");
+            }
+            NXLOG_I(kTag, "AudioDecoder: first Buffer at %llx: %s", static_cast<unsigned long long>(buf), line);
+        });
+    }
+    const uint64_t bytes = rd64(buf + kBufFilled), time = rd64(buf + kBufTime);
+    const uint64_t data = rd64(buf + kBufData);
+    const uint64_t cap = rd64(buf + kBufSize);
+    ++d->packets;
+    d->in_ready.signal();   // room for the next packet
+#if NXRT_HAVE_VORBIS
+    // What the player calls the packet's length differs between the paths this library takes; take the field that looks like a
+    // packet (a Vorbis packet is a few hundred bytes; the capacity is 0x40000).
+    size_t n = static_cast<size_t>(bytes);
+    if (n == 0 || n > cap) n = static_cast<size_t>(cap);
+    if (g_log && !d->warned_packet) {
+        d->warned_packet = true;
+        NXLOG_I(kTag, "AudioDecoder: packet fields: data %llx, +0x08 %llu, +0x10 %llu, +0x18 %lld, +0x20 %llu", static_cast<unsigned long long>(data),
+                static_cast<unsigned long long>(cap), static_cast<unsigned long long>(bytes), static_cast<long long>(time),
+                static_cast<unsigned long long>(rd64(buf + kBufFlags)));
+    }
+    if (d->vorbis_open && data && n) {
+        ogg_packet op{};
+        op.packet = reinterpret_cast<unsigned char*>(static_cast<uintptr_t>(data));
+        op.bytes = static_cast<long>(n);
+        op.granulepos = -1;
+        op.packetno = static_cast<ogg_int64_t>(d->packets);
+        std::lock_guard<std::mutex> lk(d->mu);
+        if (vorbis_synthesis(&d->vb, &op) == 0) {
+            vorbis_synthesis_blockin(&d->vd, &d->vb);
+            float** pcm = nullptr;
+            int got = 0;
+            while ((got = vorbis_synthesis_pcmout(&d->vd, &pcm)) > 0) {
+                Sound s;
+                s.time = static_cast<int64_t>(time);
+                s.pcm.resize(static_cast<size_t>(got) * static_cast<size_t>(d->channels));
+                for (int f = 0; f < got; ++f)
+                    for (int chn = 0; chn < d->channels; ++chn) {
+                        float v = pcm[chn][f];
+                        v = v > 1.0f ? 1.0f : v < -1.0f ? -1.0f : v;
+                        s.pcm[static_cast<size_t>(f) * static_cast<size_t>(d->channels) + static_cast<size_t>(chn)] = static_cast<int16_t>(v * 32767.0f);
+                    }
+                vorbis_synthesis_read(&d->vd, got);
+                d->sound.push_back(std::move(s));
+                ++d->decoded;
+            }
+        }
+        deliver_sound(*d);
+    }
+#endif
+    if (g_log) {
+        static std::atomic<uint64_t> n{0};
+        const uint64_t k = n.fetch_add(1);
+        if (k < 20 || k % 200 == 0)
+            NXLOG_I(kTag, "AudioDecoder: DecodeAsync %llu bytes at %lld from %llx (call %llu, frames %zu)", static_cast<unsigned long long>(bytes),
+                    static_cast<long long>(time), static_cast<unsigned long long>(data), static_cast<unsigned long long>(k), d->frames.size());
+    }
+    RET(0);
+}
+
+void adec_acquire(::Ctx* c) {
+    AudioDecoder* d = adec_of(A(0));
+    if (A(1)) wr64(A(1), 0);
+    if (A(2)) wr32(A(2), 0xffffffffu);
+    if (!d) { RET(kResultNoFrame); return; }
+    std::lock_guard<std::mutex> lk(d->mu);
+    if (d->ready.empty()) {
+        if (g_log) {
+            static std::atomic<uint64_t> n{0};
+            const uint64_t k = n.fetch_add(1);
+            if (k < 20 || k % 200 == 0)
+                NXLOG_I(kTag, "AudioDecoder: AcquireAudioFrame found nothing (call %llu): frames %zu, free %zu, packets %llu",
+                        static_cast<unsigned long long>(k), d->frames.size(), d->free_.size(), static_cast<unsigned long long>(d->packets));
+        }
+        RET(kResultNoFrame);
+    }
+    const uint64_t f = d->ready.front();
+    d->ready.pop_front();
+    if (A(1)) wr64(A(1), f);
+    RET(0);
+}
+
+void adec_release(::Ctx* c) {
+    AudioDecoder* d = adec_of(A(0));
+    const uint64_t f = A(1);
+    if (d && f) {
+        std::lock_guard<std::mutex> lk(d->mu);
+        if (std::find(d->frames.begin(), d->frames.end(), f) != d->frames.end()) d->free_.push_back(f);
+    }
+    RET(0);
+}
+struct Import { const char* name; HleFn fn; };
+const Import kImports[] = {
+    // The constructor and destructor stay the library's: they set up the object's own fields, and a replaced no-op left them
+    // uninitialised, which the player then tripped over (measured 2026-11-18: a guest break at 12 s, before any movie).
+    {"_ZN5movie12AudioDecoder8FinalizeEv", adec_finalize},
+    {"_ZN5movie12AudioDecoder10InitializeEPvmN2nn5movie13MediaMimeTypeENS_24AudioDecoderOutputFormatENS_14AudioCodecModeE", adec_initialize},
+    {"_ZN5movie12AudioDecoder9ConfigureEPKN2nn5movie13MediaPropertyEPKvm", adec_configure},
+    {"_ZN5movie12AudioDecoder25GetAudioFrameRequirementsEPN2nn5movie13MediaPropertyE", adec_requirements},
+    {"_ZN5movie12AudioDecoder18RegisterAudioFrameEPPNS_10AudioFrameEi", adec_register_frames},
+    {"_ZN5movie12AudioDecoder18GetInputReadyEventEPPN2nn2os15SystemEventTypeE", adec_input_event},
+    {"_ZN5movie12AudioDecoder19GetOutputReadyEventEPPN2nn2os15SystemEventTypeE", adec_output_event},
+    {"_ZN5movie12AudioDecoder5StartEv", adec_start},
+    {"_ZN5movie12AudioDecoder4StopEv", adec_stop},
+    {"_ZN5movie12AudioDecoder5FlushEv", adec_flush},
+    {"_ZN5movie12AudioDecoder11DecodeAsyncEPKN2nn5movie6BufferE", adec_decode_async},
+    {"_ZN5movie12AudioDecoder17AcquireAudioFrameEPPNS_10AudioFrameEPi", adec_acquire},
+    {"_ZN5movie12AudioDecoder17ReleaseAudioFrameEPNS_10AudioFrameE", adec_release},
+};
+
+}  // namespace
+
+bool install_audio_decoder_hle() {
+    static std::once_flag once;
+    static bool ok = false;
+    std::call_once(once, [] {
+        const game::Info& gi = game::info();
+        if (gi.platform != game::Platform::Switch2 || !gi.movie_video_decoder) return;
+        g_log = config_get_bool("media", "video_decoder_log", false);
+        for (const Import& im : kImports) {
+            hle_register(im.name, im.fn);
+            module_override_symbol(im.name);
+        }
+        ok = true;
+        NXLOG_I(kTag, "movie::AudioDecoder on the host: %zu imports routed", sizeof kImports / sizeof kImports[0]);
+    });
+    return ok;
+}
+
+}  // namespace nxrt::media
