@@ -8,6 +8,8 @@
 // handles never dropped by count, deferred bind arrays read at record time.
 #include <atomic>
 #include <algorithm>
+#include <deque>
+#include <mutex>
 #include <cstdio>
 #include <chrono>
 #include <cstdlib>
@@ -23,6 +25,7 @@
 #include <intrin.h>
 
 #include "nxrt/config.h"
+#include "nxrt/diag.h"
 #include "nxrt/frame_limiter.h"
 #include "nxrt/ftrace.h"
 #include "nxrt/gauge.h"
@@ -4472,9 +4475,54 @@ bool bind_u32_indices(const std::vector<uint32_t>& idx) {
     return true;
 }
 
+// [nvn] draw_ring = N (default 32, 0 = off): the last N draws the replay submitted, printed by the freeze watchdog. A GPU that
+// hangs gives no error of its own - the only thing left is which draws it was given just before it stopped, and that is what
+// this keeps (the freeze dump otherwise shows threads waiting on a fence and nothing else).
+struct RingDraw {
+    long long frame;
+    std::string vs, fs;
+    uint32_t count, instances;
+    bool indexed;
+};
+std::mutex g_ring_mu;
+std::deque<RingDraw> g_ring;
+size_t draw_ring_cap() {
+    static const size_t n = static_cast<size_t>(std::clamp<int64_t>(nxrt::config_get_int("nvn", "draw_ring", 32), 0, 256));
+    return n;
+}
+void draw_ring_note(uint32_t count, uint32_t instances, bool indexed) {
+    const size_t cap = draw_ring_cap();
+    if (!cap) return;
+    RingDraw d;
+    d.frame = static_cast<long long>(counters().presents.load());
+    d.vs = S.stage[kVertex] ? S.stage[kVertex]->hash : "-";
+    d.fs = S.stage[kFragment] ? S.stage[kFragment]->hash : "-";
+    d.count = count;
+    d.instances = instances;
+    d.indexed = indexed;
+    std::lock_guard<std::mutex> lk(g_ring_mu);
+    g_ring.push_back(std::move(d));
+    while (g_ring.size() > cap) g_ring.pop_front();
+}
+std::string draw_ring_report() {
+    if (!draw_ring_cap()) return "";
+    std::string out = "\n--- the last draws the replay submitted ([nvn] draw_ring, oldest first) ---\n";
+    std::lock_guard<std::mutex> lk(g_ring_mu);
+    if (g_ring.empty()) return out + "(none recorded)\n";
+    char line[512];
+    for (const RingDraw& d : g_ring) {
+        std::snprintf(line, sizeof line, "frame %lld  fs %s  vs %s  %s  count %u  instances %u\n", d.frame, d.fs.c_str(), d.vs.c_str(),
+                      d.indexed ? "indexed" : "arrays", d.count, d.instances);
+        out += line;
+    }
+    return out;
+}
+static const bool g_ring_registered = (nxrt::diag_add_report(draw_ring_report), true);
+
 // [nvn] draw_log_vs = <comma list of vertex shader hash prefixes> (debug, empty = off): every draw with one of them is logged at Info under
 // nvn.drawlog with the presented frame, the counts and the vertex stage's first four uniform blocks (notes/fps120.md, typewriter hunt).
 void draw_log(uint32_t count, uint32_t instances, bool indexed) {
+    draw_ring_note(count, instances, indexed);
     static const std::vector<std::string> prefixes = [] {
         std::vector<std::string> v;
         const std::string s = nxrt::config_get_str("nvn", "draw_log_vs", "");
