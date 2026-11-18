@@ -19,6 +19,12 @@ their path; components fetched at build time by CMake (`FetchContent`, see
 | Kenney input prompts | `third_party/fefw-recomp/runtime/assets/prompts` | CC0 |
 | nxnative Opus HLE (ported into `x2_opus301.cpp`) | `xc2/src/x2_opus301.cpp` | **MIT** (see `LICENSE.nxnative.MIT`) |
 
+## Shipped in the release package
+
+| component | where | licence |
+|---|---|---|
+| SPIRV-Tools `spirv-val.exe` (the harness validates every translated shader with it) | `tools\spirv-val\` | Apache-2.0 (see its `LICENSE.txt` there) |
+
 ## Tool sources
 
 The tools under `third_party/fefw-recomp/tools/` keep their licence copies next to the material they cover:

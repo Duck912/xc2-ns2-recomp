@@ -393,6 +393,15 @@ def step_doctor_package(r, repo, tools):
     r.log("  python %s" % py)
     r.log("  zig    %s (%s)" % (zig, cpu_variant(zig)))
     r.log("  runtime %s" % lib)
+    # The harness validates every translated shader with spirv-val; without it the shader step dies halfway through
+    # with an unhandled Win32Exception from inside the harness (issue #5, 2026-11-18). The package ships it, and a
+    # machine with the Vulkan SDK also has one on PATH, so this is a warning rather than a failure.
+    val = repo / "tools" / "spirv-val" / "spirv-val.exe"
+    if val.is_file():
+        r.log("  spirv-val %s" % val)
+    else:
+        r.log("  spirv-val not in the package; the harness will look in %%VULKAN_SDK%% and on PATH, "
+              "and the shader step fails if neither has it")
     return r.end_step("doctor", started, True, "the package carries everything")
 
 

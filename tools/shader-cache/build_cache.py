@@ -101,6 +101,8 @@ def main(argv):
     ap.add_argument("--blocks", default="", help="folder written by extract_embedded.py")
     ap.add_argument("--cache", required=True, help="the spirv cache folder (xc2/build/boot/shader_cache/spirv)")
     ap.add_argument("--harness", required=True, help="spirv_harness executable")
+    ap.add_argument("--spirv-val", default="", help="spirv-val executable the harness validates with; unset: next to the "
+                                                   "harness in tools/spirv-val, else the harness's own lookup (VULKAN_SDK, PATH)")
     ap.add_argument("--jobs", type=int, default=8)
     ap.add_argument("--stage", default="", help="scratch folder (default: <blocks>/../build_cache)")
     ap.add_argument("--pack-tool", default="", help="optional pack_full.py; without it the pack is left alone")
@@ -181,6 +183,20 @@ def main(argv):
 
     rep.step("translate", count=len(missing), jobs=a.jobs)
     cmd = [a.harness, "--batch", stage_in, "--out", stage_out, "--jobs", str(a.jobs)]
+    # The harness validates every translation with spirv-val, and a machine without the Vulkan SDK has none: it used
+    # to die with an unhandled Win32Exception in the middle of the batch (issue #5, 2026-11-18). The release package
+    # ships it in tools/spirv-val, next to the harness's own folder.
+    spirv_val = a.spirv_val
+    if not spirv_val:
+        guess = os.path.join(os.path.dirname(os.path.abspath(a.harness)), "..", "spirv-val", "spirv-val.exe")
+        guess = os.path.normpath(guess)
+        if os.path.exists(guess):
+            spirv_val = guess
+    if spirv_val:
+        if not os.path.exists(spirv_val):
+            rep.fail(EXIT_DEP, "no spirv-val at " + spirv_val)
+            return EXIT_DEP
+        cmd += ["--spirv-val", spirv_val]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         rep.say((r.stderr or r.stdout or "").strip()[-800:])

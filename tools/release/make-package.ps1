@@ -70,6 +70,30 @@ if (-not $SkipHarness) {
     CopyTree $harness (Join-Path $Out 'tools\spirv_harness')
     Say ("harness       {0:N1} MB  (self-contained, no .NET)" -f (Size (Join-Path $Out 'tools\spirv_harness')))
 }
+# spirv-val: the harness validates every translation with it, and a machine without the Vulkan SDK has none - the
+# shader step then died with an unhandled Win32Exception (issue #5, 2026-11-18). SPIRV-Tools, Apache-2.0.
+if (-not $SkipHarness) {
+    $val = ''
+    if ($env:VULKAN_SDK) { $val = Join-Path $env:VULKAN_SDK 'Bin\spirv-val.exe' }
+    if (-not $val -or -not (Test-Path $val)) {
+        $cand = Get-ChildItem 'C:\VulkanSDK' -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending |
+                ForEach-Object { Join-Path $_.FullName 'Bin\spirv-val.exe' } | Where-Object { Test-Path $_ } | Select-Object -First 1
+        if ($cand) { $val = $cand }
+    }
+    if (-not $val -or -not (Test-Path $val)) {
+        $cmd = Get-Command spirv-val.exe -ErrorAction SilentlyContinue
+        if ($cmd) { $val = $cmd.Source }
+    }
+    Need $val 'spirv-val.exe (the Vulkan SDK installs it; the package ships it so players need none)'
+    New-Item -ItemType Directory -Force (Join-Path $Out 'tools\spirv-val') | Out-Null
+    Copy-Item $val (Join-Path $Out 'tools\spirv-val\spirv-val.exe') -Force
+    @'
+spirv-val.exe - part of SPIRV-Tools (https://github.com/KhronosGroup/SPIRV-Tools)
+Licence: Apache-2.0. Copyright (c) The Khronos Group Inc.
+It ships here only so that the shader harness can validate translated shaders on a machine without the Vulkan SDK.
+'@ | Set-Content -LiteralPath (Join-Path $Out 'tools\spirv-val\LICENSE.txt') -Encoding utf8
+    Say ("spirv-val     {0:N1} MB  (Apache-2.0, validates every translated shader)" -f ((Get-Item $val).Length / 1MB))
+}
 Need (Join-Path $Zig 'zig.exe') 'zig.exe'
 CopyTree $Zig (Join-Path $Out 'tools\build\zig')
 Say ("zig           {0:N1} MB" -f (Size (Join-Path $Out 'tools\build\zig')))
