@@ -1067,6 +1067,8 @@ const Import kImports[] = {
 
 }  // namespace
 
+void install_player_trace();   // movie_trace.cpp ([media] player_trace)
+
 bool install_video_codec_hle() {
     static std::once_flag once;
     std::call_once(once, [] {
@@ -1079,6 +1081,7 @@ bool install_video_codec_hle() {
         }
         g_log = config_get_bool("media", "video_decoder_log", false);
         g_threads = static_cast<int>(std::clamp<int64_t>(config_get_int("media", "video_decoder_threads", 4), 1, 16));
+        install_player_trace();   // [media] player_trace: the player's message queue and timer, logged as they are called
         for (const Import& im : kImports) {
             hle_register(im.name, im.fn);
             module_override_symbol(im.name);
