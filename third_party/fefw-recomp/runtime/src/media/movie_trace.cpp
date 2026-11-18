@@ -24,6 +24,7 @@
 
 #include "nxrt/abi.h"
 #include "nxrt/config.h"
+#include "nxrt/diag.h"
 #include "nxrt/dispatch.h"
 #include "nxrt/log.h"
 #include "nxrt/memory.h"
@@ -94,6 +95,8 @@ uint64_t fn_get_buf() { static const uint64_t f = module_find_symbol(kGetBuf); r
 uint64_t fn_sleep() { static const uint64_t f = module_find_symbol(kSleep); return f; }
 uint64_t fn_release_frame() { static const uint64_t f = module_find_symbol(kReleaseFrame); return f; }
 std::atomic<int64_t> g_last_getbuf_ns{0};
+std::atomic<int64_t> g_last_movie_frame_ns{0};
+std::atomic<int> g_stall_dumps{0};
 int64_t now_ns() { return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 void release_frame(::Ctx* c) {   // (VideoDecoder*, VideoFrame*): how long the player held the frame (pixels -> texture -> back)
     const uint64_t fn = fn_release_frame();
@@ -207,6 +210,7 @@ void frame_buffer(::Ctx* c) {   // (VideoFrame*, void** data, size_t* size): doe
         if (pdata && mem::is_mapped(pdata, 8)) std::memcpy(&data, reinterpret_cast<const void*>(pdata), 8);
         if (psize && mem::is_mapped(psize, 8)) std::memcpy(&size, reinterpret_cast<const void*>(psize), 8);
         g_last_getbuf_ns.store(now_ns(), std::memory_order_relaxed);
+        g_last_movie_frame_ns.store(now_ns(), std::memory_order_relaxed);
         if (seen(g_any_seen, 0x2000, 40))
             NXLOG_I(kTag, "VideoFrame::GetBuffer(0x%llx) -> %llx bytes, data 0x%llx, lr 0x%llx", f, (unsigned long long)size,
                     (unsigned long long)data, lr);
@@ -254,12 +258,27 @@ const Entry kEntries[] = {
 }  // namespace
 
 // Called from install_video_codec_hle before the modules are linked: every import of these names then lands here.
+// The film starts while the game is still loading; the player then takes one frame every 2-8 s for up to half a minute before it
+// jumps ahead. Dump the guest threads once a stall is clear, so the stack says what the player is waiting on.
+void stall_watch() {
+    for (;;) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        const int64_t last = g_last_movie_frame_ns.load(std::memory_order_relaxed);
+        if (!last || g_stall_dumps.load(std::memory_order_relaxed) >= 3) continue;
+        const int64_t now = now_ns();
+        if (now - last < 600'000'000ll) continue;   // the start-up stalls are ~1 s now; a 2 s threshold missed them
+        if (g_stall_dumps.fetch_add(1, std::memory_order_relaxed) >= 3) continue;
+        const std::string dump = nxrt::diag_thread_dump();
+        NXLOG_W(kTag, "no new movie frame for %.1f s; guest threads at that point:\n%s", (now - last) / 1e9, dump.c_str());
+    }
+}
 void install_player_trace() {
     static std::once_flag once;
     std::call_once(once, [] {
         g_on = config_get_bool("media", "player_trace", false);
         g_poke = config_get_bool("media", "movie_timer_poke", false);
         if (!g_on) return;
+        std::thread(stall_watch).detach();
         for (const Entry& e : kEntries) {
             hle_register(e.name, e.fn);
             module_override_symbol(e.name);

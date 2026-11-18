@@ -547,6 +547,16 @@ void read_nv12(::Ctx* c) {
             std::memcpy(uvdst + y * uvstride, &p->nv12[pw * ph + (y0 / 2 + y) * pw + (x0 & ~1u)], cw);
         }
     if (g_log) {
+        static std::atomic<uint32_t> stat_n{0};
+        if (stat_n.fetch_add(1, std::memory_order_relaxed) < 4 && p && !p->nv12.empty()) {
+            const size_t pn = static_cast<size_t>(p->w) * p->h;
+            uint64_t ysum = 0, uvsum = 0;
+            size_t yn = 0, uvn = 0;
+            for (size_t k = 0; k < pn; k += 4096) { ysum += p->nv12[k]; yn++; }
+            for (size_t k = pn; k < p->nv12.size() && uvn < 4096; k += 4096) { uvsum += p->nv12[k]; uvn++; }
+            NXLOG_I("vcodec", "pool image stats: Y avg %.1f (n=%zu), UV avg %.1f (n=%zu)", yn ? double(ysum) / yn : 0.0, yn,
+                    uvn ? double(uvsum) / uvn : 0.0, uvn);
+        }
         static std::atomic<uint32_t> n{0};
         const int64_t t1 = now_ns(), since = t0 - g_last_acquire_ns.load(std::memory_order_relaxed);
         if ((since > 40'000'000 || t1 - t0 > 10'000'000) && n.fetch_add(1, std::memory_order_relaxed) < 30)
