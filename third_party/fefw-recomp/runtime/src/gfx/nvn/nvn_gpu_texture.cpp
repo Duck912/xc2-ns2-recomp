@@ -2009,7 +2009,20 @@ VkImageView tex_sampled_view(Texture* t, const ViewRequest& req) {
         // sampler over the STENCIL plane is not a mistake: Maxwell puts the integer in the float register unchanged, and
         // XC2's deferred-lighting class mask reads it back with floatBitsToInt(x) & 24. Only a texture in DEPTH mode read
         // by a float sampler takes the depth plane (HANDOVER sections 18-19).
-        static const bool honour_mode = nxrt::config_get_bool("nvn", "ds_stencil_bits", true);
+        static const bool honour_mode = [] {
+            if (nxrt::config_has("nvn", "ds_stencil_bits")) return nxrt::config_get_bool("nvn", "ds_stencil_bits", true);
+            // Unset: the console's semantics on anything that tolerates the S8_UINT view, and the depth plane on NVIDIA.
+            // There, a float-declared sampler over the stencil plane loses the device (measured 2026-11-18, issue #4:
+            // ds_stencil_bits = 0 turned a device loss at 14 s into a normal main menu). AMD keeps the stencil plane,
+            // which is what the deferred-lighting class mask reads.
+            const uint32_t vendor = device().properties().vendorID;
+            if (vendor == 0x10DE) {
+                NXLOG_W(kTag, "ds_stencil_bits defaults to 0 on this NVIDIA device: the stencil view a float sampler needs "
+                              "is undefined behaviour here and took the device down (the class mask then reads the depth plane)");
+                return false;
+            }
+            return true;
+        }();
         const bool int_shader = req.component == 2 || req.component == 3;   // sint or uint
         const bool float_shader = req.component == 1;
         if (honour_mode && !req.depth_aspect && !req.depth_compare) {
