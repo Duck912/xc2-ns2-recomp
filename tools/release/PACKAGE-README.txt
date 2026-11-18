@@ -39,7 +39,7 @@ What is new in 0.1.2
 
 The other file on the release page
 ----------------------------------
-  XC2-package-dist.zip        THIS: what you download to play
+  XC2-package-dist-0.1.2.zip  THIS: what you download to play
   xc2-launcher-0.1.1-src.zip  the launcher's C++/Rust/JS source, for people who
                               want to read or build the launcher (unchanged in
                               0.1.2). You do NOT need it to play.

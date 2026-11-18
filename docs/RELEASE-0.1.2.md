@@ -10,7 +10,7 @@ out. A small update: unzip over your install, saves and settings are kept.
 
 | file | what it is | do I need it? |
 |---|---|---|
-| `XC2-package-dist.zip` | the player package: launcher, runtime, the lifter and the shader tools | **yes** — this is the one you play from |
+| `XC2-package-dist-0.1.2.zip` | the player package: launcher, runtime, the lifter and the shader tools | **yes** — this is the one you play from |
 | `xc2-launcher-0.1.1-src.zip` | the launcher's source; unchanged in 0.1.2 | no |
 
 ## What's new
@@ -63,7 +63,7 @@ pipelines for about 20 seconds (once per driver).
 
 | file | size | sha256 |
 |---|---|---|
-| `XC2-package-dist.zip` | 158.9 MB (498.8 MB unpacked) | `499CF92E502983FDB929C76A630E623F77E7FECB18C68E0BB74BAEB929A33514` |
+| `XC2-package-dist-0.1.2.zip` | 158.9 MB (498.8 MB unpacked) | `DDC16285A35DCAD0071650AFF9D6CD6477AB8FFEB04431A044C918DF266A7A5E` |
 | `xc2-launcher-0.1.1-src.zip` | 0.5 MB | `14D9C1A122B4C70988D4373B64EBC67762689CEAF524F5D3B84E0C2A791E46DE` (unchanged) |
 
 The package contains no game files: the executable is built on your machine from your own dump and the shaders are
@@ -95,7 +95,7 @@ translated from it. Installation: [README](https://github.com/weile10000/xc2-ns2
 
 | 文件 | 是什么 | 需要吗 |
 |---|---|---|
-| `XC2-package-dist.zip` | 玩家包：启动器、运行时、举升器和着色器工具 | **需要** —— 就用它玩 |
+| `XC2-package-dist-0.1.2.zip` | 玩家包：启动器、运行时、举升器和着色器工具 | **需要** —— 就用它玩 |
 | `xc2-launcher-0.1.1-src.zip` | 启动器源码；0.1.2 未改动 | 不需要 |
 
 ## 本版变化
@@ -141,7 +141,7 @@ translated from it. Installation: [README](https://github.com/weile10000/xc2-ns2
 
 | 文件 | 大小 | sha256 |
 |---|---|---|
-| `XC2-package-dist.zip` | 158.9 MB（解压 498.8 MB） | `499CF92E502983FDB929C76A630E623F77E7FECB18C68E0BB74BAEB929A33514` |
+| `XC2-package-dist-0.1.2.zip` | 158.9 MB（解压 498.8 MB） | `DDC16285A35DCAD0071650AFF9D6CD6477AB8FFEB04431A044C918DF266A7A5E` |
 | `xc2-launcher-0.1.1-src.zip` | 0.5 MB | `14D9C1A122B4C70988D4373B64EBC67762689CEAF524F5D3B84E0C2A791E46DE`（未改动） |
 
 包里不含游戏文件：exe 在你的机器上从你的 dump 构建，着色器从它翻译。安装见
