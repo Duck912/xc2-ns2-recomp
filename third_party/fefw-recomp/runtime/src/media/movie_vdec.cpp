@@ -846,8 +846,13 @@ bool install_movie_decoder_hle() {
         // nn::codec and NVDEC. That path cannot decode anything here, but it shows which layer the player really uses (log lines from
         // the codec HLE, then the failure), which is what an implementation at the library's own level has to replace.
         if (config_get_str("media", "video_decoder", "hle") == "library") {
-            install_movie_decoder_layer();
-            NXLOG_I(kTag, "[media] video_decoder = library: movie::Decoder on the host, VideoDecoder left to the game");
+            // The library's own movie::VideoDecoder does not go through movie::Decoder: its Configure drives nn::codec's AV1 decoder
+            // directly (subsdk0 VideoDecoder::Configure 0x1c6d0 -> detail::InitializeDecoderByTransferMemory 0x28df0 -> AbortImpl when
+            // the codec init fails). So what the library needs on the host is the nn::codec side (src/media/video_codec.cpp: AV1 on
+            // dav1d, SDK 3.0.1 names); a movie::Decoder layer would never be called. The sound stays on the host AudioDecoder, which
+            // already decodes the library's Vorbis configuration.
+            install_audio_decoder_hle();
+            NXLOG_I(kTag, "[media] video_decoder = library: the library's VideoDecoder on the host nn::codec (AV1 dav1d), sound on the host");
             return;
         }
         if (config_get_str("media", "video_decoder", "hle") == "guest") {

@@ -55,6 +55,10 @@
 #include <vpx/vpx_decoder.h>
 #endif
 
+#if NXRT_HAVE_DAV1D
+#include <dav1d/dav1d.h>
+#endif
+
 namespace nxrt::media {
 
 #if NXRT_HAVE_LIBVPX
@@ -180,10 +184,13 @@ struct BufInfo {
 };
 struct Decoder {
     uint32_t id = 0;
-    int codec = 9;
+    int codec = 9;   // 8 VP8, 9 VP9, 10 AV1 (dav1d; the SDK 3.0.1 movie library decodes AV1)
     std::mutex mu;
     vpx_codec_ctx_t vpx{};
     bool vpx_ok = false;
+#if NXRT_HAVE_DAV1D
+    Dav1dContext* av1 = nullptr;
+#endif
     std::map<uint32_t, uint64_t> pools;                   // buffer index -> guest pool
     std::map<uint32_t, BufInfo> info;                     // buffer index -> picture properties
     std::deque<uint32_t> free;                            // registered or released, not acquired
@@ -230,6 +237,27 @@ void vpx_close(Decoder& d) {
     if (d.vpx_ok) vpx_codec_destroy(&d.vpx);
     d.vpx_ok = false;
 }
+#if NXRT_HAVE_DAV1D
+void av1_close(Decoder& d) {
+    if (d.av1) dav1d_close(&d.av1);
+    d.av1 = nullptr;
+}
+// Opens dav1d for the codec 10 decoders. max_frame_delay 1: one packet in, one picture out, which is the shape nn::codec's
+// Submit/Acquire pair has (the movie library acquires an output buffer per submitted packet).
+bool av1_open(Decoder& d) {
+    Dav1dSettings s;
+    dav1d_default_settings(&s);
+    s.n_threads = g_threads;
+    s.max_frame_delay = 1;
+    if (dav1d_open(&d.av1, &s) < 0) {
+        d.av1 = nullptr;
+        note_error("decoder %u: dav1d failed to start", d.id);
+        return false;
+    }
+    if (d.codec == 10 && d.pictures == 0) NXLOG_I("vcodec", "decoder %u: AV1 on dav1d %s (%d threads)", d.id, dav1d_version(), g_threads);
+    return true;
+}
+#endif
 
 // ---- sync point events ----------------------------------------------------------------------------------------------------------
 struct Armed {
@@ -277,9 +305,12 @@ Picture to_nv12(const vpx_image_t* img, int64_t pts) {
     return p;
 }
 
-// Copies `p` into the pool's image (at the pool's size; padding black when the picture is smaller).
+// Copies `p` into the pool's image. The picture decides the pool's size: the preference the library computed is not needed for
+// the copy, and the frame properties reported to it come from the same picture, so a stale or rounded preference cannot crop it.
 void place(Pool& pool, const Picture& p) {
-    const size_t pw = pool.w ? pool.w : p.w, ph = pool.h ? pool.h : p.h;
+    pool.w = p.w;
+    pool.h = p.h;
+    const size_t pw = pool.w, ph = pool.h;
     pool.nv12.assign(pw * ph + pw * ph / 2, 0);
     std::memset(pool.nv12.data(), 16, pw * ph);
     std::memset(pool.nv12.data() + pw * ph, 128, pw * ph / 2);
@@ -325,6 +356,60 @@ void after_change(::Ctx* c, Decoder& d, bool fences) {
 }
 
 void decode_into(Decoder& d, const uint8_t* data, size_t size, int64_t pts) {
+#if NXRT_HAVE_DAV1D
+    if (d.codec == 10) {   // AV1 (nn::codec's Av1DecoderType): the SDK 3.0.1 movie library's video path
+        if (!data || !size) return;   // nothing to drain: max_frame_delay 1 gives a picture per packet
+        if (!d.av1 && !av1_open(d)) return;
+        Dav1dData in{};
+        uint8_t* b = dav1d_data_create(&in, size);
+        if (!b) { note_error("decoder %u: out of memory for a %zu-byte packet", d.id, size); return; }
+        std::memcpy(b, data, size);
+        in.m.timestamp = pts;
+        for (int guard = 0; in.sz && guard < 64; ++guard) {
+            const int r = dav1d_send_data(d.av1, &in);
+            if (r < 0 && r != DAV1D_ERR(EAGAIN)) {
+                note_error("decoder %u: dav1d_send_data(%zu bytes, pts %lld) failed: %d", d.id, size, static_cast<long long>(pts), r);
+                break;
+            }
+            for (;;) {
+                Dav1dPicture pic{};
+                if (dav1d_get_picture(d.av1, &pic) < 0) break;
+                if (pic.p.bpc == 8 && pic.p.layout == DAV1D_PIXEL_LAYOUT_I420) {
+                    Picture p;
+                    p.w = static_cast<uint16_t>((pic.p.w + 1) & ~1u);
+                    p.h = static_cast<uint16_t>((pic.p.h + 1) & ~1u);
+                    p.pts = pic.m.timestamp;
+                    const size_t w = p.w, h = p.h;
+                    p.nv12.assign(w * h + w * h / 2, 0);
+                    const auto* py = static_cast<const uint8_t*>(pic.data[0]);
+                    for (uint32_t y = 0; y < pic.p.h; y++) std::memcpy(&p.nv12[y * w], py + static_cast<size_t>(y) * pic.stride[0], pic.p.w);
+                    uint8_t* uv = p.nv12.data() + w * h;
+                    const uint32_t cw = (pic.p.w + 1) / 2, ch = (pic.p.h + 1) / 2;
+                    const auto* pu = static_cast<const uint8_t*>(pic.data[1]);
+                    const auto* pv = static_cast<const uint8_t*>(pic.data[2]);
+                    for (uint32_t y = 0; y < ch; y++) {
+                        uint8_t* o = uv + static_cast<size_t>(y) * w;
+                        for (uint32_t x = 0; x < cw; x++) {
+                            o[2 * x] = pu[static_cast<size_t>(y) * pic.stride[1] + x];
+                            o[2 * x + 1] = pv[static_cast<size_t>(y) * pic.stride[1] + x];
+                        }
+                    }
+                    if (d.pictures++ == 0) NXLOG_I("vcodec", "decoder %u: first picture %ux%u (AV1, dav1d %s, %d threads)", d.id, p.w, p.h, dav1d_version(), g_threads);
+                    d.last = p.nv12;
+                    d.last_w = p.w;
+                    d.last_h = p.h;
+                    d.ready.push_back(std::move(p));
+                    s_decoded++;
+                } else {
+                    note_error("decoder %u: AV1 picture %d bits, layout %d not handled (8-bit 4:2:0 only)", d.id, pic.p.bpc, static_cast<int>(pic.p.layout));
+                }
+                dav1d_picture_unref(&pic);
+            }
+        }
+        if (in.sz) dav1d_data_unref(&in);
+        return;
+    }
+#endif
     if (!d.vpx_ok && !vpx_open(d)) return;
     const vpx_codec_err_t e = vpx_codec_decode(&d.vpx, data, static_cast<unsigned>(size), nullptr, 0);
     if (e != VPX_CODEC_OK)
@@ -434,6 +519,9 @@ void read_rgba(::Ctx* c) {   // BT.709 limited range
     }
     RET(0);
 }
+void read_rgba_hdr(::Ctx* c) {   // same pixels as Rgba; the transfer function is applied by the player's shader
+    read_rgba(c);
+}
 void native_image_handle(::Ctx* c) {
     static bool once = false;
     if (!once) {
@@ -457,11 +545,16 @@ void create_decoder(::Ctx* c, int codec, uint32_t w, uint32_t h) {
         d->id = g_next_id++;
         g_decoders[d->id] = d;
     }
-    vpx_open(*d);
+    if (codec != 10) vpx_open(*d);   // AV1 opens dav1d on its first packet (create_decoder has no configuration record)
     wr64(g, d->id);
     wr64(g + 8, kDecMarker);
     s_created++;
-    NXLOG_I("vcodec", "VP%d decoder %u created (%ux%u max) on libvpx %s", codec, d->id, w, h, vpx_codec_version_str());
+#if NXRT_HAVE_DAV1D
+    if (codec == 10)
+        NXLOG_I("vcodec", "AV1 decoder %u created (%ux%u max) on dav1d %s (%d threads)", d->id, w, h, dav1d_version(), g_threads);
+    else
+#endif
+        NXLOG_I("vcodec", "VP%d decoder %u created (%ux%u max) on libvpx %s", codec, d->id, w, h, vpx_codec_version_str());
     RET(0);
 }
 void init_vp9_tm(::Ctx* c) { create_decoder(c, 9, static_cast<uint16_t>(A(4)), static_cast<uint16_t>(A(5))); }
@@ -470,6 +563,10 @@ void init_vp9_rm2(::Ctx* c) { create_decoder(c, 9, static_cast<uint16_t>(A(3)), 
 void init_vp8_tm(::Ctx* c) { create_decoder(c, 8, static_cast<uint16_t>(A(4)), static_cast<uint16_t>(A(5))); }
 void init_vp8_rm(::Ctx* c) { create_decoder(c, 8, static_cast<uint16_t>(A(2)), static_cast<uint16_t>(A(3))); }
 void init_vp8_rm2(::Ctx* c) { create_decoder(c, 8, static_cast<uint16_t>(A(3)), static_cast<uint16_t>(A(4))); }
+// SDK 3.0.1's nn::codec adds *DecoderByTransferMemory / ByRemoteMemory: (type, mem, size, size, u16 w, u16 h, u32, in fmt, out fmt,
+// mode) / (type, size, u16 w, u16 h, u32, in fmt, out fmt, mode). The height is in the same registers as the older Initialize*Decoder.
+void init_av1_tm(::Ctx* c) { create_decoder(c, 10, static_cast<uint16_t>(A(4)), static_cast<uint16_t>(A(5))); }
+void init_av1_rm(::Ctx* c) { create_decoder(c, 10, static_cast<uint16_t>(A(2)), static_cast<uint16_t>(A(3))); }
 
 void finalize_decoder(::Ctx* c) {
     const uint64_t g = A(0);
@@ -485,6 +582,9 @@ void finalize_decoder(::Ctx* c) {
         {
             std::lock_guard<std::mutex> lk(d->mu);
             vpx_close(*d);
+#if NXRT_HAVE_DAV1D
+            av1_close(*d);
+#endif
         }
         NXLOG_I("vcodec", "decoder %u finalized after %llu pictures", d->id, (unsigned long long)d->pictures);
         s_destroyed++;
@@ -538,6 +638,9 @@ void flush_decoder(::Ctx* c) {
         d->waiting.clear();
         d->ready.clear();
         vpx_close(*d);
+#if NXRT_HAVE_DAV1D
+        av1_close(*d);   // the next packet after a flush starts at a key frame and carries the sequence header again
+#endif
         d->want_submit_signal = true;
     }
     if (g_log) NXLOG_I("vcodec", "decoder %u flushed", d->id);
@@ -566,13 +669,32 @@ void submission_event(::Ctx* c) {   // (SystemEventType** out, dec)
     if (A(0)) wr64(A(0), ev);
     RET(0);
 }
-void submit(::Ctx* c) {   // (u64* out, dec, data, size, pts, eos)
-    auto d = dec_of(A(1));
-    const uint8_t* data = reinterpret_cast<const uint8_t*>(A(2));
-    const size_t size = A(3);
-    const int64_t pts = static_cast<int64_t>(A(4));
-    const bool eos = (A(5) & 1) != 0;
-    if (A(0)) wr64(A(0), 0);
+// SDK 3.0.1's Get*DecoderSubmissionReadyEvent(type) returns the nn::os::SystemEventType* itself (no out parameter).
+void submission_event_ret(::Ctx* c) {   // (dec) -> SystemEventType*
+    auto d = dec_of(A(0));
+    if (!d) { RET(0); return; }
+    bool make = false;
+    {
+        std::lock_guard<std::mutex> lk(d->mu);
+        make = !d->submit_event_made;
+        d->submit_event_made = true;
+    }
+    const uint64_t ev = reinterpret_cast<uint64_t>(d->submit_event);
+    if (make) {
+        gcall(c, os().create_sysevent, ev, kManualClear, 0);
+        bool started;
+        {
+            std::lock_guard<std::mutex> lk(d->mu);
+            started = d->started;
+        }
+        if (started) gcall(c, os().signal_sysevent, ev);
+    }
+    RET(ev);
+}
+// The body shared by the two Submit*DecoderInputBuffer shapes: SDK 3.0.1's AV1 one has no size_t* out parameter, the VP8 / VP9 one
+// has it first.
+void submit_packet(::Ctx* c, uint64_t dec, const uint8_t* data, size_t size, int64_t pts, bool eos) {
+    auto d = dec_of(dec);
     if (!d) { RET(0); return; }
     s_packets++;
     bool fences = false;
@@ -599,6 +721,13 @@ void submit(::Ctx* c) {   // (u64* out, dec, data, size, pts, eos)
                 (unsigned long long)d->pictures);
     after_change(c, *d, fences);
     RET(0);
+}
+void submit(::Ctx* c) {   // (u64* out, dec, data, size, pts, eos): VP8 / VP9
+    if (A(0)) wr64(A(0), 0);
+    submit_packet(c, A(1), reinterpret_cast<const uint8_t*>(A(2)), A(3), static_cast<int64_t>(A(4)), (A(5) & 1) != 0);
+}
+void submit_av1(::Ctx* c) {   // (dec, data, size, pts, eos): SDK 3.0.1
+    submit_packet(c, A(0), reinterpret_cast<const uint8_t*>(A(1)), A(2), static_cast<int64_t>(A(3)), (A(4) & 1) != 0);
 }
 void acquire_output(::Ctx* c) {   // (u32* index, NativeSyncHandle* fence, dec)
     auto d = dec_of(A(2));
@@ -831,12 +960,17 @@ struct Import {
 };
 const Import kImports[] = {
     {"_ZN2nn5codec25MakeDecodeImagePreferenceEttNS0_24VideoDecoderOutputFormatENS0_9CodecModeE", make_pref},
+    // SDK 3.0.1 (Xenoblade 2's movie library): the fourth argument is the image tiling mode, and InitializeDecoderImagePool has no
+    // trailing codec mode. Same handlers: only the picture size and the output format are read back.
+    {"_ZN2nn5codec25MakeDecodeImagePreferenceEttNS0_24VideoDecoderOutputFormatENS0_15ImageTilingModeE", make_pref},
     {"_ZN2nn5codec3sdk34MakeDecodeImagePreferenceForCompatEttNS0_24VideoDecoderOutputFormatENS0_9CodecModeE", make_pref},
     {"_ZN2nn5codec31CalculateDecoderImagePoolBufferEPmS1_RKNS0_27VideoDecoderImagePreferenceEj", calc_pool},
     {"_ZN2nn5codec26InitializeDecoderImagePoolEPNS0_25VideoDecoderImagePoolTypeEPvmRKNS0_27VideoDecoderImagePreferenceEjNS0_9CodecModeE", init_pool},
+    {"_ZN2nn5codec26InitializeDecoderImagePoolEPNS0_25VideoDecoderImagePoolTypeEPvmRKNS0_27VideoDecoderImagePreferenceEj", init_pool},
     {"_ZN2nn5codec24FinalizeDecoderImagePoolEPNS0_25VideoDecoderImagePoolTypeE", fini_pool},
     {"_ZN2nn5codec26ReadDecoderOutputImageNv12EPKNS0_25VideoDecoderImagePoolTypeEjttttPvmmS4_mm", read_nv12},
     {"_ZN2nn5codec26ReadDecoderOutputImageRgbaEPKNS0_25VideoDecoderImagePoolTypeEjttttPvmm", read_rgba},
+    {"_ZN2nn5codec29ReadDecoderOutputImageRgbaHdrEPKNS0_25VideoDecoderImagePoolTypeEjttttPvmm", read_rgba_hdr},
     {"_ZN2nn5codec36GetDecoderImagePoolNativeImageHandleEPKNS0_25VideoDecoderImagePoolTypeEj", native_image_handle},
     // VP9
     {"_ZN2nn5codec29CalculateVp9DecoderWorkBufferEPmS1_mtt", calc_work},
@@ -870,7 +1004,29 @@ const Import kImports[] = {
     {"_ZN2nn5codec29ReleaseVp8DecoderOutputBufferEPNS0_14Vp8DecoderTypeEjNS_2gs16NativeSyncHandleE", release_output},
     {"_ZN2nn5codec35GetVp8DecoderOutputBufferPropertiesEPtS1_S1_S1_PNS_8TimeSpanEPbPNS0_14Vp8DecoderTypeEj", props},
     {"_ZN2nn5codec35GetVp8DecoderOutputBufferPropertiesEPtS1_S1_S1_PNS_5movie10ColorSpaceEPNS_8TimeSpanEPbPNS0_14Vp8DecoderTypeEj", props_cs},
-    // H.264 / AV1: not decoded here (a clear error instead of the console driver path)
+    // SDK 3.0.1 (Xenoblade 2's subsdk0): Initialize*DecoderByTransferMemory / ByRemoteMemory with a VideoDecoderOutputMode, and a
+    // Get*DecoderSubmissionReadyEvent that returns the event instead of writing it through an out pointer. VP8 / VP9 keep the
+    // size_t* out parameter of Submit*DecoderInputBuffer; AV1's was dropped.
+    {"_ZN2nn5codec36InitializeVp9DecoderByTransferMemoryEPNS0_14Vp9DecoderTypeEPvmmttjNS0_23VideoDecoderInputFormatENS0_24VideoDecoderOutputFormatENS0_22VideoDecoderOutputModeE", init_vp9_tm},
+    {"_ZN2nn5codec34InitializeVp9DecoderByRemoteMemoryEPNS0_14Vp9DecoderTypeEmttjNS0_23VideoDecoderInputFormatENS0_24VideoDecoderOutputFormatENS0_22VideoDecoderOutputModeE", init_vp9_rm},
+    {"_ZN2nn5codec33GetVp9DecoderSubmissionReadyEventEPNS0_14Vp9DecoderTypeE", submission_event_ret},
+    {"_ZN2nn5codec36InitializeVp8DecoderByTransferMemoryEPNS0_14Vp8DecoderTypeEPvmmttjNS0_23VideoDecoderInputFormatENS0_24VideoDecoderOutputFormatENS0_22VideoDecoderOutputModeE", init_vp8_tm},
+    {"_ZN2nn5codec34InitializeVp8DecoderByRemoteMemoryEPNS0_14Vp8DecoderTypeEmttjNS0_23VideoDecoderInputFormatENS0_24VideoDecoderOutputFormatENS0_22VideoDecoderOutputModeE", init_vp8_rm},
+    {"_ZN2nn5codec33GetVp8DecoderSubmissionReadyEventEPNS0_14Vp8DecoderTypeE", submission_event_ret},
+    // AV1 (dav1d): the codec Xenoblade 2's Switch 2 movies use
+    {"_ZN2nn5codec36InitializeAv1DecoderByTransferMemoryEPNS0_14Av1DecoderTypeEPvmmttjNS0_23VideoDecoderInputFormatENS0_24VideoDecoderOutputFormatENS0_22VideoDecoderOutputModeE", init_av1_tm},
+    {"_ZN2nn5codec34InitializeAv1DecoderByRemoteMemoryEPNS0_14Av1DecoderTypeEmttjNS0_23VideoDecoderInputFormatENS0_24VideoDecoderOutputFormatENS0_22VideoDecoderOutputModeE", init_av1_rm},
+    {"_ZN2nn5codec18FinalizeAv1DecoderEPNS0_14Av1DecoderTypeE", finalize_decoder},
+    {"_ZN2nn5codec24RegisterAv1DecoderBufferEPNS0_14Av1DecoderTypeEjPNS0_25VideoDecoderImagePoolTypeEj", register_buffer},
+    {"_ZN2nn5codec15StartAv1DecoderEPNS0_14Av1DecoderTypeE", start_decoder},
+    {"_ZN2nn5codec14StopAv1DecoderEPNS0_14Av1DecoderTypeE", stop_decoder},
+    {"_ZN2nn5codec15FlushAv1DecoderEPNS0_14Av1DecoderTypeE", flush_decoder},
+    {"_ZN2nn5codec33GetAv1DecoderSubmissionReadyEventEPNS0_14Av1DecoderTypeE", submission_event_ret},
+    {"_ZN2nn5codec27SubmitAv1DecoderInputBufferEPNS0_14Av1DecoderTypeEPKvmNS_8TimeSpanEb", submit_av1},
+    {"_ZN2nn5codec29AcquireAv1DecoderOutputBufferEPjPNS_2gs16NativeSyncHandleEPNS0_14Av1DecoderTypeE", acquire_output},
+    {"_ZN2nn5codec29ReleaseAv1DecoderOutputBufferEPNS0_14Av1DecoderTypeEjNS_2gs16NativeSyncHandleE", release_output},
+    {"_ZN2nn5codec35GetAv1DecoderOutputBufferPropertiesEPtS1_S1_S1_PNS_8TimeSpanEPbPNS0_14Av1DecoderTypeEj", props},
+    // H.264: not decoded here (a clear error instead of the console driver path)
     {"_ZN2nn5codec21InitializeH264DecoderEPNS0_15H264DecoderTypeEPvmmttjNS0_23VideoDecoderInputFormatENS0_24VideoDecoderOutputFormatEPKvm", unsupported_codec},
     {"_ZN2nn5codec21InitializeH264DecoderEPNS0_15H264DecoderTypeEmttjNS0_23VideoDecoderInputFormatENS0_24VideoDecoderOutputFormatEPKvm", unsupported_codec},
     {"_ZN2nn5codec20InitializeAv1DecoderEPNS0_14Av1DecoderTypeEPvmmttjNS0_23VideoDecoderInputFormatENS0_24VideoDecoderOutputFormatE", unsupported_codec},
@@ -904,8 +1060,13 @@ bool install_video_codec_hle() {
             module_override_symbol(im.name);
         }
         g_enabled = true;
+#if NXRT_HAVE_DAV1D
+        NXLOG_I("vcodec", "nn::codec VP9/VP8 (libvpx %s) and AV1 (dav1d %s) decoders on the host (%d threads): %zu imports routed",
+                vpx_codec_version_str(), dav1d_version(), g_threads, sizeof kImports / sizeof kImports[0]);
+#else
         NXLOG_I("vcodec", "nn::codec VP9/VP8 decoders on the host (libvpx %s, %d threads): %zu imports routed", vpx_codec_version_str(), g_threads,
                 sizeof kImports / sizeof kImports[0]);
+#endif
         if (config_get_bool("media", "movie_trace", true)) {
             for (const TraceImport& ti : kTraceImports) {
                 hle_register(ti.t->name, ti.fn);
