@@ -73,7 +73,13 @@ constexpr uint64_t kPrefMarker = 0x4e58524350524546ull;   // "NXRCPREF"
 constexpr uint64_t kEvtMarker = 0x4e58524353594e43ull;    // "NXRCSYNC" at +0x60 of a SyncPointEventType
 constexpr uint64_t kSyncMarker = 0x4e58435600000000ull;   // "NXCV" in the high half of a fence handle's first word
 constexpr uint32_t kManualClear = 0;                      // nn::os::EventClearMode_ManualClear
-constexpr size_t kBacklog = 3;                            // decoded pictures waiting for a buffer before input stops being "ready"
+constexpr size_t kPendingMax = 512;   // packets queued undecoded before a submit pays for one decode to keep the queue bounded. With 8
+                                     // the adapter (which submits the whole movie ahead, pts up to 66 s) decoded one packet for every
+                                     // submit and had no time to service the player: one frame every ~90 ms. Deep enough that submits
+                                     // only copy and the decode happens on demand, one picture per delivered frame.
+constexpr size_t kBacklog = 1;   // decoded pictures waiting for a buffer before input stops being "ready". 3 let the movie library's
+                                 // adapter submit ~10 packets per frame, and every Submit decodes 4K AV1 inline on the player's own thread:
+                                 // the frame loop fell ~180 ms behind and dropped every frame but the first (GetBuffer once, 2026-11-18).
 
 bool g_log = false;
 int g_threads = 4;
@@ -182,6 +188,15 @@ struct BufInfo {
     int64_t pts = 0;
     bool eos = false;
 };
+// A submitted packet waiting for its turn to be decoded. The movie library's adapter thread submits four packets back to back
+// (its own input buffers) and then services the player; with the decode inside Submit* that thread spent all its time decoding
+// 4K AV1 (~26 ms a packet), the player's frames arrived ~85 ms late and its pacing dropped every frame but the first
+// (GetBuffer once, 2026-11-18). Submits only queue now; one packet is decoded when the player needs a picture.
+struct Pending {
+    std::vector<uint8_t> data;
+    int64_t pts = 0;
+    bool eos = false;
+};
 struct Decoder {
     uint32_t id = 0;
     int codec = 9;   // 8 VP8, 9 VP9, 10 AV1 (dav1d; the SDK 3.0.1 movie library decodes AV1)
@@ -196,6 +211,7 @@ struct Decoder {
     std::deque<uint32_t> free;                            // registered or released, not acquired
     std::deque<std::pair<uint32_t, uint64_t>> waiting;    // acquired buffers without a picture yet (index, fence sequence)
     std::deque<Picture> ready;                            // decoded pictures without a buffer yet
+    std::deque<Pending> pending;                          // submitted packets not decoded yet (input order)
     uint64_t next_seq = 1;
     std::atomic<uint64_t> done_seq{0};
     alignas(16) uint8_t submit_event[0x100]{};            // the guest os::SystemEventType handed out as "submission ready"
@@ -468,7 +484,10 @@ void fini_pool(::Ctx* c) {
     if (A(0)) { wr64(A(0), 0); wr64(A(0) + 8, 0); }
     RET(0);
 }
+std::atomic<int64_t> g_last_acquire_ns{0};
+int64_t now_ns() { return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 void read_nv12(::Ctx* c) {
+    const int64_t t0 = now_ns();
     Pool* p = pool_of(A(0));
     const uint64_t sp = c->x[31];
     const uint32_t x0 = static_cast<uint16_t>(A(2)), y0 = static_cast<uint16_t>(A(3));
@@ -485,6 +504,12 @@ void read_nv12(::Ctx* c) {
             NXLOG_I("vcodec", "ReadDecoderOutputImageNv12(index %u, %ux%u at %u,%u) pool %llx", static_cast<uint32_t>(A(1)), w, h, x0, y0,
                     (unsigned long long)A(0));
     }
+    if (g_log) {
+        static std::atomic<uint32_t> uv_n{0};
+        if (uv_n.fetch_add(1, std::memory_order_relaxed) < 10)
+            NXLOG_I("vcodec", "read #%u: uvdst=0x%llx uvstride=%zu uvsize=%zu uv0=%u", uv_n.load(), (unsigned long long)uvdst, uvstride, uvsize,
+                    uvdst && uvsize > 2 ? static_cast<unsigned>(uvdst[0]) : 999u);
+    }
     if (!p || p->nv12.empty() || !ydst) { RET(0); return; }
     const size_t pw = p->w, ph = p->h;
     const size_t cw = x0 < pw ? std::min<size_t>(w, pw - x0) : 0;
@@ -497,6 +522,12 @@ void read_nv12(::Ctx* c) {
             if (y * uvstride + cw > uvsize) break;
             std::memcpy(uvdst + y * uvstride, &p->nv12[pw * ph + (y0 / 2 + y) * pw + (x0 & ~1u)], cw);
         }
+    if (g_log) {
+        static std::atomic<uint32_t> n{0};
+        const int64_t t1 = now_ns(), since = t0 - g_last_acquire_ns.load(std::memory_order_relaxed);
+        if ((since > 40'000'000 || t1 - t0 > 10'000'000) && n.fetch_add(1, std::memory_order_relaxed) < 30)
+            NXLOG_I("vcodec", "read timing: %.1f ms after acquire, copy took %.1f ms", since / 1e6, (t1 - t0) / 1e6);
+    }
     RET(0);
 }
 inline uint8_t clamp8(int v) { return static_cast<uint8_t>(v < 0 ? 0 : v > 255 ? 255 : v); }
@@ -699,6 +730,24 @@ void submission_event_ret(::Ctx* c) {   // (dec) -> SystemEventType*
     if (g_log) NXLOG_I("vcodec", "decoder %u: submission ready event -> 0x%llx (created %d)", d->id, (unsigned long long)ev, make ? 1 : 0);
     RET(ev);
 }
+// Decodes the oldest queued packet (d.mu held): a picture goes to ready, and an end-of-stream packet adds its picture too.
+void decode_one_locked(Decoder& d) {
+    if (d.pending.empty()) return;
+    Pending p = std::move(d.pending.front());
+    d.pending.pop_front();
+    if (!p.data.empty()) decode_into(d, p.data.data(), p.data.size(), p.pts);
+    if (p.eos) {
+        if (d.vpx_ok) decode_into(d, nullptr, 0, p.pts);   // drain
+        Picture pic;
+        pic.nv12 = d.last;
+        pic.w = d.last_w;
+        pic.h = d.last_h;
+        pic.pts = p.pts;
+        pic.eos = true;
+        d.ready.push_back(std::move(pic));
+        NXLOG_I("vcodec", "decoder %u: end of stream after %llu pictures", d.id, (unsigned long long)d.pictures);
+    }
+}
 // The body shared by the two Submit*DecoderInputBuffer shapes: SDK 3.0.1's AV1 one has no size_t* out parameter, the VP8 / VP9 one
 // has it first.
 void submit_packet(::Ctx* c, uint64_t dec, const uint8_t* data, size_t size, int64_t pts, bool eos) {
@@ -708,18 +757,15 @@ void submit_packet(::Ctx* c, uint64_t dec, const uint8_t* data, size_t size, int
     bool fences = false;
     {
         std::lock_guard<std::mutex> lk(d->mu);
-        if (data && size) decode_into(*d, data, size, pts);
-        if (eos) {
-            if (d->vpx_ok) decode_into(*d, nullptr, 0, pts);   // drain
-            Picture p;
-            p.nv12 = d->last;
-            p.w = d->last_w;
-            p.h = d->last_h;
-            p.pts = pts;
-            p.eos = true;
-            d->ready.push_back(std::move(p));
-            NXLOG_I("vcodec", "decoder %u: end of stream after %llu pictures", d->id, (unsigned long long)d->pictures);
-        }
+        Pending p;
+        if (data && size) p.data.assign(data, data + size);
+        p.pts = pts;
+        p.eos = eos;
+        d->pending.push_back(std::move(p));
+        // Never decode here: the adapter thread submits the whole movie ahead, and a decode per submit (23 ms) left it no time to
+        // service the player - the acquire-to-read gap measured 48-69 ms with the copies at 1.1-1.7 ms (2026-11-18). The decode
+        // happens in AcquireOutputBuffer, one picture per delivered frame, or here only if the queue is full.
+        if (d->pending.size() > kPendingMax) decode_one_locked(*d);
         fences = assign(*d);
         d->want_submit_signal = true;
     }
@@ -751,9 +797,11 @@ void acquire_output(::Ctx* c) {   // (u32* index, NativeSyncHandle* fence, dec)
             d->free.pop_front();
             seq = d->next_seq++;
             d->waiting.emplace_back(index, seq);
+            if (d->ready.empty()) decode_one_locked(*d);   // on demand: the player's frame brings its own decode
             fences = assign(*d);
         }
     }
+    g_last_acquire_ns.store(now_ns(), std::memory_order_relaxed);
     if (A(0)) wr32(A(0), index);
     if (A(1)) {
         wr64(A(1), d && seq ? (kSyncMarker | d->id) : 0);
@@ -781,12 +829,27 @@ void release_output(::Ctx* c) {   // (dec, index, pre-fence)
     }
     RET(0);
 }
+int64_t g_pts_shift_ns = 0;      // [media] movie_pts_shift_ms: see the install note
+bool g_pts_wallclock = false;   // [media] movie_pts_wallclock: report the frame time as our own elapsed time (diagnostic)
 void props_write(uint64_t pw, uint64_t ph, uint64_t pa, uint64_t pb, uint64_t ppts, uint64_t peos, const BufInfo& b) {
     if (pw) wr16(pw, b.w);
     if (ph) wr16(ph, b.h);
     if (pa) wr16(pa, b.w);
     if (pb) wr16(pb, b.h);
-    if (ppts) wr64(ppts, static_cast<uint64_t>(b.pts));
+    if (ppts) {
+        if (g_pts_wallclock) {
+            // Diagnostic: the movie's own timestamps run on the movie clock while the player's clock runs on real time, and a 4K AV1
+            // decode plus the library's fill put every frame far behind it (it dropped all but the first). Handing out our elapsed
+            // time instead keeps the player's "late" check quiet, so the picture should move at whatever rate the pipeline reaches.
+            static std::atomic<int64_t> start_ns{0};
+            const int64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+            int64_t s0 = start_ns.load(std::memory_order_relaxed);
+            if (!s0 && b.pts > 0) { start_ns.compare_exchange_strong(s0, now); s0 = start_ns.load(); }
+            wr64(ppts, static_cast<uint64_t>(s0 ? now - s0 : 0));
+        } else {
+            wr64(ppts, static_cast<uint64_t>(b.pts > 0 ? b.pts + g_pts_shift_ns : b.pts));
+        }
+    }
     if (peos) *reinterpret_cast<uint8_t*>(peos) = b.eos ? 1 : 0;
     if (g_log) {
         static std::atomic<uint32_t> n{0};
@@ -1086,6 +1149,11 @@ bool install_video_codec_hle() {
         }
         g_log = config_get_bool("media", "video_decoder_log", false);
         g_threads = static_cast<int>(std::clamp<int64_t>(config_get_int("media", "video_decoder_threads", 4), 1, 16));
+        // Diagnostic: the player drops a frame whose timestamp is more than a frame or so behind its own movie clock, and a software 4K
+        // AV1 decode plus the pool->VideoFrame copies put every frame ~85 ms behind, so it dropped all but the first. Reporting the
+        // timestamps this much later makes them look on time (at the cost of that much A/V offset).
+        g_pts_shift_ns = config_get_int("media", "movie_pts_shift_ms", 0) * 1000000;
+        g_pts_wallclock = config_get_bool("media", "movie_pts_wallclock", false);
         install_player_trace();   // [media] player_trace: the player's message queue and timer, logged as they are called
         for (const Import& im : kImports) {
             hle_register(im.name, im.fn);

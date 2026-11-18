@@ -47,6 +47,8 @@ constexpr const char* kHolderTimer = "_ZN2nn2os25InitializeMultiWaitHolderEPNS0_
 constexpr const char* kLink = "_ZN2nn2os19LinkMultiWaitHolderEPNS0_13MultiWaitTypeEPNS0_19MultiWaitHolderTypeE";
 constexpr const char* kGetTs = "_ZN5movie10VideoFrame12GetTimeStampEPN2nn8TimeSpanE";
 constexpr const char* kGetBuf = "_ZN5movie10VideoFrame9GetBufferEPPvPm";
+constexpr const char* kSleep = "_ZN2nn2os11SleepThreadENS_8TimeSpanE";
+constexpr const char* kReleaseFrame = "_ZN5movie12VideoDecoder17ReleaseVideoFrameEPNS_10VideoFrameE";
 
 bool g_on = false;
 bool g_poke = false;   // [media] movie_timer_poke: mark a started periodic timer due from the host (diagnostic)
@@ -89,6 +91,20 @@ uint64_t fn_holder_timer() { static const uint64_t f = module_find_symbol(kHolde
 uint64_t fn_link() { static const uint64_t f = module_find_symbol(kLink); return f; }
 uint64_t fn_get_ts() { static const uint64_t f = module_find_symbol(kGetTs); return f; }
 uint64_t fn_get_buf() { static const uint64_t f = module_find_symbol(kGetBuf); return f; }
+uint64_t fn_sleep() { static const uint64_t f = module_find_symbol(kSleep); return f; }
+uint64_t fn_release_frame() { static const uint64_t f = module_find_symbol(kReleaseFrame); return f; }
+std::atomic<int64_t> g_last_getbuf_ns{0};
+int64_t now_ns() { return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+void release_frame(::Ctx* c) {   // (VideoDecoder*, VideoFrame*): how long the player held the frame (pixels -> texture -> back)
+    const uint64_t fn = fn_release_frame();
+    if (!fn) { A(0) = 0; return; }
+    const uint64_t r = call_original(c, fn);
+    if (g_on) {
+        const int64_t t = now_ns(), since = t - g_last_getbuf_ns.load(std::memory_order_relaxed);
+        if (seen(g_any_seen, 0x4000, 40)) NXLOG_I(kTag, "ReleaseVideoFrame: %.1f ms after GetBuffer", since / 1e6);
+    }
+    A(0) = r;
+}
 
 void send_msg(::Ctx* c) {   // (nn::os::MessageQueueType*, u64 value) -> nn::Result
     const uint64_t q = A(0), v = A(1), lr = c->x[30];
@@ -190,11 +206,20 @@ void frame_buffer(::Ctx* c) {   // (VideoFrame*, void** data, size_t* size): doe
         uint64_t data = 0, size = 0;
         if (pdata && mem::is_mapped(pdata, 8)) std::memcpy(&data, reinterpret_cast<const void*>(pdata), 8);
         if (psize && mem::is_mapped(psize, 8)) std::memcpy(&size, reinterpret_cast<const void*>(psize), 8);
+        g_last_getbuf_ns.store(now_ns(), std::memory_order_relaxed);
         if (seen(g_any_seen, 0x2000, 40))
             NXLOG_I(kTag, "VideoFrame::GetBuffer(0x%llx) -> %llx bytes, data 0x%llx, lr 0x%llx", f, (unsigned long long)size,
                     (unsigned long long)data, lr);
     }
     A(0) = r;
+}
+void sleep_thread(::Ctx* c) {   // (TimeSpan ns): how long the player's pacing sleeps, and from where
+    const int64_t ns = static_cast<int64_t>(A(0)), lr = static_cast<int64_t>(c->x[30]);
+    const uint64_t fn = fn_sleep();
+    const bool in_player = lr >= 0x7100710000ll && lr < 0x7100730000ll;   // the movie player's own code in main
+    if (fn && g_on && in_player && ns >= 1000000 && seen(g_any_seen, 0x3000, 80))
+        NXLOG_I(kTag, "SleepThread(%lld ns) at lr 0x%llx", (long long)ns, (unsigned long long)lr);
+    if (fn) call_original(c, fn);
 }
 void link_holder(::Ctx* c) {   // (MultiWaitType*, MultiWaitHolderType*): which multi a holder lands in
     const uint64_t m = A(0), h = A(1), lr = c->x[30];
@@ -222,7 +247,8 @@ struct Entry {
 const Entry kEntries[] = {
     {kSend, send_msg},        {kRecv, recv_msg},           {kStartTimer, start_timer},   {kStopTimer, stop_timer},
     {kWaitTimer, wait_timer}, {kClearTimer, clear_timer},  {kWaitAny, wait_any},         {kHolderTimer, holder_timer},
-    {kLink, link_holder},     {kGetTs, frame_timestamp},   {kGetBuf, frame_buffer},
+    {kLink, link_holder},     {kGetTs, frame_timestamp},   {kGetBuf, frame_buffer},   {kSleep, sleep_thread},
+    {kReleaseFrame, release_frame},
 };
 
 }  // namespace
