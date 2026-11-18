@@ -195,6 +195,7 @@ bool any_waiter_on(uint64_t key);
 // SystemEventTypes a guest thread parked on (its futex said so): the movie player waits on one of its own, and the library that
 // should signal it is the one this port replaces, so deliveries wake them here.
 void watch_system_event(uint64_t ev);
+void clear_watched_system_events();   // a movie starting: only what parks after it belongs to the player
 size_t watched_system_events(uint64_t* out, size_t max);
 uint32_t signal_process_wide_key(uint64_t key, int32_t count);
 uint32_t wait_for_address(uint64_t addr, uint32_t arb_type, int32_t value, int64_t timeout_ns);     // 0 less, 1 dec+less, 2 equal

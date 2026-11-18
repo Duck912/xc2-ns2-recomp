@@ -282,8 +282,10 @@ std::string sync_wait_report() {
         int dumped = 0;
         for (KThread* t : v) {
             const uint64_t a = t->*field;
-            std::snprintf(b, sizeof b, "  %-18s %s (guest %llu) address 0x%llx value 0x%08x tag 0x%x wake %d\n", kind, t->name.c_str(),
-                          static_cast<unsigned long long>(t->id), static_cast<unsigned long long>(a), a ? load32(a) : 0u, t->wait_tag, t->wake ? 1 : 0);
+            // For a condition-variable wait the mutex word says who holds it (the owner's tag): that is the other half of the deadlock.
+            std::snprintf(b, sizeof b, "  %-18s %s (guest %llu) address 0x%llx value 0x%08x tag 0x%x wake %d mutex 0x%llx = 0x%08x\n", kind,
+                          t->name.c_str(), static_cast<unsigned long long>(t->id), static_cast<unsigned long long>(a), a ? load32(a) : 0u, t->wait_tag,
+                          t->wake ? 1 : 0, static_cast<unsigned long long>(t->wait_mutex), t->wait_mutex ? load32(t->wait_mutex) : 0u);
             out += b;
             // What the waiter is parked on: a SystemEvent has its type byte at +0x28 and its key at +0x20, so 0x60 bytes from
             // the key - 0x20 show the handle and any vtable the object carries (a name is not enough: this game waits on objects
@@ -378,6 +380,11 @@ void watch_system_event(uint64_t ev) {
     if (!ev) return;
     std::lock_guard<std::mutex> lk(g_watch_mu);
     if (g_watch.size() < 8 && std::find(g_watch.begin(), g_watch.end(), ev) == g_watch.end()) g_watch.push_back(ev);
+}
+
+void clear_watched_system_events() {
+    std::lock_guard<std::mutex> lk(g_watch_mu);
+    g_watch.clear();
 }
 
 size_t watched_system_events(uint64_t* out, size_t max) {

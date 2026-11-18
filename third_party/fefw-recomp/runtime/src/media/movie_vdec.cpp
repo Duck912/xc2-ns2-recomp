@@ -483,6 +483,9 @@ void vd_initialize(::Ctx* c) {   // (self, void* mem, size_t size, MediaMimeType
     attach_event(c, d->out_ev, d->out_ready);
     gcall(c, fns().create_event, reinterpret_cast<uint64_t>(d->fmt_ev), kAutoClear, 0);   // the format never changes
     d->worker = std::thread(worker_main, d);
+    // A movie starting: from here on, what guest threads park on belongs to the player (the engine's own condition variables
+    // registered before it would fill a short list).
+    kernel::clear_watched_system_events();
     NXLOG_I(kTag, "VideoDecoder: MIME type %d%s, output format %d, mode %d", mime, mime == kMimeAv1 ? " (AV1)" : "", fmt, mode);
     RET(0);
 }
@@ -925,12 +928,30 @@ void movie_tick() {
             }
         }
     }
-    // The player waits on a SystemEvent of its own (one the library this port replaces would signal); any frame handed over is a
-    // reason to wake it, so it re-checks what it was waiting for (work/MOVIE-FREEZE-NOTES.md).
-    if (handed) {
+    // The player waits on a SystemEvent of its own (the library this port replaces would signal it). It is signalled on every
+    // presentation while a movie is playing, not only when a picture was handed over: the wait that parks it is between frames as
+    // well, and a missed wake there leaves it asleep with the event already flagged (measured 2026-11-18: its event held a pending
+    // signal and the thread still sat on the futex).
+    {
         uint64_t evs[8];
         const size_t n = kernel::watched_system_events(evs, 8);
         for (size_t i = 0; i < n; ++i) kernel::signal_system_event(evs[i]);
+        if (g_log) {
+            static std::atomic<uint64_t> n_ticks{0};
+            const uint64_t t = n_ticks.fetch_add(1);
+            if (t % 60 == 0 && n) {
+                char line[400];
+                int used = 0;
+                for (size_t i = 0; i < n; ++i) {
+                    const uint64_t key = evs[i] + 0x20;
+                    const uint32_t word = *reinterpret_cast<const uint32_t*>(static_cast<uintptr_t>(key));
+                    const uint8_t flag = *reinterpret_cast<const uint8_t*>(static_cast<uintptr_t>(evs[i] + 0x10));
+                    used += std::snprintf(line + used, sizeof line - static_cast<size_t>(used), " [%llx flag %02x key %u waiter %d]", 
+                                          static_cast<unsigned long long>(evs[i]), flag, word, kernel::any_waiter_on(key) ? 1 : 0);
+                }
+                NXLOG_I(kTag, "watched events:%s", line);
+            }
+        }
     }
 }
 
