@@ -39,6 +39,24 @@ def read_env(path):
     return env
 
 
+def ini_language():
+    """[system] language from nxrt.ini: the game follows the console language, and the launcher hands it to the runtime
+    as an environment value because the config lookup answers AmericanEnglish for it a moment after reading the file."""
+    try:
+        text = open(os.path.join(ROOT, "nxrt.ini"), encoding="utf-8", errors="ignore").read()
+    except OSError:
+        return ""
+    section = ""
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("["):
+            section = line
+            continue
+        if section == "[system]" and line.startswith("language") and "=" in line:
+            return line.split("=", 1)[1].strip()
+    return ""
+
+
 def run_game(args):
     exe = args.exe or os.path.join(ROOT, "xc2_boot.exe")
     exefs = os.path.join(ROOT, "exefs")
@@ -56,25 +74,43 @@ def run_game(args):
     env["NXRT_NVN_DS_DEBUG"] = "1"
     env["NXRT_NVN_FS_DEBUG"] = "1"
     env["NXRT_NVN_FRAME_CSV"] = csv
+    lang = ini_language()
+    if lang:
+        env["NXRT_SYSTEM_LANGUAGE"] = lang
+    os.makedirs(os.path.dirname(os.path.join(ROOT, "nxrt.log")), exist_ok=True)
     env["NXRT_INI"] = os.path.join(ROOT, "nxrt.ini")
+    t0 = time.time()
     argv = [exe, "--exefs", exefs, "--gfx", "headless" if args.headless else "window", "--log", log]
     print("running: %s" % " ".join(argv))
     print("close the game when you have seen enough; this packages the run afterwards.")
     p = subprocess.Popen(argv, cwd=ROOT, env=env)
+    # A frozen game never exits, and a report is worth most exactly then: stop when the log has not grown for --stall
+    # seconds (a frozen render thread writes nothing), or after --seconds when one is given.
+    stall = max(10, args.stall)
+    last_size, last_change = -1, time.time()
     try:
-        if args.seconds:
+        while p.poll() is None:
+            if args.seconds and time.time() - t0 >= args.seconds:
+                print("stopping after %d s" % args.seconds)
+                break
             try:
-                p.wait(timeout=args.seconds)
-            except subprocess.TimeoutExpired:
-                p.terminate()
-                try:
-                    p.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    p.kill()
-        else:
-            p.wait()
+                size = os.path.getsize(log)
+            except OSError:
+                size = last_size
+            if size != last_size:
+                last_size, last_change = size, time.time()
+            elif time.time() - last_change >= stall:
+                print("the log has not grown for %d s: the game looks frozen, stopping it (the report keeps what it wrote)" % stall)
+                break
+            time.sleep(1.0)
     except KeyboardInterrupt:
+        print("interrupted: packaging what the run wrote")
+    if p.poll() is None:
         p.terminate()
+        try:
+            p.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            p.kill()
     return log, csv
 
 
@@ -97,6 +133,7 @@ def main():
     ap = argparse.ArgumentParser(description="Collect one diagnostics report into a zip.")
     ap.add_argument("--headless", action="store_true", help="no window")
     ap.add_argument("--seconds", type=int, default=0, help="stop the game this many seconds after it starts")
+    ap.add_argument("--stall", type=int, default=60, help="stop when the log has not grown for this many seconds (a frozen game)")
     ap.add_argument("--from-log", default="", help="package this log instead of running the game")
     ap.add_argument("--exe", default="", help="the game executable (default: <install>\\xc2_boot.exe)")
     ap.add_argument("--no-zip", action="store_true")
@@ -119,6 +156,9 @@ def main():
         log = alt
     with open(log, encoding="utf-8", errors="ignore") as f:
         lines = [l.rstrip("\n") for l in f]
+    if any("VK_LAYER_KHRONOS_validation is not installed" in l for l in lines):
+        print("note: the Vulkan validation layer is not installed on this machine, so vuids.txt will be empty -")
+        print("      nothing in this run checked the API usage. The rest of the report is still useful.")
 
     # 1. the validation layer, which is the whole point
     vuids = [l for l in lines if "VUID-" in l or "Undefined-Value-" in l]
