@@ -152,6 +152,7 @@ struct Picture {   // a decoded picture in host memory (NV12 at its width), or t
 
 struct Decoder {
     std::mutex mu;
+    std::atomic<bool> signal_pending{false};   // a picture became ready: signal out_ev once the lock is released
     std::condition_variable cv;              // the worker waits here for packets and for room in `decoded`
     std::thread worker;
     bool stop = false;
@@ -279,10 +280,19 @@ void deliver(Decoder& d) {
         any = true;
     }
     if (any) {
-        d.out_ready.signal();
-        kernel::signal_system_event(reinterpret_cast<uint64_t>(d.out_ev));
+        // Signalling happens after the caller drops the lock: a woken guest thread of higher priority runs the moment the event is
+        // signalled and waits for this decoder's lock, so a signal sent while holding it deadlocks the waker against the woken one
+        // (the Switch 1 ports record the same deadlock at the first released output; work/MOVIE-FREEZE-NOTES.md).
+        d.signal_pending.store(true, std::memory_order_relaxed);
         d.cv.notify_all();   // room in `decoded` again
     }
+}
+
+// Signals the player (caller must NOT hold the decoder lock).
+void flush_signal(Decoder& d) {
+    if (!d.signal_pending.exchange(false, std::memory_order_relaxed)) return;
+    d.out_ready.signal();
+    kernel::signal_system_event(reinterpret_cast<uint64_t>(d.out_ev));
 }
 
 // Decodes one packet into pictures (worker thread, without the lock). `av1` is the worker's own context.
@@ -652,10 +662,7 @@ uint32_t acquire(Decoder* d, uint64_t* out, int* idx) {
     }
     *out = d->ready.front();
     d->ready.pop_front();
-    if (!d->ready.empty()) {   // one signal per wait: the next ready frame needs its own
-        d->out_ready.signal();
-        kernel::signal_system_event(reinterpret_cast<uint64_t>(d->out_ev));
-    }
+    if (!d->ready.empty()) d->signal_pending.store(true, std::memory_order_relaxed);   // one signal per wait: the next ready frame needs its own
     if (idx) {
         *idx = -1;
         for (size_t i = 0; i < d->frames.size(); ++i)
@@ -730,6 +737,7 @@ void vd_release(::Ctx* c) {   // (self, VideoFrame*)
                            d->free_.size());
         deliver(*d);
     }
+    flush_signal(*d);   // outside the lock: a woken player runs at once and calls straight back in
     RET(0);
 }
 
@@ -905,10 +913,13 @@ void movie_tick() {
     const int64_t now = static_cast<int64_t>(GetTickCount64());
     for (Decoder* d : live) {
         if (!d) continue;
-        std::lock_guard<std::mutex> lk(d->mu);
-        if (d->frames.empty()) continue;
-        deliver(*d);
-        if (!d->ready.empty()) handed = true;
+        {
+            std::lock_guard<std::mutex> lk(d->mu);
+            if (d->frames.empty()) continue;
+            deliver(*d);
+            if (!d->ready.empty()) handed = true;
+        }
+        flush_signal(*d);   // outside the lock (see deliver)
         if (g_log) {
             static std::atomic<uint64_t> ticks{0};
             const uint64_t t = ticks.fetch_add(1);
