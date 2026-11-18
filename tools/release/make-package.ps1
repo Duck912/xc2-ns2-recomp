@@ -108,6 +108,9 @@ Need (Join-Path $Zig 'zig.exe') 'zig.exe'
 CopyTree $Zig (Join-Path $Out 'tools\build\zig')
 Say ("zig           {0:N1} MB" -f (Size (Join-Path $Out 'tools\build\zig')))
 
+# --- 3b. what this folder is, so a player who unzips it has somewhere to start --------------------------------
+Copy-Item (Join-Path $PSScriptRoot 'PACKAGE-README.txt') (Join-Path $Out 'README.txt') -Force
+
 # --- 4. the engine, the shader corpus extractor, and what the lift needs --------------------------------------
 New-Item -ItemType Directory -Force (Join-Path $Out 'engine') | Out-Null
 Copy-Item (Join-Path $root 'tools\setup\xc2_setup.py') (Join-Path $Out 'engine') -Force
