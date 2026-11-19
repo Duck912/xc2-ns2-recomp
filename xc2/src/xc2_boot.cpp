@@ -862,6 +862,54 @@ static void arm_ns1_probe(uint64_t main_base) {
             return 0;
         }, nullptr);
     }
+    // XC2_RENDER_SIZE_PROBE=1: where the dynamic resolution actually lives. f_7100844120 (main+0x844120) reads four int32 at
+    // [*(this+8) + 0x5E0] + 24..39, converts them to float and hands them to main+0x8442E0, which multiplies them by 1.0 or
+    // 0.5 to size the twenty render targets. Those four are the live 3D size - not the lib_nx.ini settings object, which was
+    // searched and came up empty (HANDOVER 95.16). Logging them (and, once they match the ladder, writing 1280x720 back) is
+    // the host-side equivalent of what the NS1 quality mods do with one branch instruction.
+    if (std::getenv("XC2_RENDER_SIZE_PROBE")) {
+        static int shown = 0;
+        static uint32_t last0 = 0xFFFFFFFFu, last1 = 0xFFFFFFFFu;
+        nxrt::hook_add_entry(main_base + 0x844120, [](Ctx* c, uint64_t, void*) -> int {
+            const uint64_t self = c->x[0];
+            if (!nxrt::mem::is_mapped(self + 8, 8)) return 0;
+            uint64_t obj = 0;
+            std::memcpy(&obj, reinterpret_cast<const void*>(self + 8), 8);
+            if (!obj || !nxrt::mem::is_mapped(obj + 0x5E0, 8)) return 0;
+            uint64_t p = 0;
+            std::memcpy(&p, reinterpret_cast<const void*>(obj + 0x5E0), 8);
+            if (!p || !nxrt::mem::is_mapped(p + 24, 16)) return 0;
+            uint32_t v[4] = {};
+            std::memcpy(v, reinterpret_cast<const void*>(p + 24), 16);
+            // XC2_RENDER_SIZE_PIN=1280x720: pin the 3D render size instead of only logging it. The ladder only ever goes
+            // down from 1280x720 (the console saves time, a desktop does not need to), and this record is what the twenty
+            // render targets below are sized from. Pin only while the game is inside the 3D range: the first calls carry
+            // the 4K output size, which must not be touched.
+            static uint32_t pin_w = 0, pin_h = 0;
+            static bool pin_read = false;
+            if (!pin_read) {
+                pin_read = true;
+                if (const char* s = std::getenv("XC2_RENDER_SIZE_PIN")) {
+                    unsigned a = 0, b = 0;
+                    if (std::sscanf(s, "%ux%u", &a, &b) == 2 && a && b) { pin_w = a; pin_h = b; }
+                }
+            }
+            if (pin_w && v[0] <= 1920 && v[1] <= 1080 && (v[0] < pin_w || v[1] < pin_h)) {
+                const uint32_t pinned[2] = {pin_w, pin_h};
+                std::memcpy(reinterpret_cast<void*>(p + 24), pinned, 8);
+                v[0] = pin_w;
+                v[1] = pin_h;
+            }
+            if ((v[0] != last0 || v[1] != last1) && shown < 40) {
+                ++shown;
+                last0 = v[0];
+                last1 = v[1];
+                NXLOG_I("rsize", "render size: %u x %u (v2 %u v3 %u) obj %llx +5E0 %llx", v[0], v[1], v[2], v[3],
+                        static_cast<unsigned long long>(obj), static_cast<unsigned long long>(p));
+            }
+            return 0;
+        }, nullptr);
+    }
     // XC2_NS1_UI_PROBE=1: the UI's own view of the input. f_7100830b18 (main+0x830b18) is a cursor widget update that reads the
     // per-player input word at [this + 160 + idx*4] (idx = *(u32*)(*(u64*)0x7100b8e000+1656)), tests the four direction bits (0xf000)
     // and moves its own cursor state at [this+168]. The pad flags carry A as 0x4 (HANDOVER 86.19), so this shows whether the UI is

@@ -32,6 +32,7 @@ entryhook 7100001fc4   # apps::LauncherApp::wkRender()
 entryhook 710073fc4c   # ml::Scn::Scn(ml::ScnSetup const*)
 entryhook 7100740860   # ml::Scn::addRenderCB
 entryhook 71007409ac   # ml::Scn::createMdl
+entryhook 7100844120   # renderer: render-target ladder input (XC2_RENDER_SIZE_PROBE, see xc2_boot.cpp)
 entryhook 710142c50    # tl::TitleApplet::initialize(fw::Framework const&)
 entryhook 710142cf0    # tl::TitleApplet::update(fw::UpdateInfo const&)
 entryhook 710142d18    # tl::TitleApplet::postUpdate(fw::UpdateInfo const&)
