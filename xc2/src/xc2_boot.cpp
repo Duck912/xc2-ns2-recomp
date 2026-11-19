@@ -1487,11 +1487,20 @@ int main(int argc, char **argv) {
         nxrt::platform::init();
         nxrt::platform::WindowDesc wd;
         wd.title = nxrt::game::info().title;
-        // [gfx] window_width / window_height (default 1280x720): the window is the swapchain and the size play mode tells the game its
-        // display is, so this is how a 1080p output is asked for; the play settings' [display] width/height only move a window that already
-        // exists (HANDOVER 50).
-        wd.width = static_cast<int>(nxrt::config_get_int("gfx", "window_width", 1280));
-        wd.height = static_cast<int>(nxrt::config_get_int("gfx", "window_height", 720));
+        // [gfx] window_width / window_height: the window is the swapchain, so this is the size the player actually sees. Absent or 0
+        // means the display's own size: the game composes at the console's buffer maximum either way (2160p docked, see
+        // switch2.cpp vi_query_buffer_max_resolution), so a 720p default window threw that composite away - measured 2026-11-19,
+        // the dev profile and the 0.1.3 install both present 1280x720 while the game renders 3840x2160 (HANDOVER 220).
+        int win_w = static_cast<int>(nxrt::config_get_int("gfx", "window_width", 0));
+        int win_h = static_cast<int>(nxrt::config_get_int("gfx", "window_height", 0));
+        if (win_w <= 0 || win_h <= 0) {
+            win_w = ::GetSystemMetrics(SM_CXSCREEN);
+            win_h = ::GetSystemMetrics(SM_CYSCREEN);
+            if (win_w < 320 || win_h < 240) { win_w = 1280; win_h = 720; }   // no desktop mode to ask (session 0)
+        }
+        wd.width = win_w;
+        wd.height = win_h;
+        NXLOG_I("boot", "window %dx%d (%s)", win_w, win_h, win_w == ::GetSystemMetrics(SM_CXSCREEN) ? "the display's own size" : "[gfx] window_width/height");
         if (!nxrt::platform::create_window(wd)) die("cannot create the window");
     }
     {
