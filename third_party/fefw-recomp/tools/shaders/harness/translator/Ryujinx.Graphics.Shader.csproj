@@ -41,9 +41,11 @@
     <ShaderPatch Include="spirv-pixld-instemit.patch" File="Instructions/InstEmit.cs" />
     <!-- Ampere front end (D4): SSA room for the uniform registers UR/UP, kept as extra Flag registers. -->
     <ShaderPatch Include="ampere-uniform-registers.patch" File="Decoders/RegisterConsts.cs" />
-    <!-- spirv-call-args.patch is gone: the checkout in third_party/ryubing already carries the call-argument fix
-         ("XCX: SPIR-V passes call arguments by pointer to a variable ... bool usedByCall"), so applying the patch again
-         cannot match its context (HANDOVER 73). AstOptimizer.cs is compiled from the checkout as it is. -->
+    <!-- Back in on 2026-11-19: the checkout in third_party/ryubing does NOT carry the call-argument fix after all
+         (grep usedByCall: nothing). Without it 563 of 12,132 blocks throw InvalidCastException/KeyNotFoundException in
+         GenerateCall and only come out through the DebugMode retry - much larger modules and slower pipeline creation
+         (handover 57). HANDOVER 73's note that the patch could not match its context is about a different checkout. -->
+    <ShaderPatch Include="spirv-call-args.patch" File="StructuredIr/AstOptimizer.cs" />
     <ShaderPatch Include="spirv-g2s-c0-base.patch" File="Translation/Optimizations/GlobalToStorage.cs" />
     <!-- NVN2: constant banks 18..31 (c[0x18] push constants) and up to 32 storage buffers. -->
     <ShaderPatch Include="ampere-resource-slots.patch" File="Translation/ResourceManager.cs" />
@@ -55,7 +57,7 @@
 
   <ItemGroup>
     <Compile Include="$(ShaderSrc)**/*.cs"
-             Exclude="$(ShaderSrc)Instructions/InstEmitMove.cs;$(ShaderSrc)Translation/HelperFunctionManager.cs;$(ShaderSrc)Instructions/InstEmitWarp.cs;$(ShaderSrc)bin/**;$(ShaderSrc)obj/**;$(ShaderSrc)CodeGen/Spirv/SpirvGenerator.cs;$(ShaderSrc)Instructions/InstEmitFloatArithmetic.cs;$(ShaderSrc)IntermediateRepresentation/IoVariable.cs;$(ShaderSrc)CodeGen/Spirv/IoMap.cs;$(ShaderSrc)CodeGen/Glsl/Instructions/IoMap.cs;$(ShaderSrc)CodeGen/Spirv/Declarations.cs;$(ShaderSrc)Instructions/InstEmit.cs;$(ShaderSrc)Decoders/RegisterConsts.cs;$(ShaderSrc)Translation/Optimizations/GlobalToStorage.cs;$(ShaderSrc)Translation/ResourceManager.cs;$(ShaderSrc)Translation/Optimizations/BindlessElimination.cs;$(ShaderSrc)Translation/Optimizations/Optimizer.cs;$(ShaderSrc)Translation/Transforms/TexturePass.cs" />
+             Exclude="$(ShaderSrc)StructuredIr/AstOptimizer.cs;$(ShaderSrc)Instructions/InstEmitMove.cs;$(ShaderSrc)Translation/HelperFunctionManager.cs;$(ShaderSrc)Instructions/InstEmitWarp.cs;$(ShaderSrc)bin/**;$(ShaderSrc)obj/**;$(ShaderSrc)CodeGen/Spirv/SpirvGenerator.cs;$(ShaderSrc)Instructions/InstEmitFloatArithmetic.cs;$(ShaderSrc)IntermediateRepresentation/IoVariable.cs;$(ShaderSrc)CodeGen/Spirv/IoMap.cs;$(ShaderSrc)CodeGen/Glsl/Instructions/IoMap.cs;$(ShaderSrc)CodeGen/Spirv/Declarations.cs;$(ShaderSrc)Instructions/InstEmit.cs;$(ShaderSrc)Decoders/RegisterConsts.cs;$(ShaderSrc)Translation/Optimizations/GlobalToStorage.cs;$(ShaderSrc)Translation/ResourceManager.cs;$(ShaderSrc)Translation/Optimizations/BindlessElimination.cs;$(ShaderSrc)Translation/Optimizations/Optimizer.cs;$(ShaderSrc)Translation/Transforms/TexturePass.cs" />
     <Compile Include="$(PatchedDir)Translation/HelperFunctionManager.cs" />
     <Compile Include="$(PatchedDir)Instructions/InstEmitMove.cs" />
     <Compile Include="$(PatchedDir)Instructions/InstEmitWarp.cs" />
@@ -68,6 +70,7 @@
     <Compile Include="$(PatchedDir)Instructions/InstEmit.cs" />
     <Compile Include="$(PatchedDir)Decoders/RegisterConsts.cs" />
     <Compile Include="$(PatchedDir)Translation/Optimizations/GlobalToStorage.cs" />
+    <Compile Include="$(PatchedDir)StructuredIr/AstOptimizer.cs" />
     <Compile Include="$(PatchedDir)Translation/ResourceManager.cs" />
     <Compile Include="$(PatchedDir)Translation/Optimizations/BindlessElimination.cs" />
     <Compile Include="$(PatchedDir)Translation/Optimizations/Optimizer.cs" />

@@ -73,7 +73,7 @@ vendored into the Xenoblade Chronicles 2 NS2E recomp project. Upstream base and 
 | `tools/shaders/ampere/frontend/AmpereTranslator.cs` | 2026-11-14 | shaders: take the NVN2 stage from the control section - 518 to 2813 of 4222 blocks translate (HANDOVER 73) |
 | `tools/shaders/harness/Program.cs` | 2026-11-14 | shaders: take the NVN2 stage from the control section - 518 to 2813 of 4222 blocks translate (HANDOVER 73) |
 | `tools/shaders/harness/StaticGpuAccessor.cs` | 2026-11-16 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |
-| `tools/shaders/harness/translator/Ryujinx.Graphics.Shader.csproj` | 2026-11-14 | shaders: take the NVN2 stage from the control section - 518 to 2813 of 4222 blocks translate (HANDOVER 73) |
+| `tools/shaders/harness/translator/Ryujinx.Graphics.Shader.csproj` | 2026-11-19 | shaders: take the NVN2 stage from the control section - 518 to 2813 of 4222 blocks translate (HANDOVER 73); `spirv-call-args.patch` back in the series - without it 563 of 12,132 blocks throw in `GenerateCall` and only translate through the DebugMode retry (handover 56 section 179) |
 
 ## Reproduce
 
