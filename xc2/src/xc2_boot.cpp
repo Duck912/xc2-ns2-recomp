@@ -647,6 +647,178 @@ struct Ns1Site {
     std::atomic<int> seen{0};
 };
 
+
+// ---- write watch on the dynamic-resolution record (HANDOVER 172, 189) --------------------------------------------------
+// The live 3D size is a pair of int32 at [*(this+8)+0x5E0] + 24/+28. The read-point pin (XC2_RENDER_SIZE_PIN) writes that
+// pair back just before the frame reads it, so the game's own switch bookkeeping never ran with the new value and the scene
+// came out black (HANDOVER 189). This watches the store instead: the page holding the record is made read-only, the first
+// write faults, the handler logs the store's host instruction pointer and single-steps the store, and - when a pin is
+// configured - clamps what landed in the record. The game's handlers then run with the value the experiment asked for,
+// which is exactly the case 189 could not test.
+namespace rswatch {
+
+struct Entry {
+    uint64_t rip = 0;            // the host instruction that stored (x2_boot.exe + offset; the map file names it)
+    uint64_t addr = 0;           // the address the store targeted
+    uint32_t before[2] = {0, 0};
+    uint32_t after[2] = {0, 0};
+};
+
+struct State {
+    std::atomic<uint64_t> record{0};    // p: the struct that holds +24/+28
+    uint64_t page[2] = {0, 0};
+    int pages = 0;
+    std::atomic<bool> armed{false};
+    std::atomic<uint32_t> arms{0};
+    std::atomic<uint32_t> other{0};     // faults on the page that were not the record
+    bool pin = false;
+    bool pin_checked = false;
+    uint32_t pin_w = 0, pin_h = 0;
+    std::atomic<uint32_t> head{0};
+    Entry ring[32]{};
+    bool started = false;
+};
+
+State& state() { static State s; return s; }
+
+thread_local bool stepping = false;
+thread_local Entry pending{};
+
+bool watched(const State& st, uint64_t addr) {
+    for (int i = 0; i < st.pages; ++i)
+        if (addr >= st.page[i] && addr < st.page[i] + 0x1000) return true;
+    return false;
+}
+
+void set_protect(const State& st, DWORD prot) {
+    for (int i = 0; i < st.pages; ++i) {
+        DWORD old = 0;
+        if (!VirtualProtect(reinterpret_cast<void*>(st.page[i]), 0x1000, prot, &old)) {
+            MEMORY_BASIC_INFORMATION mbi{};
+            VirtualQuery(reinterpret_cast<void*>(st.page[i]), &mbi, sizeof mbi);
+            NXLOG_W("rsize", "protect %llx -> %lx failed (state %lx protect %lx, error %lu)",
+                    static_cast<unsigned long long>(st.page[i]), prot, mbi.State, mbi.Protect, GetLastError());
+        }
+    }
+}
+
+void push(const Entry& e) {
+    State& st = state();
+    const uint32_t i = st.head.fetch_add(1) % 32;
+    st.ring[i] = e;
+}
+
+LONG CALLBACK veh(EXCEPTION_POINTERS* ep) {
+    State& st = state();
+    if (!st.started) return EXCEPTION_CONTINUE_SEARCH;
+    EXCEPTION_RECORD* er = ep->ExceptionRecord;
+    if (er->ExceptionCode == EXCEPTION_SINGLE_STEP) {
+        if (!stepping) return EXCEPTION_CONTINUE_SEARCH;
+        stepping = false;
+        ep->ContextRecord->ContextFlags |= CONTEXT_CONTROL;
+        ep->ContextRecord->EFlags &= ~0x100u;
+        const uint64_t p = st.record.load();
+        const void* q = reinterpret_cast<const void*>(p + 24);
+        std::memcpy(pending.after, q, 8);
+        if (st.pin && pending.after[0] <= 1920 && pending.after[1] <= 1080 &&
+            (pending.after[0] < st.pin_w || pending.after[1] < st.pin_h)) {
+            const uint32_t clamped[2] = {st.pin_w, st.pin_h};
+            std::memcpy(reinterpret_cast<void*>(p + 24), clamped, 8);
+            pending.after[0] = st.pin_w;
+            pending.after[1] = st.pin_h;
+        }
+        push(pending);
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+    if (er->ExceptionCode != EXCEPTION_ACCESS_VIOLATION || er->NumberParameters < 2 || er->ExceptionInformation[0] != 1)
+        return EXCEPTION_CONTINUE_SEARCH;
+    const uint64_t addr = er->ExceptionInformation[1];
+    if (!watched(st, addr)) return EXCEPTION_CONTINUE_SEARCH;
+    st.armed.store(false);
+    set_protect(st, PAGE_READWRITE);
+    const uint64_t p = st.record.load();
+    if (addr >= p + 24 && addr < p + 32) {
+        pending = Entry{};
+        pending.rip = reinterpret_cast<uint64_t>(er->ExceptionAddress);
+        pending.addr = addr;
+        std::memcpy(pending.before, reinterpret_cast<const void*>(p + 24), 8);
+        stepping = true;
+        ep->ContextRecord->ContextFlags |= CONTEXT_CONTROL;
+        ep->ContextRecord->EFlags |= 0x100u;    // trap flag: the store completes, then SINGLE_STEP fires
+    } else {
+        st.other.fetch_add(1);
+    }
+    return EXCEPTION_CONTINUE_EXECUTION;
+}
+
+// Called from the frame hook once per frame: arm the page again after the previous frame's fault, and print what the last
+// writes did. Logging here (not in the handler) keeps the vectored handler out of the logger's locks.
+void frame(uint64_t p) {
+    State& st = state();
+    if (!st.started) {
+        st.started = true;
+        st.record.store(p);
+        for (int i = 0; i < 2; ++i) {
+            const uint64_t pg = (p + 24 + i * 4) & ~0xFFFULL;
+            if (st.pages == 0 || st.page[st.pages - 1] != pg) {
+                if (st.pages < 2) st.page[st.pages++] = pg;
+            }
+        }
+        if (const char* s = std::getenv("XC2_RENDER_SIZE_WRITE_PIN")) {
+            unsigned a = 0, b = 0;
+            if (std::sscanf(s, "%ux%u", &a, &b) == 2 && a && b) { st.pin = true; st.pin_w = a; st.pin_h = b; }
+        }
+        AddVectoredExceptionHandler(1, veh);
+        NXLOG_I("rsize", "write watch: record %llx, %d page(s), pin %s",
+                static_cast<unsigned long long>(p), st.pages,
+                st.pin ? "on" : "off");
+    }
+    static uint32_t printed = 0;
+    const uint32_t head = st.head.load();
+    while (printed != head) {
+        const Entry& e = st.ring[printed % 32];
+        ++printed;
+        NXLOG_I("rsize", "write %llx at %llx+%llx: %u x %u -> %u x %u%s", static_cast<unsigned long long>(e.addr),
+                static_cast<unsigned long long>(reinterpret_cast<uint64_t>(GetModuleHandleW(nullptr))),
+                static_cast<unsigned long long>(e.rip), e.before[0], e.before[1], e.after[0], e.after[1],
+                st.pin ? " (clamped)" : "");
+    }
+    // Re-arm every frame, not only after our own fault: something else in the runtime protects heap pages as it needs
+    // them (the GPU back end before a texture upload, memory.cpp's page bookkeeping), and a single VirtualProtect there
+    // silently undoes ours. Asking on every frame tells us which it is.
+    if (st.arms.load() < 20000) {
+        MEMORY_BASIC_INFORMATION mbi{};
+        VirtualQuery(reinterpret_cast<void*>(st.page[0]), &mbi, sizeof mbi);
+        if (!st.armed.load() || mbi.Protect != PAGE_READONLY) {
+            if (st.armed.load() && st.other.load() == 0 && !st.pin_checked) {
+                st.pin_checked = true;
+                NXLOG_I("rsize", "page %llx was %lx, not read-only: something else re-protected it",
+                        static_cast<unsigned long long>(st.page[0]), mbi.Protect);
+            }
+            st.arms.fetch_add(1);
+            set_protect(st, PAGE_READONLY);
+            st.armed.store(true);
+        }
+        if (st.arms.load() == 1) {
+            MEMORY_BASIC_INFORMATION mbi{};
+            VirtualQuery(reinterpret_cast<void*>(st.page[0]), &mbi, sizeof mbi);
+            NXLOG_I("rsize", "armed page %llx: state %lx protect %lx", static_cast<unsigned long long>(st.page[0]), mbi.State,
+                    mbi.Protect);
+            if (std::getenv("XC2_RENDER_SIZE_WATCH_SELFTEST")) {   // does a write we make fault at all?
+                const uint64_t q = st.record.load() + 24;
+                uint32_t v[2] = {0, 0};
+                std::memcpy(v, reinterpret_cast<const void*>(q), 8);
+                NXLOG_I("rsize", "selftest: writing %u x %u to %llx", v[0], v[1], static_cast<unsigned long long>(q));
+                std::memcpy(reinterpret_cast<void*>(q), v, 8);
+                NXLOG_I("rsize", "selftest: write returned");
+            }
+        }
+    }
+}
+
+
+}  // namespace rswatch
+
 static void arm_ns1_probe(uint64_t main_base) {
     // XC2_NS1_PROBE turns on the logging sites; the two memory overrides below have their own switches and run without it.
     static const bool probe = std::getenv("XC2_NS1_PROBE") != nullptr;
@@ -870,8 +1042,10 @@ static void arm_ns1_probe(uint64_t main_base) {
     // Registered for the lock as well as the probe: [upscale] lock_render_size is what the launcher writes, and the hook
     // is the only place the pin can run. With the lock alone the hook stays quiet (no per-frame logging).
     static const bool rs_probe = std::getenv("XC2_RENDER_SIZE_PROBE") != nullptr;   // static: the hook is a plain fn pointer
+    static const bool rs_watch = std::getenv("XC2_RENDER_SIZE_WATCH") != nullptr ||
+                                 std::getenv("XC2_RENDER_SIZE_WRITE_PIN") != nullptr;
     const bool rs_lock = nxrt::config_get_bool("upscale", "lock_render_size", false);
-    if (rs_probe || rs_lock) {
+    if (rs_probe || rs_lock || rs_watch) {
         static int shown = 0;
         static uint32_t last0 = 0xFFFFFFFFu, last1 = 0xFFFFFFFFu;
         nxrt::hook_add_entry(main_base + 0x844120, [](Ctx* c, uint64_t, void*) -> int {
@@ -906,6 +1080,9 @@ static void arm_ns1_probe(uint64_t main_base) {
                 v[0] = pin_w;
                 v[1] = pin_h;
             }
+            // XC2_RENDER_SIZE_WATCH=1 (log) or XC2_RENDER_SIZE_WRITE_PIN=WxH (clamp): watch the store that sets the record
+            // instead of writing the record back here, so the game's own switch handling runs with the pinned value (189).
+            if (rs_watch && v[0] && v[1] && v[0] <= 1920 && v[1] <= 1080) rswatch::frame(p);
             // XC2_TAA_SHARP=2.0: the game's own per-rung TAA sharpening (tmaaSharpness_0..5, found at +0x3114 by
             // matching the lib_nx.ini defaults 0.4/0.6/0.6/0.72/0.8/0.9). Raising all six to one value answers the
             // question the values cannot: is that pass still in the chain when our FSR replaces the DLSS step? Written
