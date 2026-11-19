@@ -18,6 +18,13 @@ an error code. Unzip over your install; saves, settings and the shader cache are
   expensive, which is why the picture slides in and out of focus on the same spot. This holds it at 1280×720, so the
   upscaler always gets the same input. Cost: about 1–2 fps in heavy scenes, and some metal surfaces shimmer slightly.
   Default off.
+- **The 4K films play without freezing.** A second or two in, the picture used to stop for 7–8 seconds at a time while
+  the game itself kept running. The player's per-frame timer was being marked due by a helper thread that gave up the
+  first time the timer looked stopped, and never came back. One ticker keeps it due now: no stall above 0.13 s for the
+  rest of the film, and the 2.2 s at the start is the game still loading (unchanged).
+- **Film sound and picture line up by default**: the picture is delayed 110 ms, which is what the console-to-PC audio
+  path costs on this device (tune `[media] movie_pts_shift_ms` if lips are off), and the host AV1 decoder now uses half
+  the cores (4–8) for the 4K openings.
 - **Set up says why a shader step failed.** A headless run that never got as far as drawing used to reach the page as
   "exited with code 1". It now names the reason — most often a GPU driver older than Vulkan 1.3 — and what to do, from
   the run's own log.
@@ -64,7 +71,7 @@ pipelines for about 20 seconds (once per driver).
 
 | file | size | sha256 |
 |---|---|---|
-| `XC2-package-dist-0.1.3.zip` | 158.8 MB (498.8 MB unpacked) | `FFABEE511E5BB2AABD18B3823237E097D4DC53419CC560582D53E3FDA3A2F31B` |
+| `XC2-package-dist-0.1.3.zip` | 158.8 MB (498.8 MB unpacked) | `823C036621950441E5BB345F948512A7C136B380C32D1151D57216C495A497D1` |
 | `xc2-launcher-0.1.3-src.zip` | 0.5 MB | `0D96BF4F5BE959CCB1FCA2E5ECCC243081CEB95CA6FB062F27B2BDE2FD8877B8` |
 
 The package contains no game files: the executable is built on your machine from your own dump and the shaders are
@@ -104,6 +111,11 @@ translated from it. Installation: [README](https://github.com/weile10000/xc2-ns2
 
 - **锁定渲染分辨率**（设置 → 升采样）。游戏会在某帧变贵时自己降内部分辨率，所以同一个位置看起来会忽清忽糊。这个
   开关把它钉在 1280×720，升采样器的输入就恒定了。代价：重场景约低 1–2 帧，部分金属表面轻微闪烁。默认关。
+- **4K 过场不再卡住**。以前放一两秒后画面会停 7–8 秒，游戏本体照常在跑。原因是播放器的逐帧定时器由一个辅助线程从宿主"推"到期，
+  而那个线程第一次看到定时器"已停"就退出了，再也没回来。现在改成一个常驻 ticker：整段片子里最长间隔 0.13 秒，开头那 2.2 秒是
+  游戏还在加载（老问题，未变）。
+- **音画默认对上了**：画面整体延后 110 ms（这是这台机器上 XAudio2 队列加设备缓冲的代价；口型不对就调
+  `[media] movie_pts_shift_ms`），4K 过场的宿主 AV1 解码线程改成"核数一半、4–8 个"。
 - **Set up 会说清 shader 那步为什么失败**。一次"连画面都没画出来"的无窗口运行，过去在页面上只是一句
   "exited with code 1"；现在它会从那次运行自己的日志里读出原因（最常见是显卡驱动老于 Vulkan 1.3）和该怎么办。
 - **没画出东西的运行不会再被记成"装好了"**。就是这一条让驱动过旧的机器留下 12,132 个程序的缓存和黑屏标题；
@@ -144,7 +156,7 @@ translated from it. Installation: [README](https://github.com/weile10000/xc2-ns2
 
 | 文件 | 大小 | sha256 |
 |---|---|---|
-| `XC2-package-dist-0.1.3.zip` | 158.8 MB (498.8 MB unpacked) | `FFABEE511E5BB2AABD18B3823237E097D4DC53419CC560582D53E3FDA3A2F31B` |
+| `XC2-package-dist-0.1.3.zip` | 158.8 MB (498.8 MB unpacked) | `823C036621950441E5BB345F948512A7C136B380C32D1151D57216C495A497D1` |
 | `xc2-launcher-0.1.3-src.zip` | 0.5 MB | `0D96BF4F5BE959CCB1FCA2E5ECCC243081CEB95CA6FB062F27B2BDE2FD8877B8` |
 
 包里没有任何游戏文件：可执行文件是在你的机器上用你自己的 dump 编出来的，着色器也是从它翻译的。安装见
