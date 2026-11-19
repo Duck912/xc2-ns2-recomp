@@ -1,7 +1,7 @@
 Xenoblade Chronicles 2 - Switch 2 Edition (3.0.1), static recompilation for Windows
 ==============================================================================
 
-Release 0.1.2 - what changed in this version is in RELEASE-NOTES.md next to this
+Release 0.1.3 - what changed in this version is in RELEASE-NOTES.md next to this
 file (English and Chinese).
 
 This folder is the *player package*. It contains no game files: the executable is
@@ -22,7 +22,7 @@ What is in here
   xc2-launcher.exe            the launcher: game files, set up, play, settings
   xc2_boot.exe                built by Set up (the recompiled game)
   runtime/xc2_rt.dll          the recompiler runtime (NVN/NVN2 -> Vulkan)
-  engine/                     the setup engine (xi2_setup.py) and the shader chain
+  engine/                     the setup engine (xc2_setup.py) and the shader chain
   tools/python                Python with the lifter inside (nothing to install)
   tools/build/zig             the cross compiler that builds the game
   tools/spirv_harness         translates the game's shaders (self-contained)
@@ -30,19 +30,25 @@ What is in here
   tools/shader-cache          archive scan and cache builder
   licenses/                   our licence and every third-party one, per tool
 
-What is new in 0.1.2
+What is new in 0.1.3
 --------------------
-  4K cutscenes play: the Golden Country opening and the other 4K films used to
-  freeze at 1.3 s with the sound continuing; they now run at 30 fps with lip
-  sync. The retail build's BGM, effects and voices come out through a new host
-  output path. See RELEASE-NOTES.md for the full list.
+  Settings -> Upscaler has "Lock render resolution": the game lowers its own
+  internal resolution when a frame gets expensive, which is why the picture
+  slides in and out of focus. The switch holds it at 1280x720 (cost: 1-2 fps in
+  heavy scenes, some metal surfaces shimmer slightly). Default off.
+
+  Set up now says why a shader step failed (most often a GPU driver older than
+  Vulkan 1.3) instead of "exited with code 1", and a run that never drew is no
+  longer recorded as a finished Set up - that used to leave a black title screen.
+  Start-up failures name the GPU driver and the Vulkan version it reports.
+  See RELEASE-NOTES.md for the full list.
 
 The other file on the release page
 ----------------------------------
-  XC2-package-dist-0.1.2.zip  THIS: what you download to play
-  xc2-launcher-0.1.1-src.zip  the launcher's C++/Rust/JS source, for people who
-                              want to read or build the launcher (unchanged in
-                              0.1.2). You do NOT need it to play.
+  XC2-package-dist-0.1.3.zip  THIS: what you download to play
+  xc2-launcher-0.1.3-src.zip  the launcher's C++/Rust/JS source, for people who
+                              want to read or build the launcher. You do NOT need
+                              it to play.
 
 If something goes wrong
 -----------------------
