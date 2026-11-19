@@ -124,6 +124,24 @@ $exe = Join-Path $bd 'xc2_boot.exe'
 if ($LASTEXITCODE -ne 0) { throw 'link failed' }
 Write-Host ("boot exe: {0} ({1:N1} MB)" -f $exe, ((Get-Item $exe).Length / 1MB))
 
+# build.json: what this exe is. The folder name is a human convention; this is the thing a log or a check can read.
+$head = (git -C $repo rev-parse HEAD 2>$null)
+$dirty = @(git -C $repo status --porcelain 2>$null | Where-Object { $_ }).Count
+$manifest = [ordered]@{
+    profile   = 'dev-boot'
+    commit    = $head
+    dirty     = $dirty
+    built_at  = (Get-Date).ToString('o')
+    exe       = $exe
+    exe_bytes = (Get-Item $exe).Length
+    sha256    = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash
+    defines   = $Defines
+    main_lib  = $mainlib
+    lib_dir   = $libdir
+}
+$manifest | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $bd 'build.json') -Encoding utf8
+Write-Host ('build.json: {0} {1}' -f $head.Substring(0, 7), $(if ($dirty) { 'dirty' } else { 'clean' }))
+
 if ($Run) {
     Push-Location $bd
     try { & $exe --exefs $Exefs --link $Link --gfx $Gfx --log (Join-Path $bd 'xc2_boot.log') } finally { Pop-Location }

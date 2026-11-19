@@ -180,4 +180,9 @@ Bundled tools, each with its own licence:
 Set-Content -LiteralPath (Join-Path $lic 'BUNDLED_TOOLS.txt') -Value $notes -Encoding utf8NoBOM
 
 Say ("TOTAL         {0:N1} MB" -f (Size $Out))
+
+# --- 6. the tree just written, held to the same rules as a shipped one ---------------------------------------------------
+# In a child process: verify-package.ps1 exits with a status, which would otherwise end this script mid-way.
+& pwsh -NoProfile -File (Join-Path $PSScriptRoot 'verify-package.ps1') -Path $Out
+if ($LASTEXITCODE -ne 0) { throw "the package failed verify-package.ps1: $Out" }
 Write-Host "package ready: $Out"

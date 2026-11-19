@@ -224,3 +224,18 @@ if ($LASTEXITCODE -ne 0) {
 }
 Copy-Item -LiteralPath $dll -Destination $OutDir -Force
 Write-Host ("exe: {0:N1} MB + xc2_rt.dll, linked in {1:N0} s -> {2}" -f ((Get-Item $exe).Length / 1MB), $t.Elapsed.TotalSeconds, $OutDir)
+
+# build.json: the release exe is linked on the player's PC, so the manifest travels with it.
+$head = (git -C $repo rev-parse HEAD 2>$null)
+$dirty = @(git -C $repo status --porcelain 2>$null | Where-Object { $_ }).Count
+[ordered]@{
+    profile   = 'release'
+    commit    = $head
+    dirty     = $dirty
+    built_at  = (Get-Date).ToString('o')
+    exe       = $exe
+    exe_bytes = (Get-Item $exe).Length
+    sha256    = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash
+    dll       = (Join-Path $OutDir 'xc2_rt.dll')
+    dll_bytes = (Get-Item (Join-Path $OutDir 'xc2_rt.dll')).Length
+} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $OutDir 'build.json') -Encoding utf8

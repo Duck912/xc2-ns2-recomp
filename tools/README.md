@@ -115,3 +115,4 @@ The scale is `raw = PFM / 2.78`; a tonemapped PNG is not a number.
 | `build-shaders.ps1` | make the shader cache and the preload pack complete (`-Check` reports only) |
 | `patch-shaders.ps1` | check or install the hand-patched modules (`-Check` exits 0 when the cache is consistent) |
 | `make-portable.ps1` | copy a built tree somewhere else |
+| `verify-package.ps1` | check a package tree, or an install made from one: no debug leftovers, the files the release promises, the shader cache count (`-ExpectedSpirv`) |
