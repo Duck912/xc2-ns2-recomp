@@ -579,8 +579,8 @@ bool upscale_available(extras::UpscaleMode m) {
 }
 const char* temporal_why(extras::UpscaleMode m) {
     if (m == extras::UpscaleMode::Fsr3)
-        return "Needs amd_fidelityfx_loader_vk.dll and amd_fidelityfx_upscaler_vk.dll (AMD FidelityFX SDK v2.4.0) in upscalers\\fsr3 next to the "
-               "executable, or a path in [upscale] fsr_dll.";
+        return "Needs amd_fidelityfx_upscaler_vk.dll (AMD FidelityFX SDK v2.4.0, 36 MB) in upscalers\\fsr3 next to the executable - the "
+               "39 KB amd_fidelityfx_loader_vk.dll beside it also works, and so does a path in [upscale] fsr_dll.";
     if (m == extras::UpscaleMode::Dlss || m == extras::UpscaleMode::Dlaa)
         return "Needs an NVIDIA RTX GPU and the Streamline DLLs (sl.interposer.dll, sl.common.dll, sl.dlss.dll, nvngx_dlss.dll) in upscalers\\streamline "
                "next to the executable, or their folder in [upscale] dlss_dll. The launcher's Game files page downloads nvngx_dlss.dll from NVIDIA.";

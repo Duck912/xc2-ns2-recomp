@@ -44,13 +44,17 @@ std::wstring widen(const std::string& s) {
 bool exists(const std::wstring& p) { return GetFileAttributesW(p.c_str()) != INVALID_FILE_ATTRIBUTES; }
 
 // The candidates, in order: [upscale] fsr_dll, then the release package's upscalers\fsr3\ folder next to the executable, then the executable's own
-// folder; in each the v2.4.0 loader and the v1.1.4 single DLL.
+// folder; in each the v2.4.0 loader, the v1.1.4 single DLL, then the v2.4.0 upscaler on its own.
+//
+// The upscaler exports the same five ffx* entry points as the loader (measured 2026-11-19 with llvm-readobj), so it can serve as
+// the entry point when the 39 KB loader is absent and the player only dropped the one file they had (issue #10 follow-up).
+// The loader still wins when both are there: it is the documented front door and it can dispatch to a provider of its choosing.
 std::wstring find_dll() {
     const std::string cfg = settings().upscale.fsr_dll;
     if (!cfg.empty()) return exists(widen(cfg)) ? widen(cfg) : std::wstring();
     const std::wstring exe = exe_dir();
     for (const std::wstring& dir : {exe + L"upscalers\\fsr3\\", exe})
-        for (const wchar_t* n : {L"amd_fidelityfx_loader_vk.dll", L"amd_fidelityfx_vk.dll"})
+        for (const wchar_t* n : {L"amd_fidelityfx_loader_vk.dll", L"amd_fidelityfx_vk.dll", L"amd_fidelityfx_upscaler_vk.dll"})
             if (exists(dir + n)) return dir + n;
     return {};
 }
@@ -327,8 +331,9 @@ public:
         dev_ = &dev;
         const std::wstring path = find_dll();
         if (path.empty()) {
-            NXLOG_W(kTag, "no FidelityFX DLL: put amd_fidelityfx_loader_vk.dll and amd_fidelityfx_upscaler_vk.dll (FSR SDK v2.4.0, signedbin) in "
-                          "upscalers\\fsr3 next to the executable, or name one in [upscale] fsr_dll");
+            NXLOG_W(kTag, "no FidelityFX DLL: put amd_fidelityfx_loader_vk.dll (39 KB) and amd_fidelityfx_upscaler_vk.dll (36 MB) from the "
+                          "FidelityFX SDK v2.4.0 signedbin in upscalers\\fsr3 next to the executable, or name the DLL in [upscale] fsr_dll; "
+                          "the upscaler alone is enough if that is the only file you have");
             return false;
         }
         mod_ = LoadLibraryW(path.c_str());
