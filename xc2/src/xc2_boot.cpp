@@ -867,7 +867,11 @@ static void arm_ns1_probe(uint64_t main_base) {
     // 0.5 to size the twenty render targets. Those four are the live 3D size - not the lib_nx.ini settings object, which was
     // searched and came up empty (HANDOVER 95.16). Logging them (and, once they match the ladder, writing 1280x720 back) is
     // the host-side equivalent of what the NS1 quality mods do with one branch instruction.
-    if (std::getenv("XC2_RENDER_SIZE_PROBE")) {
+    // Registered for the lock as well as the probe: [upscale] lock_render_size is what the launcher writes, and the hook
+    // is the only place the pin can run. With the lock alone the hook stays quiet (no per-frame logging).
+    static const bool rs_probe = std::getenv("XC2_RENDER_SIZE_PROBE") != nullptr;   // static: the hook is a plain fn pointer
+    const bool rs_lock = nxrt::config_get_bool("upscale", "lock_render_size", false);
+    if (rs_probe || rs_lock) {
         static int shown = 0;
         static uint32_t last0 = 0xFFFFFFFFu, last1 = 0xFFFFFFFFu;
         nxrt::hook_add_entry(main_base + 0x844120, [](Ctx* c, uint64_t, void*) -> int {
@@ -967,7 +971,7 @@ static void arm_ns1_probe(uint64_t main_base) {
                     }
                 }
             }
-            if ((v[0] != last0 || v[1] != last1) && shown < 40) {
+            if (rs_probe && (v[0] != last0 || v[1] != last1) && shown < 40) {
                 ++shown;
                 last0 = v[0];
                 last1 = v[1];
