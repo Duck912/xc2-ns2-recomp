@@ -64,7 +64,7 @@ Write-Output ("fill-cache: python " + $py)
 Write-Output ("fill-cache: harness " + $Harness)
 
 # the manifest dump_missing wrote is already in the corpus layout, so build_cache takes the folder as it is
-& $py (Join-Path $root 'tools\shader-cache\build_cache.py') --blocks $Missing --cache $Cache --harness $Harness --jobs 8
+& $py (Join-Path $root 'tools\shader\cache\build_cache.py') --blocks $Missing --cache $Cache --harness $Harness --jobs 8
 if ($LASTEXITCODE -ne 0) { Write-Output 'fill-cache: build_cache failed'; exit 1 }
 
 # the same run can tell us which samplers need their type corrected; that is what format-07753 is

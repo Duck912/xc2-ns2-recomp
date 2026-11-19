@@ -16,7 +16,7 @@ the result stays on your machine, in `xc2/build/boot/shader_cache`.
 One command runs all of it:
 
 ```powershell
-python tools/shader-cache/build_cache.py --ard <romfs>\bf2.ard `
+python tools/shader/cache/build_cache.py --ard <romfs>\bf2.ard `
     --cache xc2\build\boot\shader_cache\spirv `
     --harness third_party\fefw-recomp\tools\shaders\build\bin\Release\net10.0\spirv_harness.exe `
     --pack  xc2\build\boot\shader_cache\spirv.preload.pack --jobs 10
@@ -28,14 +28,14 @@ Measured on the retail 3.0.1 archive from an empty cache: **4.7 minutes**, endin
 The three stages are also usable on their own:
 
 ```powershell
-python tools/shader-cache/ard_index.py       --ard <romfs>\bf2.ard --out work\files.tsv
-python tools/shader-cache/extract_embedded.py --ard <romfs>\bf2.ard --tsv work\files.tsv --out work\blocks
+python tools/shader/cache/ard_index.py       --ard <romfs>\bf2.ard --out work\files.tsv
+python tools/shader/cache/extract_embedded.py --ard <romfs>\bf2.ard --tsv work\files.tsv --out work\blocks
 ```
 
 Then translate and install:
 
 ```powershell
-python tools/shader-cache/build_cache.py --blocks work\blocks --cache xc2\build\boot\shader_cache\spirv `
+python tools/shader/cache/build_cache.py --blocks work\blocks --cache xc2\build\boot\shader_cache\spirv `
     --harness third_party\fefw-recomp\tools\shaders\build\bin\Release\net10.0\spirv_harness.exe --jobs 10
 ```
 

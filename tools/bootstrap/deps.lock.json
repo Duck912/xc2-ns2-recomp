@@ -144,7 +144,7 @@
     },
     {
       "name": "spirv.preload.pack",
-      "note": "built from the cache by tools/shader-cache/pack.py; the runtime reads it BEFORE the loose .spv files, so a stale pack hides a freshly installed shader"
+      "note": "built from the cache by tools/shader/cache/pack.py; the runtime reads it BEFORE the loose .spv files, so a stale pack hides a freshly installed shader"
     }
   ]
 }

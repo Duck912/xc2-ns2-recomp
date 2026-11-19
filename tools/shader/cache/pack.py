@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build a spirv.preload.pack that holds every translated shader.
 
-    python tools/shader-cache/pack.py --rows <cache>/results.tsv --cache <cache> --out pack [--install <path>]
+    python tools/shader/cache/pack.py --rows <cache>/results.tsv --cache <cache> --out pack [--install <path>]
 
 Why a pack: the runtime otherwise reads one loose .spv per shader, which is thousands of small random reads.
 A pack is one sequential file and pack_prefetch() reads it front to back, so every later lookup is a

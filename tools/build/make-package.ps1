@@ -139,7 +139,7 @@ Copy-Item (Join-Path $root 'tools\setup\xc2_setup.py') (Join-Path $Out 'engine')
 # The shader chain: the game's shaders are embedded in the romfs's bf2.ard, which these read and translate. Without
 # them a package has an empty cache and the first launch renders with gaps.
 New-Item -ItemType Directory -Force (Join-Path $Out 'tools\shader-cache') | Out-Null
-Copy-Item (Join-Path $root 'tools\shader-cache\*.py') (Join-Path $Out 'tools\shader-cache') -Force
+Copy-Item (Join-Path $root 'tools\shader\cache\*.py') (Join-Path $Out 'tools\shader-cache') -Force
 # The stencil-plane retype (format-07753): the prefill runs with ds_debug and this rewrites the samplers it names.
 # Without it in the package a first run renders characters and the background untextured.
 New-Item -ItemType Directory -Force (Join-Path $Out 'tools\shader') | Out-Null

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Translate the extracted shader blocks and install them into the cache.
 
-    python tools/shader-cache/build_cache.py --blocks <dir> --cache <dir> --harness <spirv_harness>
+    python tools/shader/cache/build_cache.py --blocks <dir> --cache <dir> --harness <spirv_harness>
 
 This is the second half of the pipeline. The first half is:
 

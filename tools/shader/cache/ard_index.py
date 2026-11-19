@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Write the file index of a bf2.ard archive.
 
-    python tools/shader-cache/ard_index.py --ard <romfs>/bf2.ard --out files.tsv
+    python tools/shader/cache/ard_index.py --ard <romfs>/bf2.ard --out files.tsv
 
 Every record starts with the magic "xbc1" and carries its own name and sizes:
 

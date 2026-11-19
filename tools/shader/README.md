@@ -4,6 +4,9 @@ Working on the game's own shaders: the modules in `xc2/build/boot/shader_cache/s
 
 Nothing here contains game data. Each tool reads the player's own cache and writes it back.
 
+`cache/` holds the other half of the pipeline: the archive scan and the translator that build
+`shader_cache/spirv` from the player's own dump. See `cache/README.md` for the numbers.
+
 ## patch_ds_samplers.py
 
 Fixes the one thing the console does and Vulkan cannot: a **float sampler reading a depth-stencil texture's

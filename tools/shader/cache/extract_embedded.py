@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Pull every NVN2 shader block that the resource files inside bf2.ard embed.
 
-    python tools/shader-cache/ard_index.py    --ard <romfs>/bf2.ard --out files.tsv
-    python tools/shader-cache/extract_embedded.py --ard <romfs>/bf2.ard --tsv files.tsv --out blocks
+    python tools/shader/cache/ard_index.py    --ard <romfs>/bf2.ard --out files.tsv
+    python tools/shader/cache/extract_embedded.py --ard <romfs>/bf2.ard --tsv files.tsv --out blocks
 
 The retail 3.0.1 archive does not store shaders in the six .wishp containers alone: the rest are embedded
 inside ordinary resource records. Layout of an embedded group, verified against the blocks the runtime

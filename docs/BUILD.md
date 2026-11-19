@@ -160,7 +160,7 @@ number to remember is **12,137** = 12,132 translated from the archive + 5 that e
 
 | source | count | tool |
 |---|---|---|
-| the embedded groups in `bf2.ard` (12,126) plus `ndsr.pck`'s 28 = 12,154 archive blocks | **12,132** translated | `tools\shader-cache\extract_embedded.py` |
+| the embedded groups in `bf2.ard` (12,126) plus `ndsr.pck`'s 28 = 12,154 archive blocks | **12,132** translated | `tools\shader\cache\extract_embedded.py` |
 | blocks that exist in **no file at all** (the game builds them at run time) | +5 = **12,137** | only `NXRT_NVN_DUMP_MISSING` |
 
 The 22-block gap between 12,154 and 12,132 is misaligned slices the translator rejects; the scan missed nothing. A
@@ -175,7 +175,7 @@ dead entries in the cache, and the four NDSR kernels the game does run every fra
 setup therefore stops at 12,137, and that is a complete cache.
 
 ```powershell
-<python> tools\shader-cache\build_cache.py --ard <romfs>\bf2.ard --cache <install>\shader_cache\spirv `
+<python> tools\shader\cache\build_cache.py --ard <romfs>\bf2.ard --cache <install>\shader_cache\spirv `
     --harness <tools>\spirv_harness\spirv_harness.exe --work <install>\build\shader-cache --jobs 10
 ```
 
@@ -189,12 +189,12 @@ that dies early leaves the marker unwritten so the next launch tries again.
 the game exits and translated, so the *next* launch is complete. The first time you enter an area with unseen
 shaders, that area renders with gaps until you restart.
 
-**Rebuilding offline.** `tools\shader-cache\` walks your own dump and needs nothing else:
+**Rebuilding offline.** `tools\shader\cache\` walks your own dump and needs nothing else:
 
 ```powershell
-python tools\shader-cache\ard_index.py        --ard <romfs>\bf2.ard --out work\files.tsv
-python tools\shader-cache\extract_embedded.py --ard <romfs>\bf2.ard --tsv work\files.tsv --out work\blocks
-python tools\shader-cache\build_cache.py      --blocks work\blocks `
+python tools\shader\cache\ard_index.py        --ard <romfs>\bf2.ard --out work\files.tsv
+python tools\shader\cache\extract_embedded.py --ard <romfs>\bf2.ard --tsv work\files.tsv --out work\blocks
+python tools\shader\cache\build_cache.py      --blocks work\blocks `
        --cache xc2\build\boot\shader_cache\spirv --harness <spirv_harness.exe>
 ```
 
