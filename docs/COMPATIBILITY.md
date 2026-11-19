@@ -56,5 +56,5 @@ Ryzen 7 5800X + Radeon RX 6800 XT, Adrenalin 26.10.1, 1440p window:
 - **First run compiles pipelines**: about 22 seconds with no frame, then it never happens again.
 - **Slow frames on area transitions** (texture uploads and memory-pool imports), not in steady play.
 - **Two shader patches are not distributed** (they are derived from the game's own shaders), so a build made from
-  this repository alone keeps two fog/UV defects that the maintainer's build fixes. The probe shader templates
-  under `tools/probe/` are the same kind of material and are likewise kept out of the repository.
+  this repository alone keeps two fog/UV defects that the maintainer's build fixes. The fog-probe templates and the
+  generators written against them are the same kind of material and are kept out of the repository too.

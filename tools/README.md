@@ -30,15 +30,6 @@ copy x_r.spv xc2\build\boot\shader_cache\spirv\<hash>.spv
 With `NXRT_NVN_SPV_HOT` set (see `run\hot.cmd`) the replacement takes effect in about 0.25 s. Drop
 `spirv.preload.pack` first, or the pack keeps serving the old shader.
 
-## probe/
-
-Generators for the fog probes used while identifying the volumetric-fog path: each `mkprobeP*.py` reads a
-`.frag` template, substitutes the outputs and writes a probe shader. The `.spv` is built with the loop above.
-
-**The templates are not distributed.** `froxel.frag`, `froxel_fixC.frag`, `comp.frag`, `card_uvdiv.frag` and
-`or_const.frag` are derived from the game's own shaders, so they live outside the repository; the generators here
-are the author's own code and stay. To use them you have to produce the templates yourself from your own dump.
-
 ## run/
 
 | file | what |
