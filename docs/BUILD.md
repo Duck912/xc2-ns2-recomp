@@ -150,17 +150,24 @@ script links the older four-module route into `xc2\build\boot\`.
 
 Shaders are translated offline into `xc2\build\boot\shader_cache\spirv` (SPIR-V keyed by the shader hash).
 
-**The cache has three sources and all three are needed.** Scanning the romfs alone is not enough, and the number to
-remember is **12,154** (handover 139):
+**The cache has two sources, and a fresh install ends at 12,137.** Scanning the romfs alone is not enough, and the
+number to remember is **12,137** = 12,132 translated from the archive + 5 that exist in no file:
 
 | source | count | tool |
 |---|---|---|
-| the embedded groups in `bf2.ard` | 12,126 | `tools\shader-cache\extract_embedded.py` |
-| `ndsr.pck`, a third container layout inside it | +28 = **12,154** | the same scan |
-| blocks that exist in **no file at all** (the game builds them at run time) | 5 | only `NXRT_NVN_DUMP_MISSING` |
+| the embedded groups in `bf2.ard` (12,126) plus `ndsr.pck`'s 28 = 12,154 archive blocks | **12,132** translated | `tools\shader-cache\extract_embedded.py` |
+| blocks that exist in **no file at all** (the game builds them at run time) | +5 = **12,137** | only `NXRT_NVN_DUMP_MISSING` |
 
-A cache with only the embedded groups (12,104) renders a **black title screen** — that is the failure this section
+The 22-block gap between 12,154 and 12,132 is misaligned slices the translator rejects; the scan missed nothing. A
+cache with only the embedded groups (12,104) renders a **black title screen** — that is the failure this section
 exists to prevent. Measured on the portable package: the archive scan yields 12,132 `.spv` in 187 s at 10 jobs.
+
+**12,154 is an upper bound, not the target** (corrected 2026-11-19, handover 163). `ndsr.pck` is the game's own
+tensor-core upscaler (NDSR) container. Its control table names 12 further compute variants that the retail title
+**never dispatches**: 0 hits across 8,502 recorded requests on the docked machine and 2,184 on a fresh handheld
+session (234 s, 60 fps, 0 missing-shader lines). They are deliberately **not** installed — adding them would put
+dead entries in the cache, and the four NDSR kernels the game does run every frame are already in 12,132. A shipped
+setup therefore stops at 12,137, and that is a complete cache.
 
 ```powershell
 <python> tools\shader-cache\build_cache.py --ard <romfs>\bf2.ard --cache <install>\shader_cache\spirv `
