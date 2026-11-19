@@ -332,7 +332,19 @@ DlssOptimal dlss_optimal(int out_w, int out_h, int method) {
         // today (1280x720 = 0.5 of the 2560x1440 output). Raising the floor makes the game render the scene higher
         // through its own dynamic resolution instead of us faking the record (HANDOVER 217).
         const float v = static_cast<float>(std::atof(mn));
-        if (v > lo && v <= hi) lo = v;
+        if (v > 0.0f && v <= hi) lo = v;
+    }
+    if (const char* sc = std::getenv("XC2_DLSS_SCALE")) {
+        // Experiment (HANDOVER 219): the game chooses which network to build by matching its scene size to the
+        // *optimal* render size this call reports (opt = scale x output; 0.58 for method 0). Lowering the scale makes a
+        // larger output look "optimal" for the same 720p scene, so the game can pick a bigger DLSS output and NDSR has
+        // less left to do. The range widens with it, or the scene would fall outside it.
+        const float v = static_cast<float>(std::atof(sc));
+        if (v > 0.0f && v < 1.0f) {
+            scale = v;
+            lo = v * 0.9f;
+            hi = 1.0f;
+        }
     }
     auto r = [](float v) { return static_cast<int>(std::lround(v)); };
     DlssOptimal o;
