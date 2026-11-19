@@ -112,6 +112,28 @@ The runtime decodes Opus in software and hands it to the host's audio device. If
 | it starts and exits immediately | read the log: a missing `NXRT_FS_ROMFS` path is the usual cause |
 | `permission denied` when linking | the game is running; it is single-instance |
 | the window opens, 22 s of nothing, then it plays | that is the first-run pipeline compile. It does not happen again |
+| `VK_ERROR_INCOMPATIBLE_DRIVER` right after start-up | the GPU driver is older than Vulkan 1.3: update it (see "The setup stops at the prefill step") |
+
+## The setup stops at the prefill step
+
+`the headless prefill named no block` means the short headless run never got as far as drawing. That run is the first
+thing that touches Vulkan, so a driver problem shows up here, before the game ever opens a window. The setup prints
+the reason it found in the run's own log (`setup\prefill.log` inside the install folder).
+
+`~
+prefill: the GPU driver does not offer Vulkan 1.3 and the game needs it: install the newest driver for the card
+~
+
+- **`VK_ERROR_INCOMPATIBLE_DRIVER`, or `Vulkan 1.3 is required`** — the GPU driver is older than Vulkan 1.3, and this
+  build needs it. Install the newest driver for the card: the Vulkan runtime ships with the driver, so one update fixes
+  both. Nothing in the package needs to change.
+- **`no Vulkan loader found`** — `vulkan-1.dll` is not on the machine. Same fix; it also means no driver is installed
+  for the adapter in use (a VM, or a remote desktop session, does that too).
+- **`no usable Vulkan 1.3 GPU`** — Vulkan starts, but every GPU it lists falls short; the line names each one and what
+  it is missing.
+
+The same lines appear in the game's own log (`work\logs\play-301-<time>.log`) when it is started directly instead of
+from the setup.
 
 ## When you report a problem
 

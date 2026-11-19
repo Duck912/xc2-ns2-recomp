@@ -709,12 +709,99 @@ def step_shaders_package(r, repo, install, py, jobs):
         # Re-walking the archive only retries the 22 blocks the translator rejects, and build_cache.py treats "not one
         # shader came out" as a hard failure - measured 2026-11-18. The scan half is done; only the prefill is missing.
         r.log("  the archive scan is already there; only the headless prefill is missing")
-    prefill_package(r, repo, install, py, harness, spirv, jobs=jobs)
+    note = prefill_package(r, repo, install, py, harness, spirv, jobs=jobs)
     r.log("  %d shader(s) in the cache" % len(list(spirv.glob("*.spv"))))
     if not prefilled.is_file():
         return r.end_step("shaders", started, False,
-                          "the headless prefill named no block; the cache has the archive's share only")
+                          note or "the headless prefill named no block; the cache has the archive's share only")
     return r.end_step("shaders", started, True)
+
+
+# The runtime's words for a start-up that died, and the one thing the player can do about each. A GPU driver older than
+# Vulkan 1.3 is the common one: the game needs 1.3, the driver refuses the instance, and before this table existed the
+# setup page said "the headless run exited with code 1" and stopped there.
+VULKAN_HINTS = (
+    # markers in the runtime's log, a short form for the step's note, and the line the player reads
+    (("VK_ERROR_INCOMPATIBLE_DRIVER", "vkCreateInstance failed (-9)", "Vulkan 1.3 is required"),
+     "the GPU driver does not offer Vulkan 1.3",
+     "the GPU driver does not offer Vulkan 1.3 and the game needs it: install the newest driver for the card and run the "
+     "setup again (the Vulkan runtime comes with the driver)"),
+    (("no Vulkan loader found",),
+     "vulkan-1.dll is missing",
+     "vulkan-1.dll is not on this machine: install the GPU driver - it ships the Vulkan loader"),
+    (("no usable Vulkan 1.3 GPU",),
+     "no GPU here offers Vulkan 1.3",
+     "Vulkan starts, but no GPU here offers 1.3 with the features the renderer needs: install the newest driver for the card"),
+    (("no Vulkan physical device",),
+     "the driver lists no GPU",
+     "the driver loaded but lists no GPU - a remote desktop session or a VM without GPU passthrough reports that"),
+)
+
+
+def log_tail(path, lines=400):
+    """The last few hundred lines of a log the game wrote. It is written continuously, so it can be megabytes."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 128 * 1024))
+            text = f.read().decode("utf-8", "replace")
+    except OSError:
+        return []
+    return text.splitlines()[-lines:]
+
+
+def log_message(line):
+    """A runtime log line without its "[  1.234 I t5678 -]" prefix."""
+    return line.split("] ", 1)[1].strip() if "] " in line else line.strip()
+
+
+def log_seconds(tail):
+    """The timestamp of the last line, or None: a run that stops at 1.2 s never reached the renderer."""
+    for line in reversed(tail):
+        m = re.match(r"\[\s*([\d.]+)\s", line)
+        if m:
+            try:
+                return float(m.group(1))
+            except ValueError:
+                return None
+    return None
+
+
+def exit_text(code):
+    """An exit code as the page should print it: a Windows crash code is hex, and reads as noise in base ten."""
+    if code >= 0x80000000 or code < 0:
+        return "it crashed (0x%08X)" % (code & 0xFFFFFFFF)
+    return "it exited with code %d" % code
+
+
+def prefill_failure(log_path):
+    """(the line that explains the stop, its short form, what to do about it) for a prefill that collected nothing.
+
+    Three things end a prefill with no block collected and only one of them is a finished prefill: start-up died (a GPU
+    driver older than Vulkan 1.3 is the usual cause), the cap came before the renderer drew anything, or there really
+    was nothing missing. The runtime writes its own log - the prefill's own output goes to NUL - so the reason has been
+    in this file all along; a failed run reached the setup page as a bare exit code, which is what "stuck at the prefill
+    step" looked like in the reports. Returns ("", "", "") when the log is silent, so the caller keeps the old answer.
+    """
+    tail = log_tail(log_path)
+    if not tail:
+        return "", "", ""
+    text = "\n".join(tail)
+    reason = ""
+    for line in tail:
+        if "device creation failed:" in line or "graphics device:" in line or "runtime start-up failed" in line:
+            reason = log_message(line)
+    if not reason:
+        for line in reversed(tail):
+            if re.match(r"^\[\s*[\d.]+\s+[EF]\b", line):
+                reason = log_message(line)
+                break
+    if not reason:
+        stopped = log_seconds(tail)
+        if stopped is not None and stopped < 5.0:
+            reason = "the run stopped %.1f s in, before the renderer drew anything" % stopped
+    short, hint = next(((s, h) for markers, s, h in VULKAN_HINTS if any(m in text for m in markers)), ("", ""))
+    return reason, short, hint
 
 
 def prefill_package(r, repo, install, py, harness, spirv, seconds=40, jobs=0):
@@ -727,7 +814,7 @@ def prefill_package(r, repo, install, py, harness, spirv, seconds=40, jobs=0):
     exe = install / "xc2_boot.exe"
     if not exe.is_file():
         r.log("  prefill: no xc2_boot.exe yet, skipping")
-        return
+        return ""
     missing = install / "build" / "missing"
     prefilled = install / "build" / "prefilled"
     if missing.is_dir():
@@ -755,7 +842,7 @@ def prefill_package(r, repo, install, py, harness, spirv, seconds=40, jobs=0):
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except OSError as e:
         r.log("  prefill: could not start the game (%s); the cache stays as the archive left it" % e)
-        return
+        return "the headless prefill could not start: %s" % e
     deadline = time.time() + seconds
     seen = 0
     while time.time() < deadline and p.poll() is None:
@@ -765,30 +852,40 @@ def prefill_package(r, repo, install, py, harness, spirv, seconds=40, jobs=0):
             r.note_progress("prefill: %d block(s) collected" % n)
         time.sleep(1)
     finished = p.poll()
-    if finished is None:
+    killed = finished is None
+    if killed:
         p.kill()
         p.wait()
     blocks = sorted(missing.glob("code_*.bin"))
     r.log("  prefill: collected %d block(s)" % len(blocks))
     if not blocks:
-        # Nothing missing is the normal second run. A non-zero exit is a crash, and the two must not look the same:
-        # that is how the missing switches went unnoticed.
-        if finished is not None and finished != 0:
-            r.log("  prefill: the headless run exited with code %s and named no block - the cache stays as the archive left it"
-                  % finished)
-            return
+        # Nothing missing is the normal second run, and a failed one must not look like it: that is how the missing
+        # switches went unnoticed. The failure is the case the reports called "stuck at the prefill step" - the reason
+        # is in the run's own log, and the page used to show only an exit code.
+        reason, short, hint = prefill_failure(log)
+        if reason or hint or (not killed and finished != 0):
+            r.log("  prefill: the headless run named no block - the cache stays as the archive left it")
+            if finished is not None and finished != 0:
+                r.log("  prefill: " + exit_text(finished))
+            if reason:
+                r.log("  prefill: " + reason)
+            if hint:
+                r.log("  prefill: " + hint)
+            r.log("  prefill: the run's own log: %s" % log)
+            return "the headless prefill could not start: " + (short or reason[:96] or hint[:96])
         retype_ds_samplers(r, repo, py, spirv, log)
         prefilled.write_text("0 collected: nothing was missing\n", encoding="utf-8")
-        return
+        return ""
     n = jobs if jobs > 0 else max(2, (os.cpu_count() or 4) - 1)
     rc = r.run([str(py), str(repo / "tools" / "shader-cache" / "build_cache.py"), "--blocks", str(missing),
                 "--cache", str(spirv), "--harness", str(harness), "--jobs", str(n)], cwd=repo,
                on_line=shader_progress(r))
     if rc != 0:
         r.log("  prefill: the collected blocks did not translate; the game will still run")
-        return
+        return ""
     retype_ds_samplers(r, repo, py, spirv, log)
     prefilled.write_text("%d collected and translated\n" % len(blocks), encoding="utf-8")
+    return ""
 
 def retype_ds_samplers(r, repo, py, spirv, log):
     """Retype the stencil-plane samplers the prefill's ds_debug lines named (format-07753).
