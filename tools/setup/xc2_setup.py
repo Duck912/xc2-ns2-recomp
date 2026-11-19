@@ -936,14 +936,55 @@ def step_done_package(r, repo, install):
         gone = sweep_leftovers(install)
         if gone:
             r.log("  removed after the build: " + ", ".join(sorted(gone)))
+        made = write_ini(install, repo)
+        if made:
+            r.log("  wrote nxrt.ini")
     game = install / "game"
     if not r.dry:
         game.mkdir(parents=True, exist_ok=True)
     junction(game / "romfs-301", install / "romfs", r)
+    if (install / "nup_dump" / "dlc").is_dir():
+        junction(game / "dlc-301", install / "nup_dump" / "dlc", r)
     if not r.dry:
         (install / "setup_state.tsv").write_text("mprs_setup_state\t1\nmeta\tfinished\t1\n", encoding="utf-8")
     r.write_status(state="done", note="ready to play")
     return r.end_step("done", started, True, "ready to play")
+
+
+def write_ini(install, repo):
+    """Give a fresh install its nxrt.ini before anything runs: the launcher edits this file, it does not invent it.
+
+    The template lives in the checkout (config/nxrt.ini.in) and in a package (engine/nxrt.ini.in), and every key
+    in it is checked against config/keys.tsv by tools/ci/config_table.py --check.
+    """
+    ini = install / "nxrt.ini"
+    if ini.is_file():
+        return None
+    template = None
+    for cand in (repo / "engine" / "nxrt.ini.in", repo / "config" / "nxrt.ini.in"):
+        if cand.is_file():
+            template = cand
+            break
+    if template is None:
+        return None
+    dlc = install / "dlc"
+    for cand in (install / "nup_dump" / "dlc", install / "game" / "dlc-301", install / "dlc"):
+        if cand.is_dir():
+            dlc = cand
+            break
+    values = {
+        "exefs": install / "exefs",
+        "romfs": install / "romfs",
+        "mods": install / "mods",
+        "dlc": dlc,
+        "shader_cache": install / "shader_cache" / "spirv",
+        "bc7_cache": install / "shader_cache" / "bc7",
+    }
+    text = template.read_text(encoding="utf-8")
+    for key, value in values.items():
+        text = text.replace("{%s}" % key, str(value).replace("\\", "/"))
+    ini.write_text(text, encoding="utf-8", newline="\n")
+    return ini
 
 
 def sweep_leftovers(install):

@@ -1,0 +1,31 @@
+; nxrt.ini - settings of the XC2 NS2 recompilation runtime.
+; Rendered by the setup from config/nxrt.ini.in; the launcher edits values and leaves every other line alone.
+; Every key below is listed in config/keys.tsv, and tools/ci/config_table.py --check fails if one is not.
+
+[fs]
+exefs = {exefs}
+romfs = {romfs}
+mods = {mods}
+save_dir = save
+
+[aoc]
+dir = {dlc}
+
+[nvn]
+shader_cache = {shader_cache}
+bc7_cache = {bc7_cache}
+
+[log]
+path = nxrt.log
+
+[dlss]
+upscaler = taau
+
+[xc2]
+fps = 60
+
+[media]
+video_decoder = library
+movie_pts_shift_ms = 110
+movie_timer_poke = 1
+movie_pts_wallclock = 0

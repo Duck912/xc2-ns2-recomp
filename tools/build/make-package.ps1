@@ -141,6 +141,7 @@ Say ("report        tools\report.py + tools\run (python, no PowerShell 7 needed)
 # --- 4. the engine, the shader corpus extractor, and what the lift needs --------------------------------------
 New-Item -ItemType Directory -Force (Join-Path $Out 'engine') | Out-Null
 Copy-Item (Join-Path $root 'tools\setup\xc2_setup.py') (Join-Path $Out 'engine') -Force
+Copy-Item (Join-Path $root 'config\nxrt.ini.in') (Join-Path $Out 'engine') -Force   # the setup renders it for a fresh install
 # The shader chain: the game's shaders are embedded in the romfs's bf2.ard, which these read and translate. Without
 # them a package has an empty cache and the first launch renders with gaps.
 New-Item -ItemType Directory -Force (Join-Path $Out 'tools\shader-cache') | Out-Null

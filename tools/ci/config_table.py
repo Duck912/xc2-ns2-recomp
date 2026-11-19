@@ -19,7 +19,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 PAGE = os.path.join(ROOT, "third_party", "fefw-recomp", "runtime", "docs", "CONFIG.md")
 TABLE = os.path.join(ROOT, "config", "keys.tsv")
 BACKLOG = os.path.join(ROOT, "config", "undocumented.tsv")
+LAUNCHER_JS = os.path.join(ROOT, "launcher", "src", "pages", "settings.js")
+INI_TEMPLATE = os.path.join(ROOT, "config", "nxrt.ini.in")
 RUNTIME = os.path.join(ROOT, "third_party", "fefw-recomp", "runtime", "src")
+GAME = os.path.join(ROOT, "xc2", "src")   # the game-specific half reads its own keys ([xc2] fps and friends)
 
 HEADER = "| Section | Key | Default | Environment variable | Read by | Meaning |"
 RULE = "|---|---|---|---|---|---|"
@@ -80,7 +83,14 @@ KEY_RE = re.compile(r'config_get_(?:str|int|bool|float)\(\s*"([a-z0-9_]+)"\s*,\s
 
 def code_keys():
     found = set()
-    for dirpath, _dirnames, names in os.walk(RUNTIME):
+    for root in (RUNTIME, GAME):
+        found |= _keys_under(root)
+    return found
+
+
+def _keys_under(root):
+    found = set()
+    for dirpath, _dirnames, names in os.walk(root):
         for name in names:
             if not name.endswith((".cpp", ".h")):
                 continue
@@ -117,6 +127,28 @@ def write_backlog(items):
             fh.write("%s\t%s\t%s\n" % (s, k, where))
 
 
+FIELD_RE = re.compile(r"sec:\s*'([a-z0-9_]+)'[^}]*?key:\s*'([a-z0-9_]+)'")
+
+
+def launcher_fields():
+    """The settings the launcher offers: every one of them has to be a key the runtime knows."""
+    text = open(LAUNCHER_JS, encoding="utf-8").read()
+    return {(m.group(1), m.group(2)) for m in FIELD_RE.finditer(text)}
+
+
+def template_keys():
+    """The ini the setup writes for an install: every key in it has to be one the runtime documents."""
+    keys = set()
+    section = ""
+    for line in open(INI_TEMPLATE, encoding="utf-8"):
+        line = line.strip()
+        if line.startswith("["):
+            section = line.strip("[]").lower()
+        elif "=" in line and not line.startswith((";", "#")):
+            keys.add((section, line.split("=", 1)[0].strip().lower()))
+    return keys
+
+
 def check(strict=False):
     bad = 0
     rows = read_table()
@@ -142,6 +174,22 @@ def check(strict=False):
         bad += 1
     else:
         print("  ok    %d keys are in the backlog and none of them is new" % len(missing))
+    tpl_keys = template_keys()
+    unknown_tpl = sorted(k for k in tpl_keys if k not in documented)
+    for s, k in unknown_tpl:
+        print("  FAIL  config/nxrt.ini.in sets [%s] %s, which the table does not carry" % (s, k))
+    if unknown_tpl:
+        bad += 1
+    else:
+        print("  ok    the install template's %d keys are all in the table" % len(tpl_keys))
+    fields = launcher_fields()
+    unknown_fields = sorted(f for f in fields if f not in documented)
+    for s, k in unknown_fields:
+        print("  FAIL  the launcher offers [%s] %s, which the table does not carry" % (s, k))
+    if unknown_fields:
+        bad += 1
+    else:
+        print("  ok    the launcher's %d settings are all in the table" % len(fields))
     if stale:
         print("  note  %d backlog rows are no longer read: prune config/undocumented.tsv" % len(stale))
     if strict and missing:

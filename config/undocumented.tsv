@@ -1,7 +1,6 @@
 # section	key	where it is read
 # Settings the code reads but docs/CONFIG.md does not describe yet. Add a row to the page instead when you
 # touch one; a key that is read and absent from both files fails tools/ci/config_table.py --check.
-aoc	dir	
 aoc	list	
 boot	guest_relinks	
 debug	dump_at	
@@ -20,20 +19,14 @@ fs	trace_stack_file
 gfx	render_scale	
 hid	all_lifos	
 hid	readback	
-input	jc2_clicks	
 ipc	trace	
 kernel	ipc_log	
 kernel	pwk_log	
 latency	gpu_frames_ahead	
 media	movie_clock	
-media	movie_pts_shift_ms	
-media	movie_pts_wallclock	
-media	movie_timer_poke	
 media	movie_trace	
 media	player_trace	
-media	video_decoder	
 media	video_decoder_log	
-media	video_decoder_threads	
 memory	heap_commit_mb	
 nvn	async_submit	
 nvn	barrier_keeps_pass	
