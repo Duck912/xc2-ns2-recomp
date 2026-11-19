@@ -146,6 +146,11 @@ The stub link at the end of `build.ps1` always fails — that is expected, `buil
 Produces `xc2\build\boot-301\xc2_boot.exe`, which is what `tools\run\play-301.cmd` runs. Without the flags the
 script links the older four-module route into `xc2\build\boot\`.
 
+One library comes from outside the tree: **libvpx** (BSD-3, the host VP9/VP8 decoders) is compiled into `nxrt` and
+therefore linked into this executable even though nothing in the boot stub mentions it. The script finds it through
+`VCPKG_ROOT` and the usual vcpkg install roots (`vcpkg install libvpx:x64-windows-static`); set `VCPKG_ROOT` if
+yours lives elsewhere. A runtime configured without libvpx still links, but leaves VP9 movies out.
+
 ### 4.4 shaders
 
 Shaders are translated offline into `xc2\build\boot\shader_cache\spirv` (SPIR-V keyed by the shader hash).
