@@ -83,6 +83,13 @@ The scale is `raw = PFM / 2.78`; a tonemapped PNG is not a number.
 | `ard_get.py` | extract a record from `bf2.ard` by name |
 | `nup_extract.py` | list, verify or unpack a `.nup` package |
 
+## build/
+
+| file | what |
+|---|---|
+| `make-package.ps1` | assembles the portable tree: launcher, `xc2_rt.dll` + import library, the tools that compile the lifted code (Python, Zig, spirv-val, harness), and the setup program. Contains no game file. |
+| `PACKAGE-README.txt` | the readme that ships inside that tree |
+
 ## Build entry points that stay in xc2/scripts
 
 `build.ps1`, `build-boot.ps1`, `build-shaders.ps1`, `patch-shaders.ps1`, `play.ps1`, `make-portable.ps1`.

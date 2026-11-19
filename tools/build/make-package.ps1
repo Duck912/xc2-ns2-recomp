@@ -2,7 +2,7 @@
 # Assembles the portable tree: the launcher, the runtime as a DLL, and the two tools that compile the lifted code, so
 # a player unpacks it and needs nothing installed - no MSVC, no Windows SDK, no Python, no .NET, no Zig.
 #
-#   pwsh tools\release\make-package.ps1 -Out E:\XC2-package
+#   pwsh tools\build\make-package.ps1 -Out E:\XC2-package
 #
 # What it does NOT contain: any game file. The exe is built on the player's PC from their own dump (that is the whole
 # point of the recompilation), and the shader cache is translated from their own shaders.
