@@ -102,9 +102,11 @@ pub fn apply(dir: &Path, edits: &[Edit]) -> Result<(), String> {
                         ini.set("gfx", "window_height", &h.to_string());
                     }
                     _ => {
-                        // Empty (auto) or unparsable: the runtime's own default.
-                        ini.set("gfx", "window_width", "1280");
-                        ini.set("gfx", "window_height", "720");
+                        // Empty (auto) or unparsable: 0 means "the display's own size" to the runtime (xc2_boot.cpp),
+                        // which is what the picture wants: the game composes at 2160p docked whatever the window is, so a
+                        // fixed 1280x720 window here presented that composite at 720p (HANDOVER 220).
+                        ini.set("gfx", "window_width", "0");
+                        ini.set("gfx", "window_height", "0");
                     }
                 }
             }
@@ -251,11 +253,11 @@ mod tests {
         assert_eq!(ini.get("gfx", "window_width").as_deref(), Some("1920"));
         assert_eq!(ini.get("gfx", "window_height").as_deref(), Some("1080"));
 
-        // empty (auto) goes back to the runtime's own default rather than to a zero-sized window
+        // empty (auto) hands the window to the runtime's "the display's own size" (0), not to a fixed 720p window
         apply(&dir, &[edit("")]).unwrap();
         let ini = load(&dir.join(GAME_INI)).unwrap();
-        assert_eq!(ini.get("gfx", "window_width").as_deref(), Some("1280"));
-        assert_eq!(ini.get("gfx", "window_height").as_deref(), Some("720"));
+        assert_eq!(ini.get("gfx", "window_width").as_deref(), Some("0"));
+        assert_eq!(ini.get("gfx", "window_height").as_deref(), Some("0"));
     }
 
     #[test]
