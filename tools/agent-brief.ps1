@@ -30,6 +30,25 @@ try {
     Write-Host ('HEAD       : ' + $head)
     Write-Host ('Working    : ' + $(if ($dirty -eq 0) { 'clean' } else { "$dirty changed file(s)" }))
 
+    Section 'ONBOARDING CARD  (E:\XC2-开新会话先读这个.md)'
+    $card = 'E:\XC2-开新会话先读这个.md'
+    if (Test-Path -LiteralPath $card) {
+        $head = Get-Content -LiteralPath $card -TotalCount 10
+        $stamp = $head | Where-Object { $_ -match '@\s*`?([0-9a-f]{7,40})' } | Select-Object -First 1
+        $next = $head | Where-Object { $_ -match '^下一步' } | Select-Object -First 1
+        if ($stamp) {
+            $docCommit = [regex]::Match($stamp, '@\s*`?([0-9a-f]{7,40})').Groups[1].Value
+            $behind = 0
+            if ($docCommit) {
+                $n = git rev-list --count "$docCommit..HEAD" 2>$null
+                if ($LASTEXITCODE -eq 0 -and $n) { $behind = [int]$n }
+            }
+            if ($behind -gt 5) { Write-Host ("  STALE  the card is $behind commits behind HEAD: update its top line") -ForegroundColor Yellow }
+            else { Write-Host ("  ok     the card is at " + $docCommit + " (" + $behind + " commits behind)") }
+        } else { Write-Host '  note   the card has no @commit line' }
+        if ($next) { Write-Host ('  ' + $next.Trim()) }
+    } else { Write-Host '  MISSING: the onboarding card' -ForegroundColor Yellow }
+
     Section 'CURRENT STATE  (docs/internal/STATE.md)'
     $state = Join-Path $internal 'STATE.md'
     if (Test-Path $state) { Get-Content $state } else { Write-Host '  MISSING: ' $state -ForegroundColor Red }
