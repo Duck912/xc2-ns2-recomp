@@ -1,7 +1,7 @@
 # XC2 NS2 recomp - keep only what is needed to rebuild this project
 
 # ---- 构建产物（可重建） ----
-build/
+/build/
 xc2/build/
 third_party/fefw-recomp/build/
 *.obj

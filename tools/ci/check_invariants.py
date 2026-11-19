@@ -114,6 +114,16 @@ TOP_LEVEL_FILES = {
 }
 
 
+def check_no_hidden_trees(files):
+    """An ignore rule must not swallow a source tree: "build/" once hid everything under tools/build."""
+    bad = []
+    for d in sorted(TOP_LEVEL_DIRS):
+        r = subprocess.run(["git", "check-ignore", "-q", d + "/.layout-probe"], capture_output=True)
+        if r.returncode == 0:
+            bad.append(d + "/")
+    return (not bad, bad)
+
+
 def check_top_level(files):
     """Only the known trees and files sit at the root."""
     bad = set()
@@ -147,6 +157,7 @@ CHECKS = [
     ("no ExeFS module is tracked", check_no_extension_exefs),
     ("shipped hook tables carry no game bytes", check_sites_have_no_game_bytes),
     ("the root has one known shape", check_top_level),
+    ("no source tree is ignored", check_no_hidden_trees),
 ]
 
 HOOK_CHECKS = CHECKS  # the fast ones are also the critical ones

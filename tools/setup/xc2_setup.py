@@ -152,6 +152,18 @@ class Runner:
             return p.wait()
 
 
+def first_file(*candidates):
+    """The first path that exists.
+
+    A checkout keeps the build and setup tools under tools/build and tools/setup; a release package from 0.1.3 keeps
+    the old names (tools/bootstrap, tools/shader-cache). One engine runs in both, so it asks which one is there.
+    """
+    for c in candidates:
+        if Path(c).is_file():
+            return Path(c)
+    return Path(candidates[0])
+
+
 def pwsh(*args):
     return ["pwsh", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", *args]
 
@@ -226,7 +238,7 @@ def have_modules(folder):
 
 def step_doctor(r, repo):
     started = r.step("doctor")
-    rc = r.run(pwsh(repo / "tools" / "bootstrap" / "doctor.ps1", "-Json"))
+    rc = r.run(pwsh(first_file(repo / "tools" / "setup" / "doctor.ps1", repo / "tools" / "bootstrap" / "doctor.ps1"), "-Json"))
     return r.end_step("doctor", started, rc == 0, "the machine is ready" if rc == 0 else "missing tools, see the log")
 
 
@@ -272,7 +284,7 @@ def fetch_nxrecomp(r, repo, spec, dest):
 
 def step_sources(r, repo):
     started = r.step("sources")
-    lock = json.loads((repo / "tools" / "bootstrap" / "deps.lock.json").read_text(encoding="utf-8"))
+    lock = json.loads(first_file(repo / "tools" / "setup" / "deps.lock.json", repo / "tools" / "bootstrap" / "deps.lock.json").read_text(encoding="utf-8"))
     nx = next((s for s in lock["sources"] if s["name"] == "nxrecomp"), None)
     dest = repo / (nx["dest"] if nx and nx.get("dest") else "third_party/nxrecomp")
     if have_nxrecomp(dest):
@@ -317,7 +329,7 @@ def step_lift(r, repo, install, jobs=0):
     lib = repo / "xc2" / "build" / "301" / "lib"
     if all((lib / (m + ".lib")).is_file() for m in MODULES):
         return r.end_step("lift", started, True, "the libraries are already there")
-    argv = pwsh(repo / "xc2" / "scripts" / "build.ps1", "-Exefs", install / "exefs", "-Run:$false",
+    argv = pwsh(repo / "tools" / "build" / "build.ps1", "-Exefs", install / "exefs", "-Run:$false",
                 "-Modules", ",".join(MODULES), "-LiftDir", repo / "xc2" / "build" / "301" / "lift",
                 "-ObjDir", repo / "xc2" / "build" / "301" / "obj", "-LibDir", lib)
     if jobs > 0:
@@ -335,7 +347,7 @@ def step_link(r, repo, install):
     exe = repo / "xc2" / "build" / "301" / "boot" / "xc2_boot.exe"
     if exe.is_file():
         return r.end_step("link", started, True, "the boot exe is already there")
-    rc = r.run(pwsh(repo / "xc2" / "scripts" / "build-boot.ps1", "-Exefs", install / "exefs",
+    rc = r.run(pwsh(repo / "tools" / "build" / "build-boot.ps1", "-Exefs", install / "exefs",
                     "-OutDir", repo / "xc2" / "build" / "301" / "boot", "-LibDir", repo / "xc2" / "build" / "301" / "lib",
                     "-MainLib", repo / "xc2" / "build" / "301" / "lib" / "main.lib", "-Defines", "XC2_MODULES_7"), cwd=repo,
                 on_line=build_progress(r, "link"))
@@ -676,7 +688,7 @@ def step_shaders_package(r, repo, install, py, jobs):
     if scanned and prefilled.is_file():
         return r.end_step("shaders", started, True, "the shader cache is already there")
     if not scanned:
-        tool = repo / "tools" / "shader-cache" / "build_cache.py"
+        tool = first_file(repo / "tools" / "shader" / "cache" / "build_cache.py", repo / "tools" / "shader-cache" / "build_cache.py")
         ard = install / "romfs" / "bf2.ard"
         if not tool.is_file():
             return r.end_step("shaders", started, False, "the package has no tools/shader-cache/build_cache.py")
@@ -877,7 +889,7 @@ def prefill_package(r, repo, install, py, harness, spirv, seconds=40, jobs=0):
         prefilled.write_text("0 collected: nothing was missing\n", encoding="utf-8")
         return ""
     n = jobs if jobs > 0 else max(2, (os.cpu_count() or 4) - 1)
-    rc = r.run([str(py), str(repo / "tools" / "shader-cache" / "build_cache.py"), "--blocks", str(missing),
+    rc = r.run([str(py), str(first_file(repo / "tools" / "shader" / "cache" / "build_cache.py", repo / "tools" / "shader-cache" / "build_cache.py")), "--blocks", str(missing),
                 "--cache", str(spirv), "--harness", str(harness), "--jobs", str(n)], cwd=repo,
                on_line=shader_progress(r))
     if rc != 0:
