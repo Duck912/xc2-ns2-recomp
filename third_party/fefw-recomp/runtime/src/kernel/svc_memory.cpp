@@ -38,6 +38,25 @@ constexpr uint32_t kPermRW = 3;
 
 inline unsigned long long U(uint64_t v) { return v; }
 
+// Names of the Horizon memory states, so the MapPhysicalMemory diagnostic below says who owns a range instead of a number.
+const char* mem_state_name(uint32_t s) {
+    switch (s) {
+        case mem::kMemFree: return "free";
+        case mem::kMemIo: return "io";
+        case mem::kMemStatic: return "static";
+        case mem::kMemCode: return "code";
+        case mem::kMemCodeData: return "code-data";
+        case mem::kMemHeap: return "heap";
+        case mem::kMemShared: return "shared";
+        case mem::kMemStack: return "stack";
+        case mem::kMemThreadLocal: return "thread-local";
+        case mem::kMemTransfer: return "transfer";
+        case mem::kMemAlias: return "alias";
+        case mem::kMemInaccessible: return "inaccessible";
+        default: return "?";
+    }
+}
+
 // Guards the heap size, the MapMemory list and the alias-region windows below.
 std::mutex g_mu;
 uint64_t g_heap_cur = 0;                           // bytes; meaningful while mem::heap_exists()
@@ -686,9 +705,26 @@ void map_physical_memory(::Ctx* c) {
         const uint16_t add = static_cast<uint16_t>(want & ~(it == g_phys.end() ? 0 : it->second));
         if (!add) continue;
         bool ok = it != g_phys.end() || granule_free(g);
-        for (uint64_t i = 0; ok && i < kGranulePages; ++i)
-            if ((add & (1u << i)) && mem::vm_query(g + i * mem::kPage).state != mem::kMemFree) ok = false;
+        uint64_t busy_page = g;
+        for (uint64_t i = 0; ok && i < kGranulePages; ++i) {
+            const uint64_t page = g + i * mem::kPage;
+            if ((add & (1u << i)) && mem::vm_query(page).state != mem::kMemFree) {
+                busy_page = page;
+                ok = false;
+            }
+        }
         if (!ok) {
+            // Name what is in the way. "range holds other memory" alone cannot tell our own earlier VAMM setup from a
+            // mapping the guest really made there: the title runs the allocator setup twice, 60 GiB each (HANDOVER
+            // 90.5c/90.8), and on 2026-11-19 11:00 the title died at 5.4 s on 0x22d5800000 before the first frame.
+            const bool host_busy = it == g_phys.end() && !granule_free(g);
+            if (host_busy) {
+                NXLOG_W(kTag, "MapPhysicalMemory: %llx is not host-free (asked %llx+%llx)", U(busy_page), U(addr), U(size));
+            } else {
+                const mem::VmInfo why = mem::vm_query(busy_page);
+                NXLOG_W(kTag, "MapPhysicalMemory: %llx is held by a %s block %llx+%llx (asked %llx+%llx)", U(busy_page),
+                        mem_state_name(why.state), U(why.addr), U(why.size), U(addr), U(size));
+            }
             fail(c, "MapPhysicalMemory (range holds other memory)", kernel::kInvalidMemoryState, addr, size, 0);
             return;
         }
