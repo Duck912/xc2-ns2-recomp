@@ -64,11 +64,26 @@ pipelines for about 20 seconds (once per driver).
 
 | file | size | sha256 |
 |---|---|---|
-| `XC2-package-dist-0.1.3.zip` | 158.8 MB (498.8 MB unpacked) | `4C6C9B74712821DE65EDC592475D5176AA95C3BB5D5340DAD1336F06CAB092CE` |
+| `XC2-package-dist-0.1.3.zip` | 158.8 MB (498.8 MB unpacked) | `FFABEE511E5BB2AABD18B3823237E097D4DC53419CC560582D53E3FDA3A2F31B` |
 | `xc2-launcher-0.1.3-src.zip` | 0.5 MB | `0D96BF4F5BE959CCB1FCA2E5ECCC243081CEB95CA6FB062F27B2BDE2FD8877B8` |
 
 The package contains no game files: the executable is built on your machine from your own dump and the shaders are
 translated from it. Installation: [README](https://github.com/weile10000/xc2-ns2-recomp#readme).
+
+## Credits
+
+- **[@capibawa](https://github.com/capibawa)** — [nxnative, branch `xc2-ns2-profile`](https://github.com/capibawa/nxnative/tree/xc2-ns2-profile): the
+  four launch switches and the host-side movie/audio takeover this project follows (`dm/host/hle_movie.c`, `hle_audio.c`).
+- **[Goldoire/fefw-recomp](https://github.com/Goldoire/fefw-recomp)** — the Switch runtime this project is built on: NVN/NVN2 replay,
+  service HLE, the shader pipeline and the exe + DLL split all started there.
+- [nxrecomp](https://github.com/drakolordx7/nxrecomp) — the static recompiler that lifts the game's code.
+- [dav1d](https://code.videolan.org/videolan/dav1d) — the film's video decoder; [libvorbis](https://github.com/xiph/vorbis) — its sound.
+- The reports that shaped this release: @Kain2k ([#10](https://github.com/weile10000/xc2-ns2-recomp/issues/10)),
+  @fmalust ([#11](https://github.com/weile10000/xc2-ns2-recomp/issues/11)); and the ones still open — @TheSeeOHZee
+  ([#4](https://github.com/weile10000/xc2-ns2-recomp/issues/4)), @ffhome ([#2](https://github.com/weile10000/xc2-ns2-recomp/issues/2)),
+  @UrsineBear ([#9](https://github.com/weile10000/xc2-ns2-recomp/issues/9)).
+- Ryujinx (MIT) — the shader translator in the offline harness; SDL3, Vulkan-Headers, VMA and the other vendored
+  dependencies are listed in `licenses/` in the package.
 
 ---
 
@@ -129,8 +144,23 @@ translated from it. Installation: [README](https://github.com/weile10000/xc2-ns2
 
 | 文件 | 大小 | sha256 |
 |---|---|---|
-| `XC2-package-dist-0.1.3.zip` | 158.8 MB (498.8 MB unpacked) | `4C6C9B74712821DE65EDC592475D5176AA95C3BB5D5340DAD1336F06CAB092CE` |
+| `XC2-package-dist-0.1.3.zip` | 158.8 MB (498.8 MB unpacked) | `FFABEE511E5BB2AABD18B3823237E097D4DC53419CC560582D53E3FDA3A2F31B` |
 | `xc2-launcher-0.1.3-src.zip` | 0.5 MB | `0D96BF4F5BE959CCB1FCA2E5ECCC243081CEB95CA6FB062F27B2BDE2FD8877B8` |
 
 包里没有任何游戏文件：可执行文件是在你的机器上用你自己的 dump 编出来的，着色器也是从它翻译的。安装见
 [README](https://github.com/weile10000/xc2-ns2-recomp#readme)。
+
+## 致谢
+
+- **[@capibawa](https://github.com/capibawa)** —— [nxnative 的 `xc2-ns2-profile` 分支](https://github.com/capibawa/nxnative/tree/xc2-ns2-profile)：
+  本项目沿用的四个启动参数与宿主端影片/音频接管（`dm/host/hle_movie.c`、`hle_audio.c`）。
+- **[Goldoire/fefw-recomp](https://github.com/Goldoire/fefw-recomp)** —— 本项目的运行时基座：NVN/NVN2 重放、服务层 HLE、
+  着色器管线、exe + DLL 的拆分都源自那里。没有那个项目，就没有这次重编译。
+- [nxrecomp](https://github.com/drakolordx7/nxrecomp) —— 把游戏代码举升出来的静态重编译器。
+- [dav1d](https://code.videolan.org/videolan/dav1d) —— 影片视频解码；[libvorbis](https://github.com/xiph/vorbis) —— 影片声音。
+- 本版修复对应的报告者：@Kain2k（[#10](https://github.com/weile10000/xc2-ns2-recomp/issues/10)）、
+  @fmalust（[#11](https://github.com/weile10000/xc2-ns2-recomp/issues/11)）；尚未解决的
+  @TheSeeOHZee（[#4](https://github.com/weile10000/xc2-ns2-recomp/issues/4)）、
+  @ffhome（[#2](https://github.com/weile10000/xc2-ns2-recomp/issues/2)）、
+  @UrsineBear（[#9](https://github.com/weile10000/xc2-ns2-recomp/issues/9)）。
+- Ryujinx（MIT）—— 离线 harness 里的着色器翻译器；SDL3、Vulkan-Headers、VMA 等 vendored 依赖见包里的 `licenses/`。
