@@ -17,6 +17,8 @@ param(
     [int]$Seconds = 0,
     [string]$Exe = '',
     [string]$Log = '',
+    [int]$Retries = 2,
+    [int]$RetryDelay = 2,
     [hashtable]$Env = @{}
 )
 $ErrorActionPreference = 'Stop'
@@ -107,16 +109,69 @@ if (-not (Test-Path -LiteralPath $romfs)) { throw "no romfs at $romfs" }
 
 & pwsh -NoProfile -File (Join-Path $repo 'tools\\run\\build-stamp.ps1') -Exe $exe
 Write-Host ("profile {0}: {1} at {2} fps" -f $Profile, $exe, $fps)
-Push-Location $cwd
-try {
-    $argv = @('--exefs', $exefs, '--link', (Get-Cfg 'run/link' 'host'), '--gfx', $gf, '--log', $Log)
-    if ($Seconds -gt 0) {
-        $p = Start-Process -FilePath $exe -ArgumentList $argv -PassThru -NoNewWindow
-        Write-Host ("pid {0}; stopping after {1}s" -f $p.Id, $Seconds)
-        Start-Sleep -Seconds $Seconds
-        if (-not $p.HasExited) { $p.Kill(); $p.WaitForExit(5000) | Out-Null }
-    } else {
-        & $exe @argv
+# A launch sometimes dies before the first frame, in the address allocator's second 60 GiB pass: MapPhysicalMemory
+# answers 0xD401 ("range holds other memory") and svcBreak ends the process (HANDOVER 171). It is a collision between
+# the two setup passes, not a broken build: the same exe starts on the next attempt. Retrying here is what the operator
+# does by hand, and it keeps an experiment from being lost to a launch that says nothing about the change under test.
+function Test-VammCollision([string]$path) {
+    if (-not (Test-Path -LiteralPath $path)) { return $false }
+    $held = Select-String -LiteralPath $path -Pattern 'MapPhysicalMemory \(range holds other memory\) returned 0xD401' -Quiet
+    if (-not $held) { return $false }
+    return [bool](Select-String -LiteralPath $path -Pattern 'svc: svcBreak' -Quiet)
+}
+
+# One line per launch attempt, so the 0xD401 rate has a denominator instead of an impression (work\logs is ignored).
+function Add-LaunchRecord([int]$n, $run, [bool]$collision, [string]$logFile) {
+    $dir = Join-Path $repo 'work\logs'
+    if (-not (Test-Path -LiteralPath $dir)) { return }
+    $file = Join-Path $dir 'launch-attempts.tsv'
+    if (-not (Test-Path -LiteralPath $file)) {
+        Set-Content -LiteralPath $file -Value (@('stamp', 'profile', 'exe', 'attempt', 'exit', 'vamm_d401', 'log') -join [char]9) -Encoding ascii
     }
-} finally { Pop-Location }
-Write-Host "log: $Log"
+    $row = @((Get-Date -Format 'yyyy-MM-ddTHH:mm:ss'), $Profile, (Split-Path -Leaf $exe), $n, $run.ExitCode,
+             $(if ($collision) { 1 } else { 0 }), (Split-Path -Leaf $logFile))
+    Add-Content -LiteralPath $file -Value ($row -join [char]9) -Encoding ascii
+}
+
+# One launch. ExitedOnItsOwn is false when the timer stopped a healthy run, which says nothing about the launch and
+# must not be retried (it would just restart the clock).
+function Invoke-Launch([string]$logFile) {
+    $argv = @('--exefs', $exefs, '--link', (Get-Cfg 'run/link' 'host'), '--gfx', $gf, '--log', $logFile)
+    Push-Location $cwd
+    try {
+        if ($Seconds -gt 0) {
+            $proc = Start-Process -FilePath $exe -ArgumentList $argv -PassThru -NoNewWindow
+            Write-Host ("pid {0}; stopping after {1}s" -f $proc.Id, $Seconds)
+            $deadline = (Get-Date).AddSeconds($Seconds)
+            while (-not $proc.HasExited -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 200 }
+            if (-not $proc.HasExited) {
+                $proc.Kill()
+                $proc.WaitForExit(5000) | Out-Null
+                return [pscustomobject]@{ ExitedOnItsOwn = $false; ExitCode = 0 }
+            }
+            return [pscustomobject]@{ ExitedOnItsOwn = $true; ExitCode = $proc.ExitCode }
+        }
+        & $exe @argv
+        return [pscustomobject]@{ ExitedOnItsOwn = $true; ExitCode = $LASTEXITCODE }
+    } finally { Pop-Location }
+}
+
+$attempt = 0
+$currentLog = $Log
+while ($true) {
+    $attempt++
+    $run = Invoke-Launch $currentLog
+    $collision = $run.ExitedOnItsOwn -and (Test-VammCollision $currentLog)
+    Add-LaunchRecord -n $attempt -run $run -collision $collision -logFile $currentLog
+    if (-not $collision) { break }
+    if ($attempt -gt $Retries) { break }
+    Write-Host ("launch {0} died in the VAMM 0xD401 path (HANDOVER 171); starting again in {1}s (retry {2} of {3})" -f
+        $attempt, $RetryDelay, $attempt, $Retries)
+    Start-Sleep -Seconds $RetryDelay
+    # Every attempt keeps its own log: the crash one is the evidence for the retry, and the run under test is the next.
+    $currentLog = Join-Path ([IO.Path]::GetDirectoryName($Log)) (
+        [IO.Path]::GetFileNameWithoutExtension($Log) + '-r' + ($attempt + 1) + '.log')
+    Write-Host "retry log: $currentLog"
+}
+Write-Host "log: $currentLog"
+if ($run.ExitedOnItsOwn -and $run.ExitCode -ne 0) { Write-Host ("launch exited {0}" -f $run.ExitCode) }
