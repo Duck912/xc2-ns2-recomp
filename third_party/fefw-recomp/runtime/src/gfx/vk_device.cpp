@@ -119,6 +119,83 @@ VkImageAspectFlags aspect_of(VkFormat f) {
 VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(VkDebugUtilsMessageSeverityFlagBitsEXT severity, VkDebugUtilsMessageTypeFlagsEXT type,
                                               const VkDebugUtilsMessengerCallbackDataEXT* data, void* user);
 
+// ---- start-up diagnostics ---------------------------------------------------------------------------------------------
+// A driver older than Vulkan 1.3 fails at vkCreateInstance with INCOMPATIBLE_DRIVER and nothing else, and that used to be
+// the whole message: "vkCreateInstance failed (-9)". Nothing in it says which number is wrong or what to update, so the
+// report from a player whose driver is the problem was indistinguishable from a crash. These run only after start-up has
+// already failed, so the cost does not matter; the 1.0 instance in vk_driver_report() is the only way to ask a driver
+// what it does support, because the 1.3 instance is exactly what it refused.
+
+std::string vk_version_text(uint32_t v) {
+    char buf[32];
+    std::snprintf(buf, sizeof buf, "%u.%u.%u", VK_API_VERSION_MAJOR(v), VK_API_VERSION_MINOR(v), VK_API_VERSION_PATCH(v));
+    return buf;
+}
+
+const char* vk_result_text(VkResult r) {
+    switch (r) {
+        case VK_SUCCESS: return "VK_SUCCESS";
+        case VK_NOT_READY: return "VK_NOT_READY";
+        case VK_TIMEOUT: return "VK_TIMEOUT";
+        case VK_EVENT_SET: return "VK_EVENT_SET";
+        case VK_EVENT_RESET: return "VK_EVENT_RESET";
+        case VK_INCOMPLETE: return "VK_INCOMPLETE";
+        case VK_ERROR_OUT_OF_HOST_MEMORY: return "VK_ERROR_OUT_OF_HOST_MEMORY";
+        case VK_ERROR_OUT_OF_DEVICE_MEMORY: return "VK_ERROR_OUT_OF_DEVICE_MEMORY";
+        case VK_ERROR_INITIALIZATION_FAILED: return "VK_ERROR_INITIALIZATION_FAILED";
+        case VK_ERROR_DEVICE_LOST: return "VK_ERROR_DEVICE_LOST";
+        case VK_ERROR_MEMORY_MAP_FAILED: return "VK_ERROR_MEMORY_MAP_FAILED";
+        case VK_ERROR_LAYER_NOT_PRESENT: return "VK_ERROR_LAYER_NOT_PRESENT";
+        case VK_ERROR_EXTENSION_NOT_PRESENT: return "VK_ERROR_EXTENSION_NOT_PRESENT";
+        case VK_ERROR_FEATURE_NOT_PRESENT: return "VK_ERROR_FEATURE_NOT_PRESENT";
+        case VK_ERROR_INCOMPATIBLE_DRIVER: return "VK_ERROR_INCOMPATIBLE_DRIVER";
+        case VK_ERROR_TOO_MANY_OBJECTS: return "VK_ERROR_TOO_MANY_OBJECTS";
+        case VK_ERROR_FORMAT_NOT_SUPPORTED: return "VK_ERROR_FORMAT_NOT_SUPPORTED";
+        case VK_ERROR_FRAGMENTED_POOL: return "VK_ERROR_FRAGMENTED_POOL";
+        case VK_ERROR_UNKNOWN: return "VK_ERROR_UNKNOWN";
+        case VK_ERROR_SURFACE_LOST_KHR: return "VK_ERROR_SURFACE_LOST_KHR";
+        case VK_ERROR_OUT_OF_DATE_KHR: return "VK_ERROR_OUT_OF_DATE_KHR";
+        default: return "VK_ERROR_<unnamed>";
+    }
+}
+
+// What the driver would have said. Called from the vkCreateInstance failure path, where a 1.0 instance - the least any
+// Vulkan driver has to accept - is still possible: it names the device and the API version the driver actually reports,
+// which is the difference between "old driver" and "no driver at all".
+std::string vk_driver_report() {
+    VkApplicationInfo app = {VK_STRUCTURE_TYPE_APPLICATION_INFO};
+    app.apiVersion = VK_API_VERSION_1_0;
+    VkInstanceCreateInfo ici = {VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
+    ici.pApplicationInfo = &app;
+    VkInstance inst = VK_NULL_HANDLE;
+    const VkResult r = vkCreateInstance(&ici, nullptr, &inst);
+    if (r != VK_SUCCESS)
+        return std::string("no driver accepted even a Vulkan 1.0 instance (") + vk_result_text(r) + ")";
+    // Instance-level entry points, taken from this instance: volk's table for them is filled by volkLoadInstance, which
+    // has not run for a throwaway instance. vkDestroyInstance is one of them, so it is looked up too instead of called.
+    auto enum_devices = reinterpret_cast<PFN_vkEnumeratePhysicalDevices>(vkGetInstanceProcAddr(inst, "vkEnumeratePhysicalDevices"));
+    auto device_props = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(vkGetInstanceProcAddr(inst, "vkGetPhysicalDeviceProperties"));
+    auto destroy = reinterpret_cast<PFN_vkDestroyInstance>(vkGetInstanceProcAddr(inst, "vkDestroyInstance"));
+    std::string out = "the instance came up but lists no GPU";
+    uint32_t n = 0;
+    if (enum_devices && device_props && enum_devices(inst, &n, nullptr) == VK_SUCCESS && n > 0) {
+        std::vector<VkPhysicalDevice> devs(n);
+        enum_devices(inst, &n, devs.data());
+        VkPhysicalDeviceProperties p{};
+        device_props(devs[0], &p);
+        const uint32_t d = p.driverVersion;
+        char dv[64];
+        if (p.vendorID == 0x10DE)   // NVIDIA packs 10/8/8/6 bits into one number; the others use major.minor.patch
+            std::snprintf(dv, sizeof dv, "%u.%u.%u.%u", (d >> 22) & 0x3FFu, (d >> 14) & 0xFFu, (d >> 6) & 0xFFu, d & 0x3Fu);
+        else
+            std::snprintf(dv, sizeof dv, "%u.%u.%u", VK_VERSION_MAJOR(d), VK_VERSION_MINOR(d), VK_VERSION_PATCH(d));
+        out = std::string(p.deviceName) + " reports Vulkan " + vk_version_text(p.apiVersion) + " (driver " + dv + ")";
+        if (n > 1) out += ", the first of " + std::to_string(n) + " GPUs";
+    }
+    if (destroy) destroy(inst, nullptr);
+    return out;
+}
+
 }  // namespace
 
 // ---- GPU rule ---------------------------------------------------------------------------------------------------------
@@ -348,10 +425,15 @@ bool Device::init(const DeviceDesc& desc, std::string* error) {
     // DLSS / DLAA: Streamline must see the instance, device and swapchain calls, so the loader functions come from sl.interposer.dll
     const PFN_vkGetInstanceProcAddr sl_gipa = extras::streamline_preinit();
     if (sl_gipa) volkInitializeCustom(sl_gipa);
-    else if (volkInitialize() != VK_SUCCESS) return fail("no Vulkan loader found (vulkan-1.dll)");
+    else if (volkInitialize() != VK_SUCCESS)
+        return fail("no Vulkan loader found (vulkan-1.dll): install the GPU driver - it ships the loader, and there is no "
+                    "Vulkan without one");
     uint32_t inst_version = 0;
-    vkEnumerateInstanceVersion(&inst_version);
-    if (inst_version < VK_API_VERSION_1_3) return fail("Vulkan 1.3 is required; the loader offers less");
+    if (vkEnumerateInstanceVersion) vkEnumerateInstanceVersion(&inst_version);
+    else inst_version = VK_API_VERSION_1_0;   // the query arrived with loader 1.1; an older one cannot be this build's runtime
+    if (inst_version < VK_API_VERSION_1_3)
+        return fail("Vulkan 1.3 is required and this machine's Vulkan runtime offers " + vk_version_text(inst_version) +
+                    ": update the GPU driver (it installs a newer vulkan-1.dll too)");
 
     if (!headless && !platform::has_window()) return fail("no platform window: create one (platform::create_window) or run headless");
 
@@ -429,7 +511,15 @@ bool Device::init(const DeviceDesc& desc, std::string* error) {
     ici.ppEnabledExtensionNames = inst_exts.data();
     ici.pNext = vfeat_ok ? static_cast<void*>(&vfeat) : (debug_utils_ ? static_cast<void*>(&dbg) : nullptr);
     VkResult r = vkCreateInstance(&ici, nullptr, &instance_);
-    if (r != VK_SUCCESS) return fail("vkCreateInstance failed (" + std::to_string(r) + ")");
+    if (r != VK_SUCCESS) {
+        std::string why = "vkCreateInstance failed (" + std::string(vk_result_text(r)) + ", " +
+                          std::to_string(static_cast<int>(r)) + ")";
+        // INCOMPATIBLE_DRIVER is the answer an installed-but-older driver gives when the instance asks for 1.3, and it
+        // is the one result whose cause is on the player's side: name the device, the version it reports, and the fix.
+        if (r == VK_ERROR_INCOMPATIBLE_DRIVER)
+            why += ", and " + vk_driver_report() + ": this build needs Vulkan 1.3, so install the newest GPU driver for that device";
+        return fail(why);
+    }
     volkLoadInstance(instance_);
     features_.swapchain_colorspace = x_colorspace;
     if (debug_utils_) vkCreateDebugUtilsMessengerEXT(instance_, &dbg, nullptr, &messenger_);
@@ -459,7 +549,9 @@ bool Device::init(const DeviceDesc& desc, std::string* error) {
     // physical devices
     uint32_t ndev = 0;
     vkEnumeratePhysicalDevices(instance_, &ndev, nullptr);
-    if (!ndev) return fail("no Vulkan physical device");
+    if (!ndev)
+        return fail("no Vulkan physical device: the driver loaded but lists no GPU (a remote desktop session or a VM "
+                    "without GPU passthrough reports that)");
     std::vector<VkPhysicalDevice> devs(ndev);
     vkEnumeratePhysicalDevices(instance_, &ndev, devs.data());
 
@@ -529,7 +621,16 @@ bool Device::init(const DeviceDesc& desc, std::string* error) {
         usable.push_back({gpus_[i].name, gpus_[i].type, gpus_[i].vram_bytes});
         usable_to_all.push_back(i);
     }
-    if (usable.empty()) return fail("no usable Vulkan 1.3 GPU");
+    if (usable.empty()) {
+        // Name every device and what it fell short of: "no usable GPU" alone cannot tell an old driver from an iGPU
+        // that only does 1.2, and both are on the player's side of the fence.
+        std::string why;
+        for (size_t i = 0; i < cands.size(); ++i) {
+            if (!why.empty()) why += "; ";
+            why += gpus_[i].name + " (Vulkan " + vk_version_text(gpus_[i].api_version) + "): " + cands[i].why;
+        }
+        return fail("no usable Vulkan 1.3 GPU - " + why + ". Update the GPU driver; the renderer needs 1.3 with dynamic rendering");
+    }
     std::string want = lower(gpu_want);
     bool numeric = !want.empty() && want.size() <= 2 && std::isdigit(static_cast<unsigned char>(want[0]));
     if (numeric) {
