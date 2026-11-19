@@ -893,12 +893,79 @@ static void arm_ns1_probe(uint64_t main_base) {
                     unsigned a = 0, b = 0;
                     if (std::sscanf(s, "%ux%u", &a, &b) == 2 && a && b) { pin_w = a; pin_h = b; }
                 }
+                // The launcher's Picture page writes this: lock the ladder at its top rung (the game's fixed 1280x720).
+                if (!pin_w && nxrt::config_get_bool("upscale", "lock_render_size", false)) { pin_w = 1280; pin_h = 720; }
             }
             if (pin_w && v[0] <= 1920 && v[1] <= 1080 && (v[0] < pin_w || v[1] < pin_h)) {
                 const uint32_t pinned[2] = {pin_w, pin_h};
                 std::memcpy(reinterpret_cast<void*>(p + 24), pinned, 8);
                 v[0] = pin_w;
                 v[1] = pin_h;
+            }
+            // XC2_TAA_SHARP=2.0: the game's own per-rung TAA sharpening (tmaaSharpness_0..5, found at +0x3114 by
+            // matching the lib_nx.ini defaults 0.4/0.6/0.6/0.72/0.8/0.9). Raising all six to one value answers the
+            // question the values cannot: is that pass still in the chain when our FSR replaces the DLSS step? Written
+            // every call, because the settings object is re-read each frame.
+            static float taa_sharp = -1.0f;
+            static bool taa_read = false;
+            if (!taa_read) {
+                taa_read = true;
+                if (const char* s = std::getenv("XC2_TAA_SHARP")) taa_sharp = static_cast<float>(std::atof(s));
+            }
+            if (taa_sharp >= 0.0f && nxrt::mem::is_mapped(obj + 0x3114, 24)) {
+                const float six[6] = {taa_sharp, taa_sharp, taa_sharp, taa_sharp, taa_sharp, taa_sharp};
+                std::memcpy(reinterpret_cast<void*>(obj + 0x3114), six, sizeof six);
+            }
+            if (std::getenv("XC2_SETTINGS_DUMP")) {
+                static bool dumped = false;
+                if (!dumped) {
+                    dumped = true;
+                    // One contiguous window around the block the value scan pointed at (tmaa +0x3114, AA_Sharpness
+                    // +0x3100), printed as offset: value so the keys can be matched by hand against lib_nx.ini order.
+                    const uint32_t lo = 0x2F80, hi = 0x3180;
+                    if (nxrt::mem::is_mapped(obj + lo, hi - lo)) {
+                        for (uint32_t off = lo; off < hi; off += 16) {
+                            float f[4];
+                            std::memcpy(f, reinterpret_cast<const void*>(obj + off), 16);
+                            NXLOG_I("settings", "+0x%04x  %11.6g %11.6g %11.6g %11.6g", off, static_cast<double>(f[0]),
+                                    static_cast<double>(f[1]), static_cast<double>(f[2]), static_cast<double>(f[3]));
+                        }
+                    }
+                }
+            }
+            if (std::getenv("XC2_SETTINGS_SCAN")) {
+                static bool scanned = false;
+                if (!scanned) {
+                    scanned = true;
+                    // The lib_nx.ini defaults are known from the archive itself (work/tmp/lib_nx.ini), so the settings
+                    // object can be matched by value instead of by disassembling the parser: six consecutive sharpness
+                    // rungs, the red_* block, and a few values nothing else uses. Offsets are from the object base.
+                    const uint64_t base = obj;
+                    const uint32_t span = 0x4000;
+                    if (nxrt::mem::is_mapped(base, span)) {
+                        std::vector<float> f(span / 4);
+                        std::memcpy(f.data(), reinterpret_cast<const void*>(base), span);
+                        auto dump = [&](uint32_t off, const char* what) {
+                            NXLOG_I("settings", "%s at +0x%x (%.6g)", what, off, static_cast<double>(f[off / 4]));
+                        };
+                        for (uint32_t off = 0; off + 40 <= span; off += 4) {
+                            const float* q = &f[off / 4];
+                            if (q[0] == 0.4f && q[1] == 0.6f && q[2] == 0.6f && q[3] == 0.72f && q[4] == 0.8f && q[5] == 0.9f)
+                                dump(off, "tmaaSharpness_0..5 run");
+                            if (q[0] == 1.0f && q[1] == 1.0f && q[2] == 1.0f && q[3] == 1.0f && q[5] == 1.0f && q[6] == 1.0f &&
+                                q[7] == 0.7f && q[8] == 0.7f && q[9] == 97.0f)
+                                dump(off, "red_sclX..red_AtRate block");
+                        }
+                        for (uint32_t off = 0; off + 4 <= span; off += 4) {
+                            const float x = f[off / 4];
+                            if (x == 80000.0f) dump(off, "cam_far");
+                            else if (x == 8.0f) dump(off, "AA_Sharpness");
+                            else if (x == 0.75f) dump(off, "ao_blurScale");
+                            else if (x == 0.35f) dump(off, "tssaoOutputAO");
+                            else if (x == 0.2f) dump(off, "blurStr / godray-ish");
+                        }
+                    }
+                }
             }
             if ((v[0] != last0 || v[1] != last1) && shown < 40) {
                 ++shown;
