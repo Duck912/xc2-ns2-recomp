@@ -26,6 +26,11 @@ jobs:
           done
           grep -q nxnative THIRD_PARTY_NOTICES.md
           echo "ok: notices"
+      - name: The settings reference matches its table
+        run: |
+          set -eu
+          python3 tools/ci/config_table.py --check
+
       - name: No personal paths
         run: |
           set -eu

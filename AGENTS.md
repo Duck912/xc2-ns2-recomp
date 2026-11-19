@@ -47,6 +47,7 @@ junction, so no script has to know about a second copy:
 | `xc2\` | the game-specific half: `src`, `sites`, `tests`, the release CMake project, the module table |
 | `tools\` | `build` (build and package), `run` (start the game), `shader` (cache and patches), `analysis`, `ci` (the gates), `setup` |
 | `launcher\` | the launcher sources; its built exe is what `make-package.ps1` copies |
+| `config\` | the machine-readable settings table (`keys.tsv`) and the undocumented backlog |
 | `docs\`, `licenses\`, `third_party\` | reference, licences, upstream code |
 | `work\` → `E:\XC2\dev\work` | logs, screenshots, scratch |
 | `xc2\game\` → `E:\XC2\data\exefs` | the user's own dump; `xc2\build\boot\game\*` likewise for romfs and DLC |

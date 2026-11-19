@@ -12,6 +12,7 @@ All scripts resolve their paths relative to themselves (`os.path.dirname(__file_
 |---|---|
 | `check_invariants.py` | the project rules: no private paths, no game data, ASCII build inputs, CRLF in .cmd files |
 | `check_links.py` | every relative link in the tracked markdown resolves |
+| `config_table.py` | keeps `config/keys.tsv`, `docs/CONFIG.md` and the code in step: `--emit` writes the page, `--check` fails on a new undocumented key |
 | `install-git-hooks.ps1` | copies `hooks/pre-commit` into `.git/hooks`; the hook runs the two checks above on every commit |
 | `hooks/pre-commit` | the hook itself (needs `python` on PATH) |
 
