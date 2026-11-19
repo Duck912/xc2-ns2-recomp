@@ -314,12 +314,12 @@ def step_runtime(r, repo):
 
 def step_lift(r, repo, install, jobs=0):
     started = r.step("lift")
-    lib = repo / "xc2" / "build" / "lib-301"
+    lib = repo / "xc2" / "build" / "301" / "lib"
     if all((lib / (m + ".lib")).is_file() for m in MODULES):
         return r.end_step("lift", started, True, "the libraries are already there")
     argv = pwsh(repo / "xc2" / "scripts" / "build.ps1", "-Exefs", install / "exefs", "-Run:$false",
-                "-Modules", ",".join(MODULES), "-LiftDir", repo / "xc2" / "build" / "lift-301",
-                "-ObjDir", repo / "xc2" / "build" / "obj-301", "-LibDir", lib)
+                "-Modules", ",".join(MODULES), "-LiftDir", repo / "xc2" / "build" / "301" / "lift",
+                "-ObjDir", repo / "xc2" / "build" / "301" / "obj", "-LibDir", lib)
     if jobs > 0:
         # The build script's own default is 10 concurrent clang-cl, which is what it takes to run the largest
         # translation units out of memory on a busy machine: measured 10 failures that each compiled in 2-4 s by
@@ -332,12 +332,12 @@ def step_lift(r, repo, install, jobs=0):
 
 def step_link(r, repo, install):
     started = r.step("link")
-    exe = repo / "xc2" / "build" / "boot-301" / "xc2_boot.exe"
+    exe = repo / "xc2" / "build" / "301" / "boot" / "xc2_boot.exe"
     if exe.is_file():
         return r.end_step("link", started, True, "the boot exe is already there")
     rc = r.run(pwsh(repo / "xc2" / "scripts" / "build-boot.ps1", "-Exefs", install / "exefs",
-                    "-OutDir", repo / "xc2" / "build" / "boot-301", "-LibDir", repo / "xc2" / "build" / "lib-301",
-                    "-MainLib", repo / "xc2" / "build" / "lib-301" / "main.lib", "-Defines", "XC2_MODULES_7"), cwd=repo,
+                    "-OutDir", repo / "xc2" / "build" / "301" / "boot", "-LibDir", repo / "xc2" / "build" / "301" / "lib",
+                    "-MainLib", repo / "xc2" / "build" / "301" / "lib" / "main.lib", "-Defines", "XC2_MODULES_7"), cwd=repo,
                 on_line=build_progress(r, "link"))
     return r.end_step("link", started, rc == 0, "" if rc == 0 else "build-boot.ps1 failed")
 

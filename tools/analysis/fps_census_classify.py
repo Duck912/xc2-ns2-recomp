@@ -1,6 +1,6 @@
 # Run from the repo root (the repository root): every path below is relative to it.
 import csv, os, re, sys
-root = r'xc2\build\lift-census\main'
+root = r'xc2\build\census\lift\main'
 active = set()
 for l in open(r'xc2\build\fps_counters.txt', encoding='ascii'):
     if l.strip() and not l.startswith('#'):

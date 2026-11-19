@@ -28,7 +28,7 @@ $rt = Join-Path $repo 'third_party\fefw-recomp'
 if ($env:XC2_ENV) { if (-not (Test-Path $env:XC2_ENV)) { throw "XC2_ENV points at a file that does not exist: $env:XC2_ENV" }; . $env:XC2_ENV | Out-Null }
 if (-not $Jobs -or $Jobs -lt 1) { $Jobs = (Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors - 1; if ($Jobs -lt 2) { $Jobs = 2 } }
 if (-not $OutDir) { $OutDir = Join-Path $root 'build\release' }
-if (-not $DllBuildDir) { $DllBuildDir = Join-Path $root 'build\rt-dll' }
+if (-not $DllBuildDir) { $DllBuildDir = Join-Path $root 'build\release\dll' }
 if (-not $LiftDir) { $LiftDir = Join-Path $root 'build\lift-301' }
 
 # The bundled Zig is what makes this build need no MSVC and no Windows SDK: it carries its own headers and CRT.
@@ -142,7 +142,7 @@ if ($SkipExe) { return }
 
 # ---- 2. compile the lift with Zig ------------------------------------------------------------------------
 $inc = Join-Path $repo 'third_party\nxrecomp\recomp\include'
-$objRoot = Join-Path $root 'build\obj-zig'
+$objRoot = Join-Path $root 'build\release\obj-zig'
 
 # The processor variant. '+fma' needs FMA3 (Haswell / Piledriver or newer); an older CPU executing it dies with an
 # illegal instruction, so 'auto' reads what this processor actually has from zig itself and picks the slower set

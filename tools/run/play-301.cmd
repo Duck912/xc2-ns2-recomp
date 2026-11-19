@@ -150,7 +150,7 @@ cd /d "%ROOT%\xc2\build\boot"
 if errorlevel 1 (echo cannot enter "%ROOT%\xc2\build\boot"& exit /b 1)
 rem XC2_EXE runs a different build with the same environment: the point of a clean-room build is to compare it with
 rem this one, and comparing means launching both the same way.
-if not defined XC2_EXE set XC2_EXE=%ROOT%\xc2\build\boot-301\xc2_boot.exe
+if not defined XC2_EXE set XC2_EXE=%ROOT%\xc2\build\301\boot\xc2_boot.exe
 rem A fresh cache renders with gaps - the title screen is black - until the game has been run once and the blocks it
 rem asked for are translated. Do that collection headless here, so the FIRST launch is already complete. Once per
 rem cache (work\.prefilled); -noprefill skips it.

@@ -14,7 +14,7 @@ param(
     [int]$Seconds = 90,
     [string]$Press = 'A@16,A@22,A@30,LSU@46+8',
     [string]$Scale = '0.66',
-    [string]$Exe = 'xc2\build\boot-census\xc2_boot.exe',
+    [string]$Exe = 'xc2\build\census\boot\xc2_boot.exe',
     [string]$Tick = ''            # main-relative offset of the frame clock (default: the build's own); must be an entryhook site
 )
 $ErrorActionPreference = 'Stop'

@@ -52,6 +52,7 @@ if "%QUEST%"=="0" echo quest:   untouched (asserts at ~7 s on the fixed_vector o
 echo save:    %ROOT%\work\save-ns2pkg7
 echo log:     %ROOT%\work\logs\ns2pkg7-%STAMP%.log
 cd /d "%ROOT%\xc2\build\boot"
-"%ROOT%\xc2\build\boot-ns2pkg7\xc2_boot.exe" --exefs "..\..\game\xc2ns2" --link host --gfx %GFXMODE% --log "%ROOT%\work\logs\ns2pkg7-%STAMP%.log"
+if not defined XC2_LEGACY_BUILD set XC2_LEGACY_BUILD=%ROOT%\..\XC2\archive\build-legacy-2026-11-19
+"%XC2_LEGACY_BUILD%\boot-ns2pkg7\xc2_boot.exe" --exefs "..\..\game\xc2ns2" --link host --gfx %GFXMODE% --log "%ROOT%\work\logs\ns2pkg7-%STAMP%.log"
 echo exit=%ERRORLEVEL%
 pause

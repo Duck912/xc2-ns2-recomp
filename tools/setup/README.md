@@ -19,8 +19,8 @@ Each one is skipped when its artifact is already there, so a second run is nearl
 | `sources` | nxrecomp from `deps.lock.json`, then `fetch_third_party.ps1` | `third_party/nxrecomp` |
 | `runtime` | the two cmake configures and their builds | `third_party/fefw-recomp/build/*` |
 | `ingest` | a `.nup`, or a folder that already holds the modules | `<install>/exefs`, `<install>/romfs` |
-| `lift` | `tools/build/build.ps1`, seven modules | `xc2/build/lib-301/*.lib` |
-| `link` | `tools/build/build-boot.ps1` | `xc2/build/boot-301/xc2_boot.exe` |
+| `lift` | `tools/build/build.ps1`, seven modules | `xc2/build/301/lib/*.lib` |
+| `link` | `tools/build/build-boot.ps1` | `xc2/build/301/boot/xc2_boot.exe` |
 | `done` | `setup_state.tsv` and the romfs link | — |
 
 Measured on a bare export with every build artifact removed: **8 min 13 s**, exit 0

@@ -8,7 +8,7 @@
 # point of the recompilation), and the shader cache is translated from their own shaders.
 param(
     [string]$Out = '',
-    [string]$Launcher = 'E:\XC2-launcher',
+    [string]$Launcher = '',   # default: <checkout>\launcher
     [string]$Zig = 'E:\Tools\dev\zig',
     [switch]$SkipHarness,
     [switch]$SkipPython
@@ -43,13 +43,18 @@ if (Test-Path $Out) { Say 'removing the previous one'; RemoveTree $Out }
 New-Item -ItemType Directory -Force $Out | Out-Null
 
 # --- 1. the launcher ---------------------------------------------------------------------------------------------
+if (-not $Launcher) { $Launcher = Join-Path $root 'launcher' }
+if (-not (Test-Path (Join-Path $Launcher 'package.json'))) { throw "no launcher sources at $Launcher (the checkout carries them in launcher\)" }
 $exe = Join-Path $Launcher 'src-tauri\target\release\xc2-launcher.exe'
 Need $exe 'the built launcher'
 # The launcher must be built with `npm run tauri build -- --no-bundle`, never with a bare `cargo build`: the CLI is
 # what embeds the frontend, and a cargo build produces an exe that looks for the dev server on 127.0.0.1:1420 instead
 # (2026-11-18: shipped like that once, every player saw ERR_CONNECTION_REFUSED). The frontend bundle it embeds must be
 # newer than its sources, which is what the CLI guarantees and a hand-run cargo build does not.
-$dist = Join-Path (Split-Path -Parent $Launcher) 'dist\index.html'
+# The frontend bundle the CLI embeds: inside the launcher tree (launcher\dist) since the sources moved into the
+# checkout; older layouts kept it beside the checkout, which is why both are looked at.
+$dist = Join-Path $Launcher 'dist\index.html'
+if (-not (Test-Path $dist)) { $dist = Join-Path (Split-Path -Parent $Launcher) 'dist\index.html' }
 if (Test-Path $dist) {
     if ((Get-Item $exe).LastWriteTime -lt (Get-Item $dist).LastWriteTime) {
         throw "the launcher ($exe) is older than its frontend ($dist): rebuild it with 'npm run tauri build -- --no-bundle'"
@@ -59,8 +64,8 @@ Copy-Item $exe $Out -Force
 Say ("launcher      {0:N1} MB" -f ((Get-Item $exe).Length / 1MB))
 
 # --- 2. the runtime, as a DLL and the import library to link against ---------------------------------------------
-$dll = Join-Path $root 'xc2\build\rt-dll\xc2_rt.dll'
-$lib = Join-Path $root 'xc2\build\rt-dll\xc2_rt.lib'
+$dll = Join-Path $root 'xc2\build\release\dll\xc2_rt.dll'
+$lib = Join-Path $root 'xc2\build\release\dll\xc2_rt.lib'
 Need $dll 'xc2_rt.dll (pwsh tools\build\build-release.ps1)'
 Need $lib 'xc2_rt.lib'
 New-Item -ItemType Directory -Force (Join-Path $Out 'runtime') | Out-Null

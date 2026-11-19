@@ -11,7 +11,7 @@ in `../third_party/nxrecomp` (clone it there yourself, it is not vendored).
 .\tools\build\build.ps1 -Exefs xc2\game\xc2ns301 -Run:$false -Modules main,sdk,subsdk0,subsdk1,subsdk2,subsdk3,rtld
 
 # link the executable the launcher runs
-.\tools\build\build-boot.ps1 -Exefs xc2\game\xc2ns301 -OutDir xc2\build\boot-301 -LibDir xc2\build\lib `
+.\tools\build\build-boot.ps1 -Exefs xc2\game\xc2ns301 -OutDir xc2\build\301\boot -LibDir xc2\build\lib `
     -MainLib build\lib\main.lib -Defines XC2_MODULES_7
 ```
 

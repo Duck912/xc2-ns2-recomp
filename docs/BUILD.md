@@ -131,7 +131,7 @@ keeps its own `-301` directories so the two never overwrite each other.
 ```powershell
 .\tools\build\build.ps1 -Exefs xc2\game\xc2ns301 -Run:$false `
     -Modules 'main,sdk,subsdk0,subsdk1,subsdk2,subsdk3,rtld' `
-    -LiftDir xc2\build\lift-301 -ObjDir xc2\build\obj-301 -LibDir xc2\build\lib-301
+    -LiftDir xc2\build\301\lift -ObjDir xc2\build\301\obj -LibDir xc2\build\301\lib
 ```
 
 The stub link at the end of `build.ps1` always fails — that is expected, `build-boot.ps1` does the real link.
@@ -139,11 +139,11 @@ The stub link at the end of `build.ps1` always fails — that is expected, `buil
 ### 4.3 the boot executable (~50 s)
 
 ```powershell
-.\tools\build\build-boot.ps1 -Exefs xc2\game\xc2ns301 -OutDir xc2\build\boot-301 `
-    -LibDir xc2\build\lib-301 -MainLib xc2\build\lib-301\main.lib -Defines XC2_MODULES_7
+.\tools\build\build-boot.ps1 -Exefs xc2\game\xc2ns301 -OutDir xc2\build\301\boot `
+    -LibDir xc2\build\301\lib -MainLib xc2\build\301\lib\main.lib -Defines XC2_MODULES_7
 ```
 
-Produces `xc2\build\boot-301\xc2_boot.exe`, which is what `tools\run\play-301.cmd` runs. Without the flags the
+Produces `xc2\build\301\boot\xc2_boot.exe`, which is what `tools\run\play-301.cmd` runs. Without the flags the
 script links the older four-module route into `xc2\build\boot\`.
 
 One library comes from outside the tree: **libvpx** (BSD-3, the host VP9/VP8 decoders) is compiled into `nxrt` and
