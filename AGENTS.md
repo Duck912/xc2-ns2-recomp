@@ -37,6 +37,31 @@ These are not style preferences. Each one exists because breaking it cost a sess
 4. **Absolute paths in scripts and commands.** Relative paths break as soon as the working directory moves,
    and several build scripts change directory part-way through.
 
+## Layout
+
+The checkout holds only what cannot be rebuilt elsewhere. Everything heavy has one home outside it, reached by a
+junction, so no script has to know about a second copy:
+
+| path | what |
+|---|---|
+| `xc2\` | the game-specific half: `src`, `sites`, `tests`, the release CMake project, the module table |
+| `tools\` | `build` (build and package), `run` (start the game), `shader` (cache and patches), `analysis`, `ci` (the gates), `setup` |
+| `launcher\` | the launcher sources; its built exe is what `make-package.ps1` copies |
+| `docs\`, `licenses\`, `third_party\` | reference, licences, upstream code |
+| `work\` → `E:\XC2\dev\work` | logs, screenshots, scratch |
+| `xc2\game\` → `E:\XC2\data\exefs` | the user's own dump; `xc2\build\boot\game\*` likewise for romfs and DLC |
+
+`python tools/ci/check_invariants.py` fails when a new top-level entry appears, so the shape above is a rule and not
+a habit. The rules that go with it:
+
+1. **One entry point per intent**: `tools/build/build*.ps1`, `tools/run/play*.cmd`, `tools/build/make-package.ps1`.
+   A new script is a subcommand of one of them, not a new name at the root.
+2. **Directory names carry no date and no version.** Versions go in arguments, file names or `build.json`.
+3. **One-off scripts never go in `tools\`.** They live in `E:\XC2\archive\`; `tools\` is for what the next person uses.
+4. **Data has one physical copy.** The junctions above are the only second names for it.
+5. **Build outputs stay out of the checkout**: `xc2\build\` holds `boot` (runtime cwd and shader cache), `301`,
+   `census`, `release` — four directories, nothing else.
+
 ## Build and run
 
 [docs/QUICKSTART.md](docs/QUICKSTART.md) is the five-step version with the failures people actually hit.

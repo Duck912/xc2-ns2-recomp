@@ -104,6 +104,29 @@ def check_ascii_inputs(files):
     return (not bad, bad)
 
 
+# The checkout has one shape. A new top-level entry is a decision, not something a script leaves behind:
+# build outputs, logs and scratch have their own trees outside it (E:\\XC2), linked in when needed.
+TOP_LEVEL_DIRS = {".github", "docs", "launcher", "licenses", "third_party", "tools", "xc2"}
+TOP_LEVEL_FILES = {
+    ".editorconfig", ".gitattributes", ".gitignore", "AGENTS.md", "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE",
+    "LICENSE.nxnative.MIT", "README.md", "SECURITY.md", "STATUS.md", "THIRD_PARTY_NOTICES.md", "controls.ini",
+    "deepseek.md",
+}
+
+
+def check_top_level(files):
+    """Only the known trees and files sit at the root."""
+    bad = set()
+    for f in files:
+        top = f.split("/")[0]
+        if "/" in f:
+            if top not in TOP_LEVEL_DIRS:
+                bad.add(top + "/")
+        elif top not in TOP_LEVEL_FILES:
+            bad.add(top)
+    return (not bad, sorted(bad))
+
+
 def check_cmd_crlf(files):
     """Our own .cmd files only: the vendored runtime keeps its own line endings."""
     bad = []
@@ -123,6 +146,7 @@ CHECKS = [
     ("no game data is tracked", check_game_data),
     ("no ExeFS module is tracked", check_no_extension_exefs),
     ("shipped hook tables carry no game bytes", check_sites_have_no_game_bytes),
+    ("the root has one known shape", check_top_level),
 ]
 
 HOOK_CHECKS = CHECKS  # the fast ones are also the critical ones
