@@ -1,64 +1,122 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Launch XC2 hands-on: live keyboard / gamepad input, window, log file, F12 screenshots.
+# Start the game from a profile: config/profiles/<name>.ini holds every path and switch, this script applies them.
 #
-#   .\play.ps1                        # window + live input, 60 Hz presents (normal frame rate), log to play.log
-#   .\play.ps1 -PresentHz 30          # the old 30 Hz pacing (comparison / recording)
-#   .\play.ps1 -Press 'A@16,A@22'     # the same, plus scripted presses (they add to the live input)
-#   .\play.ps1 -NoInput               # live input off (a whole run can then be scripted, XC2_NO_INPUT=1)
+#   pwsh tools\run\play.ps1 -Profile dev
+#   pwsh tools\run\play.ps1 -Profile dev -Fps 30 -Headless -Seconds 40
 #
-# Why -PresentHz 60 by default: XC2's logic steps 30 times a second, but it never asks the console for a present interval, so
-# the host paces it ([nvn] present_interval_hz, HANDOVER 19). 60 shows every logic frame twice on a 60 Hz display: steady,
-# no judder, and input stays responsive. 30 is the old behaviour (one present per logic step); 0 is uncapped, which is only
-# for measuring throughput - at a rate the game cannot hold, the picture shows tearing / misplaced effects that look like
-# rendering bugs (they are frame pacing, not rendering; HANDOVER 28.7).
-#
-# Controls (keyboard):
-#   move      W A S D   or the arrow keys          camera        I J K L
-#   A/confirm Space or Enter                       B/cancel      Backspace or Esc
-#   X         U                                    Y             O
-#   L / R     Q / E                                ZL / ZR       1 / 2
-#   +         Tab or the + key                     -             the - key
-#   stick clicks  Shift (L) / Ctrl (R)             screenshot    F12  -> shots_manual\shot_NNNN.png
-# A gamepad is used when one is plugged in (bottom button = A, sticks and triggers as printed).
+# The profile is data: the same engine can start the development build, a packaged install or an A/B run without
+# another .cmd file full of set lines. tools\run\play-301.cmd is now a shim over this script.
 param(
-    [string]$Press = '',
-    [switch]$NoInput,
-    [string]$Log = 'play.log',
-    [string]$Gfx = 'window',
-    [string]$Exefs = '',
-    [int]$PresentHz = 60
+    [string]$Profile = 'dev',
+    [string]$ProfileFile = '',
+    [int]$Fps = 0,
+    [switch]$Headless,
+    [switch]$NoPrefill,
+    [switch]$Dump,
+    [string]$Shots = '',
+    [int]$Seconds = 0,
+    [string]$Exe = '',
+    [string]$Log = '',
+    [hashtable]$Env = @{}
 )
 $ErrorActionPreference = 'Stop'
-$xc2 = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'xc2'
-$bd = Join-Path $xc2 'build\boot'
-# The four NSOs live in the project now (xc2\game\xc2ns2), copied from <fefw-recomp>\work\xc2ns2.
-if (-not $Exefs) { $Exefs = Join-Path $xc2 'game\xc2ns2' }
-if (-not (Test-Path $Exefs)) { throw "ExeFS not found: $Exefs (copy main, sdk, subsdk0, rtld, main.npdm into xc2\game\xc2ns2)" }
-if (-not (Test-Path (Join-Path $bd 'xc2_boot.exe'))) { throw "xc2_boot.exe not built (run tools\build\build-boot.ps1 first)" }
-# one instance at a time: the second one dies in the loader ("VirtualAlloc failed, error 487", HANDOVER 28.7)
-$busy = Get-Process -Name xc2_boot -ErrorAction SilentlyContinue | Where-Object { $_.Id -ne $PID }
-if ($busy) {
-    Write-Host ("xc2_boot is already running (pid {0}): close that window first - only one instance can hold the guest's address space." -f ($busy.Id -join ', ')) -ForegroundColor Yellow
-    exit 2
+$repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)   # tools\run -> the checkout
+if (-not $ProfileFile) { $ProfileFile = Join-Path $repo ("config\\profiles\\" + $Profile + ".ini") }
+if (-not (Test-Path -LiteralPath $ProfileFile)) { throw "no profile at $ProfileFile" }
+
+# A small ini reader: [section], key = value, # and ; comments. Paths resolve against the checkout.
+$cfg = @{}
+$section = ''
+foreach ($line in Get-Content -LiteralPath $ProfileFile) {
+    $l = $line.Trim()
+    if (-not $l -or $l.StartsWith('#') -or $l.StartsWith(';')) { continue }
+    if ($l -match '^\[(.+)\]$') { $section = $matches[1].Trim(); continue }
+    $i = $l.IndexOf('=')
+    if ($i -lt 1) { continue }
+    $cfg[$section + '/' + $l.Substring(0, $i).Trim()] = $l.Substring($i + 1).Trim()
 }
-Push-Location $bd
+function Get-Cfg([string]$key, [string]$fallback = '') {
+    if ($cfg.ContainsKey($key)) { return $cfg[$key] }
+    return $fallback
+}
+function Resolve-Under([string]$value) {
+    if (-not $value) { return '' }
+    if ([System.IO.Path]::IsPathRooted($value)) { return $value }
+    return (Join-Path $repo $value)
+}
+
+$exe = if ($Exe) { $Exe } else { Resolve-Under (Get-Cfg 'run/exe') }
+$cwd = Resolve-Under (Get-Cfg 'run/cwd')
+$exefs = Resolve-Under (Get-Cfg 'run/exefs')
+$romfs = Resolve-Under (Get-Cfg 'run/romfs')
+$dlc = Resolve-Under (Get-Cfg 'run/dlc')
+$save = Resolve-Under (Get-Cfg 'run/save')
+$cache = Resolve-Under (Get-Cfg 'run/shader_cache')
+$missing = Resolve-Under (Get-Cfg 'run/missing')
+$logs = Resolve-Under (Get-Cfg 'run/logs')
+$gf = if ($Headless) { 'headless' } else { Get-Cfg 'run/gfx' 'window' }
+$fps = if ($Fps -gt 0) { $Fps } else { [int](Get-Cfg 'run/fps' '60') }
+$hz = [int](Get-Cfg 'run/hz' '60')
+if (-not (Test-Path -LiteralPath $exe)) { throw "no exe at $exe (build it first: tools\\build\\build-boot.ps1)" }
+if (-not (Test-Path -LiteralPath $cwd)) { throw "no working directory at $cwd" }
+foreach ($d in $logs, $missing, $save) { if ($d) { New-Item -ItemType Directory -Force -Path $d | Out-Null } }
+
+foreach ($k in $cfg.Keys) {
+    if ($k.StartsWith('env/')) { Set-Item -Path ('env:' + $k.Substring(4)) -Value $cfg[$k] }
+}
+foreach ($k in $Env.Keys) { Set-Item -Path ('env:' + $k) -Value $Env[$k] }
+$env:NXRT_XC2_FPS = "$fps"
+$env:NXRT_NVN_PRESENT_INTERVAL_HZ = "$hz"
+$env:NXRT_FS_ROMFS = $romfs
+$env:NXRT_FS_SAVE_DIR = $save
+$env:NXRT_AOC_DIR = $dlc
+$env:NXRT_NVN_SHADER_CACHE = $cache
+$env:NXRT_NVN_DUMP_MISSING = $missing
+$env:NXRT_NVN_SKIP_FS_FILE = Join-Path $repo 'work\\skip_fs.txt'
+$env:NXRT_NVN_HOT_STATE_FILE = Join-Path $repo 'work\\hot_state.txt'
+if (-not (Test-Path -LiteralPath $env:NXRT_NVN_SKIP_FS_FILE)) { New-Item -ItemType File -Path $env:NXRT_NVN_SKIP_FS_FILE -Force | Out-Null }
+if (-not (Test-Path -LiteralPath $env:NXRT_NVN_HOT_STATE_FILE)) { Set-Content -LiteralPath $env:NXRT_NVN_HOT_STATE_FILE -Value ('front_face=' + (Get-Cfg 'env/NXRT_NVN_FRONT_FACE_MODE' '2')) }
+if ($Dump) { New-Item -ItemType Directory -Force -Path $missing | Out-Null; $env:NXRT_NVN_DUMP_ALL = '1' }
+
+# The upscaler hot file: start every run from the ini, never from what a previous session left behind.
+$hot = Join-Path $repo 'work\\dlss_hot.txt'
+Set-Content -LiteralPath $hot -Value 'upscaler = taau' -Encoding ascii
+$env:NXRT_DLSS_HOT_FILE = $hot
+
+# The preload pack is read before the loose .spv files, so a pack older than a replaced shader hides it.
+$pack = Join-Path (Split-Path $cache -Parent) 'spirv.preload.pack'
+if (Test-Path -LiteralPath $pack) { Remove-Item -LiteralPath $pack -Force }
+
+if (-not $Log) {
+    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $Log = Join-Path $logs ('play-' + $stamp + '.log')
+}
+if ($Shots) {
+    $dir = Join-Path $repo ('work\\shots\\' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    $env:NXRT_NVN_SHOT_FRAMES = $Shots
+    $env:NXRT_NVN_SHOT_DIR = $dir
+    Write-Host "shots: $dir"
+}
+
+if (-not $NoPrefill -and -not $env:XC2_NOPREFILL) {
+    & pwsh -NoProfile -File (Join-Path $repo 'tools\\run\\prefill.ps1') -Exe $exe -Exefs $exefs -Cache $cache -Work (Join-Path $repo 'work')
+}
+if (-not $exefs -or -not (Test-Path -LiteralPath $exefs)) { throw "no exefs at $exefs" }
+if (-not (Test-Path -LiteralPath $romfs)) { throw "no romfs at $romfs" }
+
+& pwsh -NoProfile -File (Join-Path $repo 'tools\\run\\build-stamp.ps1') -Exe $exe
+Write-Host ("profile {0}: {1} at {2} fps" -f $Profile, $exe, $fps)
+Push-Location $cwd
 try {
-    # the automatic screenshot / trace knobs of earlier rounds would fight a hands-on session, and the diagnostic switches
-    # (cull/stencil/depth overrides, shader skipping, missing-block dumps) change what the frame looks like
-    'NXRT_NVN_SHOT_FRAMES','NXRT_NVN_TRACE_SEC','NXRT_NVN_TRACE_DUMP_TEX','NXRT_NVN_FRAME_CSV','NXRT_NVN_TRACE_FRAME',
-    'NXRT_NVN_SKIP_FS_FILE','NXRT_NVN_DUMP_MISSING','NXRT_NVN_DEPTH_FUNC_EQUAL','NXRT_NVN_CULL_OFF_ALL','NXRT_NVN_STENCIL_OFF',
-    'NXRT_NVN_DEPTH_OFF_FS','NXRT_NVN_CULL_OFF_FS','NXRT_NVN_DEPTH_WRITE_FS',
-    'NXRT_NVN_SPV_HOT','NXRT_NVN_TRACE_UBO_DIR','NXRT_NVN_TRACE_UBO_BYTES','XC2_MODEL_PROBE' |
-        ForEach-Object { Remove-Item "Env:$_" -ErrorAction SilentlyContinue }
-    if ($PresentHz -gt 0) { $env:NXRT_NVN_PRESENT_INTERVAL_HZ = "$PresentHz" }
-    else { $env:NXRT_NVN_PRESENT_INTERVAL_HZ = '0' }   # 0 = off; setting it keeps xc2_boot from putting its 30 back
-    if ($Press) { $env:XC2_PRESS = $Press } else { Remove-Item Env:XC2_PRESS -ErrorAction SilentlyContinue }
-    if ($NoInput) { $env:XC2_NO_INPUT = '1' } else { Remove-Item Env:XC2_NO_INPUT -ErrorAction SilentlyContinue }
-    # keep the previous run's log: a crash trace must survive the next launch
-    if (Test-Path (Join-Path $bd $Log)) { Copy-Item (Join-Path $bd $Log) (Join-Path $bd ([IO.Path]::GetFileNameWithoutExtension($Log) + '.prev.log')) -Force }
-    Write-Host "window: Xenoblade Chronicles 2 (Switch 2 Edition)   presents: $(if ($PresentHz -gt 0) { "$PresentHz Hz" } else { 'uncapped' })   log: $bd\$Log"
-    Write-Host "F12 saves shots_manual\shot_NNNN.png (plus .pfm / .hdrmap.png). Close the window or Ctrl+C to stop."
-    & (Join-Path $bd 'xc2_boot.exe') --exefs $Exefs --link host --gfx $Gfx --log $Log
-} finally {
-    Pop-Location
-}
+    $argv = @('--exefs', $exefs, '--link', (Get-Cfg 'run/link' 'host'), '--gfx', $gf, '--log', $Log)
+    if ($Seconds -gt 0) {
+        $p = Start-Process -FilePath $exe -ArgumentList $argv -PassThru -NoNewWindow
+        Write-Host ("pid {0}; stopping after {1}s" -f $p.Id, $Seconds)
+        Start-Sleep -Seconds $Seconds
+        if (-not $p.HasExited) { $p.Kill(); $p.WaitForExit(5000) | Out-Null }
+    } else {
+        & $exe @argv
+    }
+} finally { Pop-Location }
+Write-Host "log: $Log"

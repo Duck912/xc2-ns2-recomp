@@ -49,6 +49,8 @@ With `NXRT_NVN_SPV_HOT` set (see `run\hot.cmd`) the replacement takes effect in 
 
 | file | what |
 |---|---|
+| `play.ps1` | starts the game from `config/profiles/<name>.ini`: paths, switches and frame rate are data, not set lines. `-Headless`, `-Fps`, `-Dump`, `-Shots`, `-Seconds` for scripted runs |
+| `config/profiles/dev.ini` | the 3.0.1 development build: exe, working directory, romfs/dlc, save, cache and the 20 switches |
 | `play-301.cmd` | the 3.0.1 route: `-60` for 60 fps, `-headless`, `-dump` to collect shaders, language switches |
 | `play60-301.cmd` | the same at 60 fps, double-clickable |
 | `hot.cmd` | launch with shader hot-swap on |
