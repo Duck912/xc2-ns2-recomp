@@ -2,8 +2,8 @@
 # One census run: the census build (build-census.ps1) started with the recorder on, killed after N seconds. The census
 # file is rewritten every 600 logic frames while it runs, so a forced kill keeps the last table.
 #
-#   pwsh -File xc2\scripts\run_census.ps1 -Tag census-30 -Fps 0  -Seconds 90    # native 30 Hz logic
-#   pwsh -File xc2\scripts\run_census.ps1 -Tag census-60 -Fps 60 -Seconds 90    # [xc2] fps = 60
+#   pwsh -File tools\run\run_census.ps1 -Tag census-30 -Fps 0  -Seconds 90    # native 30 Hz logic
+#   pwsh -File tools\run\run_census.ps1 -Tag census-60 -Fps 60 -Seconds 90    # [xc2] fps = 60
 #
 # Both runs present at 60 Hz, the same scripted input, the same save. fps_follow is off in both so the step is exactly
 # 1 / fps and a site's mean delta classifies cleanly (a hitch only makes the game slower, not the census wrong).
@@ -18,13 +18,13 @@ param(
     [string]$Tick = ''            # main-relative offset of the frame clock (default: the build's own); must be an entryhook site
 )
 $ErrorActionPreference = 'Stop'
-$root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)      # xc2\scripts -> the repo root
+$root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)      # tools\run -> the repo root
 $out = Join-Path $root 'work\fps_census'
 New-Item -ItemType Directory -Force -Path $out | Out-Null
 $census = Join-Path $out ($Tag + '.txt')
 $log = Join-Path $out ('run-' + $Tag + '.log')
 $exePath = if ([IO.Path]::IsPathRooted($Exe)) { $Exe } else { Join-Path $root $Exe }
-if (-not (Test-Path $exePath)) { throw "no census build at $exePath (run xc2\scripts\build-census.ps1 first)" }
+if (-not (Test-Path $exePath)) { throw "no census build at $exePath (run tools\build\build-census.ps1 first)" }
 $bd = Split-Path -Parent $exePath
 
 # one xc2_boot at a time, and 10 s after a kill before the next (VirtualAlloc fails with 487 otherwise)
@@ -90,4 +90,4 @@ if (-not (Test-Path $census)) { throw "no census file at $census" }
 $rows = @(Get-Content $census | Where-Object { $_ -notmatch '^updates ' }).Count
 Write-Host ("census: {0}, {1} site lines" -f $census, $rows)
 if ($rows -lt 1000) { Write-Warning ("only {0} site lines: the probes are probably not in this build" -f $rows) }
-Write-Host 'next:  python xc2\scripts\fps_census.py --at30 work\fps_census\census-30.txt --at60 work\fps_census\census-60.txt --sites xc2\build\fps_sites.txt --out work\fps_census\report.txt --csv work\fps_census\report.csv'
+Write-Host 'next:  python tools\analysis\fps_census.py --at30 work\fps_census\census-30.txt --at60 work\fps_census\census-60.txt --sites xc2\build\fps_sites.txt --out work\fps_census\report.txt --csv work\fps_census\report.csv'

@@ -23,7 +23,7 @@ These are not style preferences. Each one exists because breaking it cost a sess
    obvious cases; `docs/INVARIANTS.md` has the reasoning.
 2. **The shader cache is append-only.** Never rebuild or delete it. It holds 21,171 translated programs, and
    `spirv.preload.pack` is read before the loose `.spv` files, so a stale pack silently wins over an edited
-   shader. If you change a shader patch, run `xc2\scripts\patch-shaders.ps1 -Check` and expect exit 0.
+   shader. If you change a shader patch, run `tools\build\patch-shaders.ps1 -Check` and expect exit 0.
    **A cache built from the romfs alone is never complete:** the archive yields 12,154 blocks (12,126 embedded
    groups + 28 in `ndsr.pck`), 12,132 of them translate, and 5 more exist in no file at all — the game builds
    them at run time, so they only arrive through `NXRT_NVN_DUMP_MISSING`. A fresh install therefore ends at
@@ -45,10 +45,10 @@ These are not style preferences. Each one exists because breaking it cost a sess
 ```powershell
 pwsh -File third_party\fefw-recomp\tools\textures\scripts\fetch_third_party.ps1   # once
 # two cmake configures, see QUICKSTART section 3
-.\xc2\scripts\build.ps1 -Exefs xc2\game\xc2ns301 -Run:$false `
+.\tools\build\build.ps1 -Exefs xc2\game\xc2ns301 -Run:$false `
     -Modules 'main,sdk,subsdk0,subsdk1,subsdk2,subsdk3,rtld' `
     -LiftDir xc2\build\lift-301 -ObjDir xc2\build\obj-301 -LibDir xc2\build\lib-301
-.\xc2\scripts\build-boot.ps1 -Exefs xc2\game\xc2ns301 -OutDir xc2\build\boot-301 `
+.\tools\build\build-boot.ps1 -Exefs xc2\game\xc2ns301 -OutDir xc2\build\boot-301 `
     -LibDir xc2\build\lib-301 -MainLib xc2\build\lib-301\main.lib -Defines XC2_MODULES_7
 .\tools\run\play-301.cmd -60
 ```

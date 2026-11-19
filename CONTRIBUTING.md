@@ -19,10 +19,10 @@ See [docs/BUILD.md](docs/BUILD.md). In short: a Windows toolchain (MSVC + LLVM c
 .NET SDK, Vulkan SDK, Python 3.12), your own game dump in `xc2/game/`, then
 
 ```powershell
-.\xc2\scripts\build.ps1 -Exefs xc2\game\xc2ns301 -Run:$false `
+.\tools\build\build.ps1 -Exefs xc2\game\xc2ns301 -Run:$false `
     -Modules 'main,sdk,subsdk0,subsdk1,subsdk2,subsdk3,rtld' `
     -LiftDir xc2\build\lift-301 -ObjDir xc2\build\obj-301 -LibDir xc2\build\lib-301      # lift and compile the seven modules
-.\xc2\scripts\build-boot.ps1 -Exefs xc2\game\xc2ns301 -OutDir xc2\build\boot-301 `
+.\tools\build\build-boot.ps1 -Exefs xc2\game\xc2ns301 -OutDir xc2\build\boot-301 `
     -LibDir xc2\build\lib-301 -MainLib xc2\build\lib-301\main.lib -Defines XC2_MODULES_7
 ```
 
@@ -30,7 +30,7 @@ See [docs/BUILD.md](docs/BUILD.md). In short: a Windows toolchain (MSVC + LLVM c
 
 - Read [docs/INVARIANTS.md](docs/INVARIANTS.md) — the three rules above all else.
 - Keep the guest data out of the diff. Nothing under `xc2/game/` may be committed.
-- If you change a shader patch, run `xc2\scripts\patch-shaders.ps1 -Check` and make sure it exits 0.
+- If you change a shader patch, run `tools\build\patch-shaders.ps1 -Check` and make sure it exits 0.
 - If you change a file under `third_party/fefw-recomp/`, add the change to that directory's
   `MODIFICATIONS.md` (GPL-3.0 requires a modification notice).
 - Say which build you tested on, and what you measured. Numbers with a scene and a build are worth more than

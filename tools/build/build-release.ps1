@@ -2,11 +2,11 @@
 # Build the release split: xc2_rt.dll (runtime + boot code, a C ABI, no game code) and xc2_boot.exe (a stub plus
 # the libraries lifted from the player's own dump, compiled by the bundled Zig).
 #
-#   pwsh xc2\scripts\build-release.ps1                       # everything, into xc2\build\release
-#   pwsh xc2\scripts\build-release.ps1 -SkipDll              # only compile the lift and link the exe
-#   pwsh xc2\scripts\build-release.ps1 -Zig D:\zig\zig.exe -Jobs 6
+#   pwsh tools\build\build-release.ps1                       # everything, into xc2\build\release
+#   pwsh tools\build\build-release.ps1 -SkipDll              # only compile the lift and link the exe
+#   pwsh tools\build\build-release.ps1 -Zig D:\zig\zig.exe -Jobs 6
 #
-# The lift has to exist first (xc2\scripts\build.ps1). Nothing from the game is in the DLL; nothing from the
+# The lift has to exist first (tools\build\build.ps1). Nothing from the game is in the DLL; nothing from the
 # runtime is in the exe. Upstream ships the same arrangement as fefw_rt.dll + fefw.exe.
 param(
     [string]$Zig = '',
@@ -21,7 +21,7 @@ param(
     [ValidateSet('auto', 'fma', 'compat')][string]$Cpu = 'auto'
 )
 $ErrorActionPreference = 'Stop'
-$root = Split-Path -Parent $PSScriptRoot            # xc2
+$root = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'xc2'   # tools\build -> the checkout's xc2
 $repo = Split-Path -Parent $root                    # the checkout
 $rt = Join-Path $repo 'third_party\fefw-recomp'
 
@@ -180,7 +180,7 @@ $flags = @('-target', 'x86_64-windows-gnu', "-mcpu=$($variants[$Cpu].mcpu)", '-s
 $todo = @()
 foreach ($m in $modules) {
     $dir = Join-Path $LiftDir $m
-    if (-not (Test-Path $dir)) { throw "no lifted sources for $m in $dir (run xc2\scripts\build.ps1 first)" }
+    if (-not (Test-Path $dir)) { throw "no lifted sources for $m in $dir (run tools\build\build.ps1 first)" }
     $od = Join-Path $objRoot $m
     New-Item -ItemType Directory -Force -Path $od | Out-Null
     foreach ($s in Get-ChildItem $dir -Filter '*.cpp') {

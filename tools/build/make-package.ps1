@@ -61,7 +61,7 @@ Say ("launcher      {0:N1} MB" -f ((Get-Item $exe).Length / 1MB))
 # --- 2. the runtime, as a DLL and the import library to link against ---------------------------------------------
 $dll = Join-Path $root 'xc2\build\rt-dll\xc2_rt.dll'
 $lib = Join-Path $root 'xc2\build\rt-dll\xc2_rt.lib'
-Need $dll 'xc2_rt.dll (pwsh xc2\scripts\build-release.ps1)'
+Need $dll 'xc2_rt.dll (pwsh tools\build\build-release.ps1)'
 Need $lib 'xc2_rt.lib'
 New-Item -ItemType Directory -Force (Join-Path $Out 'runtime') | Out-Null
 Copy-Item $dll, $lib (Join-Path $Out 'runtime') -Force
@@ -70,7 +70,7 @@ Say ("runtime       {0:N1} MB  (xc2_rt.dll + the import library)" -f (((Get-Item
 # --- 3. the tools: an embeddable Python with the lifter in it, the shader harness, Zig -----------------------------
 $py = Join-Path $root 'xc2\build\release\tools\python'
 if (-not $SkipPython) {
-    Need (Join-Path $py 'python.exe') 'the embeddable Python (pwsh xc2\scripts\build-release.ps1)'
+    Need (Join-Path $py 'python.exe') 'the embeddable Python (pwsh tools\build\build-release.ps1)'
     CopyTree $py (Join-Path $Out 'tools\python')
     Say ("python        {0:N1} MB  (capstone, lz4, zstandard, nxrecomp)" -f (Size (Join-Path $Out 'tools\python')))
 }

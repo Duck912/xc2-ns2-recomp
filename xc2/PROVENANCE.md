@@ -17,13 +17,13 @@ SuperMarioWonderRecomp, ssbu-recomp and others). This project inherits those not
 
 - This repository contains no game code, no keys and no assets. The ExeFS is extracted by the user from their own
   dump and placed in `xc2\game\xc2ns301\` (or `xc2ns2` for the older 3.0.0 route); that directory is
-  git-ignored, and `scripts\play.ps1` and `scripts\build-boot.ps1` default to it.
+  git-ignored, and `tools\run\play.ps1` and `tools\build\build-boot.ps1` default to it.
 - The lifted C++ under `work/` is derived from the game (recompiled output) and is likewise not committed.
 - Only sources and build scripts are distributed.
 
 ## What this project adds
 
-- the scaffolding under `src/`, `scripts/` and `docs/`;
+- the scaffolding under `src/`, `sites/` and the build scripts under `tools/`;
 - `xc2/recomp/xc2ns2/config.py`, the module table and build ids the lifter reads. `third_party/nxrecomp/` is a
   local, git-ignored dependency, so the lift configuration lives in this repository and is read from here at build
   time; a fresh clone has to put nxrecomp into `third_party/nxrecomp` itself.

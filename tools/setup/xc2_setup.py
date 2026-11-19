@@ -8,8 +8,8 @@ Steps, each skipped when its artifact is already there:
     doctor   tools/bootstrap/doctor.ps1 -Json        what the machine is missing
     sources  nxrecomp tarball (deps.lock.json) + fetch_third_party.ps1
     runtime  the two cmake configures and builds (BUILD.md 4.1)
-    lift     xc2/scripts/build.ps1                   the seven modules to .lib
-    link     xc2/scripts/build-boot.ps1              the boot exe
+    lift     the seven modules to .lib (the repo's tools/build/build.ps1 does the same)
+    link     the boot exe (repo: tools/build/build-boot.ps1)
     ingest   a .nup, or a folder that already holds the modules
     done     setup_state.tsv, exefs/ and romfs/ under --install
 
@@ -347,7 +347,7 @@ def step_link(r, repo, install):
 # runs there with nothing installed: no cmake, no clang-cl, no XC2_ENV, no checkout. Whether this is one is decided
 # by the folder itself, not by a flag, so a package cannot be mistaken for a checkout or the other way round.
 
-# Guest load addresses, the table xc2/scripts/build.ps1 lifts with.
+# Guest load addresses, the table tools/build/build.ps1 lifts with.
 BASES = {
     "main": "0x7100000000", "sdk": "0x7500000000", "subsdk0": "0x7600000000", "subsdk1": "0x7640000000",
     "subsdk2": "0x7680000000", "subsdk3": "0x76C0000000", "rtld": "0x7700000000",
@@ -369,7 +369,7 @@ def package_tools(repo):
 
 def cpu_variant(zig):
     """The -mcpu this processor runs: '+fma' needs FMA3 (Haswell / Piledriver or newer), so an older one gets the
-    compatible set instead of an illegal instruction. Same two variants as xc2/scripts/build-release.ps1."""
+    compatible set instead of an illegal instruction. Same two variants as tools/build/build-release.ps1."""
     try:
         out = subprocess.run([str(zig), "targets"], capture_output=True, text=True, errors="replace", timeout=120)
         text = out.stdout

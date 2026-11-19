@@ -76,10 +76,10 @@ and `build-boot.ps1` finds no `nxrt_game_xc2ns2_core.lib`.
 ## 4. Lift, compile, link
 
 ```powershell
-.\xc2\scripts\build.ps1 -Exefs xc2\game\xc2ns301 -Run:$false `
+.\tools\build\build.ps1 -Exefs xc2\game\xc2ns301 -Run:$false `
     -Modules 'main,sdk,subsdk0,subsdk1,subsdk2,subsdk3,rtld' `
     -LiftDir xc2\build\lift-301 -ObjDir xc2\build\obj-301 -LibDir xc2\build\lib-301
-.\xc2\scripts\build-boot.ps1 -Exefs xc2\game\xc2ns301 -OutDir xc2\build\boot-301 `
+.\tools\build\build-boot.ps1 -Exefs xc2\game\xc2ns301 -OutDir xc2\build\boot-301 `
     -LibDir xc2\build\lib-301 -MainLib xc2\build\lib-301\main.lib -Defines XC2_MODULES_7
 ```
 

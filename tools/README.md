@@ -17,7 +17,7 @@ All scripts resolve their paths relative to themselves (`os.path.dirname(__file_
 | file | what |
 |---|---|
 | `spv_rename.py` | renames the UBO instance names a glslang round-trip produces back to `fp_c3`/`fp_c4`/`support_buffer`; NVN binds by name, so a shader installed without this does nothing |
-| `install_shaders.ps1` | the early manual installer; `xc2\scripts\patch-shaders.ps1` supersedes it |
+| `install_shaders.ps1` | the early manual installer; `tools\build\patch-shaders.ps1` supersedes it |
 | `patch_ds_samplers.py` | retypes the depth-stencil samplers the console leaves implicit (see `PATCHES.md`) |
 | `cache\` | the archive scan and the cache builder: `ard_index.py`, `extract_embedded.py`, `build_cache.py`, `pack.py`; `cache/README.md` has the numbers |
 
@@ -92,6 +92,14 @@ The scale is `raw = PFM / 2.78`; a tonemapped PNG is not a number.
 | `make-package.ps1` | assembles the portable tree: launcher, `xc2_rt.dll` + import library, the tools that compile the lifted code (Python, Zig, spirv-val, harness), and the setup program. Contains no game file. |
 | `PACKAGE-README.txt` | the readme that ships inside that tree |
 
-## Build entry points that stay in xc2/scripts
+## The rest of build/
 
-`build.ps1`, `build-boot.ps1`, `build-shaders.ps1`, `patch-shaders.ps1`, `play.ps1`, `make-portable.ps1`.
+| file | what |
+|---|---|
+| `build.ps1` | lift + compile the modules (the lift is the long part) |
+| `build-boot.ps1` | link `xc2_boot.exe` against the lifted libraries |
+| `build-release.ps1` | the release split: `xc2_rt.dll` plus a Zig-linked exe |
+| `build-census.ps1` | the frame-counter census build, in directories of its own |
+| `build-shaders.ps1` | make the shader cache and the preload pack complete (`-Check` reports only) |
+| `patch-shaders.ps1` | check or install the hand-patched modules (`-Check` exits 0 when the cache is consistent) |
+| `make-portable.ps1` | copy a built tree somewhere else |

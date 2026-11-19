@@ -15,7 +15,7 @@ lazily).
 
 The translated shader cache is only ever added to. It is not rebuilt or deleted: a rebuild costs the whole
 corpus (21,171 programs) and has silently shadowed hand-edited `.spv` files before (`spirv.preload.pack` takes
-precedence over loose files). When a shader patch is edited, run `xc2\scripts\patch-shaders.ps1 -Check` and
+precedence over loose files). When a shader patch is edited, run `tools\build\patch-shaders.ps1 -Check` and
 expect exit code 0.
 
 The three rules below are checked, not just written: `python tools/check_invariants.py` runs locally, a git

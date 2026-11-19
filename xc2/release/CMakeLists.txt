@@ -3,7 +3,7 @@
 # against the libraries lifted from their own dump. Upstream builds it the same way (game-build/fefw/CMakeLists.txt
 # with FEFW_RT_DLL=ON); the point is that the exe can then be built by Zig with no MSVC and no Windows SDK.
 #
-#   pwsh xc2\scripts\build-release.ps1          # configure + build the DLL, compile the lift, link the exe
+#   pwsh tools\build\build-release.ps1          # configure + build the DLL, compile the lift, link the exe
 #
 # Nothing here is derived from the game: the DLL is our own code plus the runtime, and the lifted libraries are
 # imported from the work folder by the build script, never by this project.

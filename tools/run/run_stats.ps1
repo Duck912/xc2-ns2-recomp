@@ -2,8 +2,8 @@
 # One replay-cost run: the normal build started with [nvn] replay_stats on, killed after N seconds, its
 # "replay" lines collected. Used to measure a change against the frame budget (HANDOVER 60.3/62.4).
 #
-#   pwsh -File xc2\scripts\run_stats.ps1 -Tag base -Fps 60 -Seconds 70
-#   pwsh -File xc2\scripts\run_stats.ps1 -Tag push  -Fps 60 -Seconds 70 -Env @{ NXRT_NVN_PUSH_UNIFORMS = '0' }
+#   pwsh -File tools\run\run_stats.ps1 -Tag base -Fps 60 -Seconds 70
+#   pwsh -File tools\run\run_stats.ps1 -Tag push  -Fps 60 -Seconds 70 -Env @{ NXRT_NVN_PUSH_UNIFORMS = '0' }
 #
 # The replay_stats period is 600 logic frames (about 10 s at 60 fps): a 70 s run gives six lines, and the
 # median of the last three is what a comparison should use (the first one still carries the load hitch).
@@ -21,12 +21,12 @@ param(
     [hashtable]$Env = @{}
 )
 $ErrorActionPreference = 'Stop'
-$root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)      # xc2\scripts -> the repo root
+$root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)      # tools\run -> the repo root
 $out = Join-Path $root 'work\replay_stats'
 New-Item -ItemType Directory -Force -Path $out | Out-Null
 $log = Join-Path $out ('run-' + $Tag + '.log')
 $exePath = if ([IO.Path]::IsPathRooted($Exe)) { $Exe } else { Join-Path $root $Exe }
-if (-not (Test-Path $exePath)) { throw "no build at $exePath (run xc2\scripts\build-boot.ps1 first)" }
+if (-not (Test-Path $exePath)) { throw "no build at $exePath (run tools\build\build-boot.ps1 first)" }
 $bd = Split-Path -Parent $exePath
 
 # one xc2_boot at a time, and 10 s after a kill before the next (VirtualAlloc fails with 487 otherwise)

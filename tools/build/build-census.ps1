@@ -2,9 +2,9 @@
 # The frame-counter census build: main lifted with a fps_census probe before every counter site (nxrecomp/fps.py), in
 # directories of its own so the normal build (build\lift, build\obj, build\lib, build\boot) is never touched.
 #
-#   .\scripts\build-census.ps1              # scan (if needed), lift, compile, link -> build\boot-census\xc2_boot.exe
-#   .\scripts\build-census.ps1 -Rescan      # re-run the site scanner first
-#   .\scripts\build-census.ps1 -SkipLift    # reuse build\lift-census\main (only the compile and the link run)
+#   .\tools\build\build-census.ps1              # scan (if needed), lift, compile, link -> build\boot-census\xc2_boot.exe
+#   .\tools\build\build-census.ps1 -Rescan      # re-run the site scanner first
+#   .\tools\build\build-census.ps1 -SkipLift    # reuse build\lift-census\main (only the compile and the link run)
 #
 # Products: build\fps_sites.txt (the sites), build\sites-main-census.txt (build\sites-main.txt verbatim + the clock's
 # entry hook), build\lift-census\main, build\obj-census\main, build\lib-census\main.lib,
@@ -15,7 +15,7 @@ param(
     [int]$Jobs = 10
 )
 $ErrorActionPreference = 'Stop'
-$root = Split-Path -Parent $PSScriptRoot
+$root = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'xc2'   # tools\build -> the checkout's xc2
 $nx = (Resolve-Path (Join-Path $root '..\third_party\nxrecomp\recomp')).Path
 $build = Join-Path $root 'build'
 $py = if ($env:XC2_PYTHON) { $env:XC2_PYTHON } elseif (Get-Command python -ErrorAction SilentlyContinue) { (Get-Command python).Source } else { throw 'no python: set $env:XC2_PYTHON' }
@@ -67,11 +67,11 @@ if ($SkipLift) {
     try {
         $liftArgs = @('-m', 'nxrecomp', 'lift', $mainNso, $liftDir, '--game', 'xc2ns2', '--name', 'main',
                       '--base', '0x7100000000', '--jobs', "$Jobs", '--sites', $censusSites, '--census-sites', $sites)
-        # scripts\fps_counters.txt (the frame counters converted to the game's time, HANDOVER 59) is optional: without it
+        # build\fps_counters.txt (the frame counters converted to the game's time, HANDOVER 59) is optional: without it
         # every site keeps the game's own value, i.e. this build is the plain census build.
-        $counters = Join-Path $PSScriptRoot 'fps_counters.txt'
+        $counters = Join-Path $root 'build\fps_counters.txt'
         if (Test-Path $counters) { $liftArgs += @('--fps-counters', $counters) }
-        else { Write-Host 'counters: scripts\fps_counters.txt not found: no counter is converted' }
+        else { Write-Host 'counters: build\fps_counters.txt not found: no counter is converted' }
         & $py @liftArgs 2>&1 | ForEach-Object { Write-Host "  $_" }
         if ($LASTEXITCODE -ne 0) { throw 'lift failed for main' }
     } finally { Pop-Location }
@@ -132,4 +132,4 @@ foreach ($f in @('nxrt.ini', 'controls.ini', 'pipeline_cache.bin', 'pipeline_key
 
 Write-Host ''
 Write-Host "census build: $(Join-Path $bootDir 'xc2_boot.exe')"
-Write-Host 'run it:  pwsh -File xc2\scripts\run_census.ps1 -Tag census-30 -Fps 0 -Seconds 90'
+Write-Host 'run it:  pwsh -File tools\run\run_census.ps1 -Tag census-30 -Fps 0 -Seconds 90'

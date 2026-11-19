@@ -94,11 +94,11 @@ $lift = Join-Path $repo 'xc2\build\lift\main'
 $n = (Get-ChildItem $lift -Filter 'module_*.cpp' -ErrorAction SilentlyContinue | Measure-Object).Count
 Row ($n -gt 0) 'lift/main' "$n module_*.cpp"
 $lib = Join-Path $repo 'xc2\build\lib\main.lib'
-$d = 'run xc2\scripts\build.ps1'
+$d = 'run tools\build\build.ps1'
 if (Test-Path $lib) { $d = '{0:N1} MB' -f ((Get-Item $lib).Length / 1MB) }
 Row (Test-Path $lib) 'lib/main.lib' $d
 $boot = Join-Path $repo 'xc2\build\boot\xc2_boot.exe'
-$d = 'run xc2\scripts\build-boot.ps1'
+$d = 'run tools\build\build-boot.ps1'
 if (Test-Path $boot) { $d = '{0:N1} MB, {1}' -f ((Get-Item $boot).Length / 1MB), (Get-Item $boot).LastWriteTime.ToString('yyyy-MM-dd HH:mm') }
 Row (Test-Path $boot) 'xc2_boot.exe' $d
 

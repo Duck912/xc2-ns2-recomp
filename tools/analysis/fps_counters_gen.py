@@ -92,6 +92,6 @@ L.append('')
 L.append('# ---- queue: the +1.0 float counter compared against exactly 1.0 (a progress value, not a timer)')
 for r in sorted([r for r in rows.values() if r['kind'] in ('f32+1.0', 'f32-1.0')], key=lambda r: -int(r['visits60'])):
     L.append('# %s   # %s %s -- fcmp against 1.0 right after the store' % (r['site'], r['kind'], r['field']))
-open(r'xc2\scripts\fps_counters.txt', 'w', encoding='ascii', newline='\n').write('\n'.join(L) + '\n')
+open(r'xc2\build\fps_counters.txt', 'w', encoding='ascii', newline='\n').write('\n'.join(L) + '\n')
 n = len(fs) + len(CI_OK) + len(f1) + len(F4) + len(F5)
 print('%d active: fs %d, ci %d, f1 %d, per-entity float %d, per-entity int %d' % (n, len(fs), len(CI_OK), len(f1), len(F4), len(F5)))

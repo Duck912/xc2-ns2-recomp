@@ -19,8 +19,8 @@ param(
     [int]$Jobs = 10
 )
 $ErrorActionPreference = 'Stop'
-$xc2 = Split-Path -Parent $PSScriptRoot
-$root = Split-Path -Parent $xc2
+$root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$xc2 = Join-Path $root 'xc2'
 $driver = Join-Path $root 'work\oracle\build_shaders.py'
 if (-not (Test-Path $driver)) { throw "missing $driver" }
 

@@ -1,17 +1,17 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # xc2ns2 scaffold build: lift the four modules with nxrecomp, compile every shard with clang-cl, link xc2ns2_stub.exe.
 #
-#   . .\scripts\build.ps1                 # everything (lift if stale, compile, link, run the smoke test)
-#   . .\scripts\build.ps1 -Run:$false     # build only
-#   . .\scripts\build.ps1 -SkipLift       # reuse build\lift (the C++ is current)
-#   . .\scripts\build.ps1 -Clean          # drop build\obj and build\bin first
+#   . .\tools\build\build.ps1                 # everything (lift if stale, compile, link, run the smoke test)
+#   . .\tools\build\build.ps1 -Run:$false     # build only
+#   . .\tools\build\build.ps1 -SkipLift       # reuse build\lift (the C++ is current)
+#   . .\tools\build\build.ps1 -Clean          # drop build\obj and build\bin first
 #
 # Inputs: the ExeFS modules (default <repo>\game\xc2ns2, override with -Exefs or $env:XC2_EXEFS).
 # Hook sites: build\sites-<module>.txt if present, else the shipped xc2\sites\sites-<module>.txt.
 # Toolchain: clang-cl and llvm-lib on PATH (Visual Studio Build Tools + LLVM), or point $env:XC2_ENV at a script
 # that sets them up. Python: $env:XC2_PYTHON, else `python` on PATH.
 param(
-    [string]$Exefs = $(if ($env:XC2_EXEFS) { $env:XC2_EXEFS } else { Join-Path (Split-Path -Parent $PSScriptRoot) 'game\xc2ns2' }),
+    [string]$Exefs = $(if ($env:XC2_EXEFS) { $env:XC2_EXEFS } else { Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'xc2\game\xc2ns2' }),
     [string[]]$Modules = @('main', 'sdk', 'subsdk0', 'rtld'),   # accepts -Modules main,sdk and -Modules 'main,sdk'
     [switch]$SkipLift,
     [switch]$Clean,
@@ -25,7 +25,7 @@ param(
     [string]$LibDir = ''
 )
 $ErrorActionPreference = 'Stop'
-$root = Split-Path -Parent $PSScriptRoot
+$root = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'xc2'   # tools\build -> the checkout's xc2
 $nx = (Resolve-Path (Join-Path $root '..\third_party\nxrecomp\recomp')).Path
 $build = Join-Path $root 'build'
 function Resolve-OutDir([string]$value, [string]$fallback) {
@@ -62,7 +62,7 @@ if (-not $py) {
         if ($c -and (Test-Python $c.Source)) { $py = $c.Source; break }
     }
 }
-if (-not $py) { throw 'no working python: set $env:XC2_PYTHON, or build the package python with xc2\scripts\build-release.ps1' }
+if (-not $py) { throw 'no working python: set $env:XC2_PYTHON, or build the package python with tools\build\build-release.ps1' }
 Write-Host ("python: " + $py)
 
 # The lift runs with the nxrecomp directory as the working directory, so a relative -Exefs has to be resolved here,

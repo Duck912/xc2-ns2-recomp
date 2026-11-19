@@ -29,12 +29,12 @@ param(
     [int]$PresentHz = 60
 )
 $ErrorActionPreference = 'Stop'
-$xc2 = Split-Path -Parent $PSScriptRoot
+$xc2 = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'xc2'
 $bd = Join-Path $xc2 'build\boot'
 # The four NSOs live in the project now (xc2\game\xc2ns2), copied from <fefw-recomp>\work\xc2ns2.
 if (-not $Exefs) { $Exefs = Join-Path $xc2 'game\xc2ns2' }
 if (-not (Test-Path $Exefs)) { throw "ExeFS not found: $Exefs (copy main, sdk, subsdk0, rtld, main.npdm into xc2\game\xc2ns2)" }
-if (-not (Test-Path (Join-Path $bd 'xc2_boot.exe'))) { throw "xc2_boot.exe not built (run scripts\build-boot.ps1 first)" }
+if (-not (Test-Path (Join-Path $bd 'xc2_boot.exe'))) { throw "xc2_boot.exe not built (run tools\build\build-boot.ps1 first)" }
 # one instance at a time: the second one dies in the loader ("VirtualAlloc failed, error 487", HANDOVER 28.7)
 $busy = Get-Process -Name xc2_boot -ErrorAction SilentlyContinue | Where-Object { $_.Id -ne $PID }
 if ($busy) {

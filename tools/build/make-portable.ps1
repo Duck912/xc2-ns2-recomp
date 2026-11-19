@@ -7,7 +7,7 @@
 # What it writes (mirrors the project layout so play.cmd works unchanged):
 #
 #   <dst>\play.cmd
-#   <dst>\xc2\scripts\play.ps1
+#   <dst>\tools\run\play.ps1
 #   <dst>\xc2\build\boot\xc2_boot.exe
 #   <dst>\xc2\build\boot\shader_order.txt
 #   <dst>\xc2\build\boot\shader_cache\spirv\        (9,029 .spv + results.tsv)
@@ -24,8 +24,8 @@ param(
     [switch]$SkipRomfs
 )
 $ErrorActionPreference = 'Stop'
-$xc2 = Split-Path -Parent $PSScriptRoot          # <project>\xc2
-$root = Split-Path -Parent $xc2                  # <project>
+$root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)   # <project>
+$xc2 = Join-Path $root 'xc2'
 $boot = Join-Path $xc2 'build\boot'
 $cache = Join-Path $boot 'shader_cache\spirv'
 $pack = Join-Path $boot 'shader_cache\spirv.preload.pack'
@@ -59,7 +59,7 @@ if (Test-Path -LiteralPath ($pack + '.new')) { Write-Host "  note: a .new stagin
 
 Write-Host "writing $Destination ($Mode)" -ForegroundColor Cyan
 Put (Join-Path $root 'play.cmd') (Join-Path $Destination 'play.cmd')
-Put (Join-Path $root 'xc2\scripts\play.ps1') (Join-Path $Destination 'xc2\scripts\play.ps1')
+Put (Join-Path $root 'tools\run\play.ps1') (Join-Path $Destination 'tools\run\play.ps1')
 Put (Join-Path $boot 'xc2_boot.exe') (Join-Path $Destination 'xc2\build\boot\xc2_boot.exe')
 Put $order (Join-Path $Destination 'xc2\build\boot\shader_order.txt')
 Put $pack (Join-Path $Destination 'xc2\build\boot\shader_cache\spirv.preload.pack')
@@ -85,7 +85,7 @@ $readme = @"
 XC2 static recompilation -- portable run directory
 built $(Get-Date -Format 'yyyy-MM-dd HH:mm')
 
-Run:  double-click play.cmd   (or: pwsh -File xc2\scripts\play.ps1 -PresentHz 60)
+Run:  double-click play.cmd   (or: pwsh -File tools\run\play.ps1 -PresentHz 60)
 
 Needs a Vulkan 1.3 GPU. The first start on a new machine builds pipeline_cache.bin and
 pipeline_keys.bin beside xc2_boot.exe -- that is expected; a few frames will hitch while it does.

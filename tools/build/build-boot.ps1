@@ -1,15 +1,15 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Build xc2_boot.exe: maps the four modules, registers them with nxrt, starts the NVN back end and enters rtld.
 #
-#   .\scripts\build-boot.ps1                 # build
-#   .\scripts\build-boot.ps1 -Run            # build and run (window)
-#   .\scripts\build-boot.ps1 -Run -Gfx headless
+#   .\tools\build\build-boot.ps1                 # build
+#   .\tools\build\build-boot.ps1 -Run            # build and run (window)
+#   .\tools\build\build-boot.ps1 -Run -Gfx headless
 #
 # Prerequisites (built once; see docs/BUILD.md):
 #   third_party\fefw-recomp\build\runtime-gfx\{nxrt.lib,nxrt_gfx.lib,...}   (graphics shell)
 #   third_party\fefw-recomp\build\xc2-game-probe\games\xc2ns2\*.lib         (game module)
-#   xc2\build\lib\{main,sdk,subsdk0,rtld}.lib                               (scripts\build.ps1)
-#   .\scripts\build-boot.ps1 -MainLib build\lib-census\main.lib -OutDir build\boot-census   # the census build
+#   xc2\build\lib\{main,sdk,subsdk0,rtld}.lib                               (tools\build\build.ps1)
+#   .\tools\build\build-boot.ps1 -MainLib build\lib-census\main.lib -OutDir build\boot-census   # the census build
 param(
     [string]$Exefs = '',
     [string]$Link = 'host',
@@ -21,7 +21,7 @@ param(
     [string]$Defines = ''       # extra /D defines for xc2_boot.cpp, space separated (HANDOVER 89: XC2_MODULES_7)
 )
 $ErrorActionPreference = 'Stop'
-$root = Split-Path -Parent $PSScriptRoot
+$root = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'xc2'   # tools\build -> the checkout's xc2
 # The four NSOs now live in the project (xc2\game\xc2ns2), copied from <fefw-recomp>\work\xc2ns2.
 if (-not $Exefs) { $Exefs = Join-Path $root 'game\xc2ns2' }
 elseif (-not [System.IO.Path]::IsPathRooted($Exefs)) { $Exefs = Join-Path (Get-Location).Path $Exefs }
@@ -52,7 +52,7 @@ foreach ($m in 'subsdk1', 'subsdk2', 'subsdk3') { $p = Join-Path $libdir ($m + '
 # libvpx (BSD-3): the host VP9/VP8 decoders sit in nxrt.lib (runtime/src/media/video_codec.cpp), so linking the runtime
 # needs the library even though nothing in this exe mentions vpx - without it the link stops at nine vpx_codec_* symbols.
 # A runtime configured without libvpx (NXRT_HAVE_LIBVPX=0, see runtime/cmake/media_deps.cmake) references none of them,
-# which is why a missing library is a warning and not an error. Same search order as scripts/build-release.ps1.
+# which is why a missing library is a warning and not an error. Same search order as tools/build/build-release.ps1.
 $vpxRoots = @($env:VCPKG_ROOT, 'E:\Tools\dev\vcpkg', 'C:\vcpkg') | Where-Object { $_ }
 $vpxLibs = @()
 foreach ($vpxRoot in $vpxRoots) {
@@ -72,7 +72,7 @@ $need = @(
     $mainlib, (Join-Path $libdir 'sdk.lib'),
     (Join-Path $libdir 'subsdk0.lib'), (Join-Path $libdir 'rtld.lib')
 )
-foreach ($f in $need) { if (-not (Test-Path $f)) { throw "missing $f (build it first: docs\BUILD.md, then scripts\build.ps1)" } }
+foreach ($f in $need) { if (-not (Test-Path $f)) { throw "missing $f (build it first: docs\BUILD.md, then tools\build\build.ps1)" } }
 
 $obj = Join-Path $bd 'xc2_boot.obj'
 $objOpus = Join-Path $bd 'x2_opus301.obj'

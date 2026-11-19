@@ -46,8 +46,8 @@ The project's own tools do **not** need them: `nso_seg.py` carries a pure-Python
 | what | command | measured |
 |---|---|---|
 | the runtime | `cmake --build third_party/fefw-recomp/build/runtime-gfx --target nxrt nxrt_gfx` | a few seconds for one file |
-| lift + compile | `xc2\scripts\build.ps1 -Exefs xc2\game\xc2ns301 -Run:$false -Modules 'main,sdk,subsdk0,subsdk1,subsdk2,subsdk3,rtld' -LiftDir xc2\build\lift-301 -ObjDir xc2\build\obj-301 -LibDir xc2\build\lib-301` | lift 13 s + compile 4 s for `main`; longer for the rest |
-| link | `xc2\scripts\build-boot.ps1 -Exefs xc2\game\xc2ns301 -OutDir xc2\build\boot-301 -LibDir xc2\build\lib-301 -MainLib xc2\build\lib-301\main.lib -Defines XC2_MODULES_7` | ~50 s, 144.5 MB |
+| lift + compile | `tools\build\build.ps1 -Exefs xc2\game\xc2ns301 -Run:$false -Modules 'main,sdk,subsdk0,subsdk1,subsdk2,subsdk3,rtld' -LiftDir xc2\build\lift-301 -ObjDir xc2\build\obj-301 -LibDir xc2\build\lib-301` | lift 13 s + compile 4 s for `main`; longer for the rest |
+| link | `tools\build\build-boot.ps1 -Exefs xc2\game\xc2ns301 -OutDir xc2\build\boot-301 -LibDir xc2\build\lib-301 -MainLib xc2\build\lib-301\main.lib -Defines XC2_MODULES_7` | ~50 s, 144.5 MB |
 | play | `tools\run\play-301.cmd -60` | cold start 2–3 s to the title applet |
 
 The stub link at the end of `build.ps1` always fails; that is by design and does not affect `build-boot.ps1`.
