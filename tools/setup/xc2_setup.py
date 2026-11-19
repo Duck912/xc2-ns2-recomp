@@ -5,7 +5,7 @@
     python xc2_setup.py --repo <checkout> --install <folder> --nup <dump>.nup [--dry-run]
 
 Steps, each skipped when its artifact is already there:
-    doctor   tools/bootstrap/doctor.ps1 -Json        what the machine is missing
+    doctor   tools/setup/doctor.ps1 -Json        what the machine is missing
     sources  nxrecomp tarball (deps.lock.json) + fetch_third_party.ps1
     runtime  the two cmake configures and builds (BUILD.md 4.1)
     lift     the seven modules to .lib (the repo's tools/build/build.ps1 does the same)

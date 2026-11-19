@@ -68,11 +68,11 @@ pwsh -File third_party\fefw-recomp\tools\textures\scripts\fetch_third_party.ps1 
 ## Before you open a pull request
 
 ```powershell
-python tools/check_links.py          # every relative link resolves
-python tools/check_invariants.py     # no private paths, no game data, ASCII build inputs
+python tools/ci/check_links.py          # every relative link resolves
+python tools/ci/check_invariants.py     # no private paths, no game data, ASCII build inputs
 ```
 
-The second one also runs as a git hook (`pwsh -File tools/install-git-hooks.ps1` installs it) and in CI.
+The second one also runs as a git hook (`pwsh -File tools/ci/install-git-hooks.ps1` installs it) and in CI.
 If you change a file under `third_party/fefw-recomp/`, add the change to that directory's `MODIFICATIONS.md`
 — GPL-3.0 requires a modification notice.
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Check the rules that must not break: nothing private is tracked, no game data, no non-ASCII build inputs.
 
-    python tools/check_invariants.py            # everything
-    python tools/check_invariants.py --hook     # only the checks that must pass before a commit
+    python tools/ci/check_invariants.py            # everything
+    python tools/ci/check_invariants.py --hook     # only the checks that must pass before a commit
 
 Exit code 0 when every check passes. Run it before committing and after pulling; the CI runs the same
 checks that can run without the game files.

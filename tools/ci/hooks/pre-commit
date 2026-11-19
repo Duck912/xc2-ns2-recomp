@@ -1,11 +1,11 @@
 #!/bin/sh
 # Refuse a commit that would publish something private.
 #
-# Install with:  pwsh -File tools/install-git-hooks.ps1
+# Install with:  pwsh -File tools/ci/install-git-hooks.ps1
 #
 # Two layers, because "git add -f" bypasses .gitignore:
 #   1. the staged path list is checked directly (fast, and it is the exact thing being committed);
-#   2. tools/check_invariants.py --hook runs the project rules.
+#   2. tools/ci/check_invariants.py --hook runs the project rules.
 #
 # Bypass once with:  git commit --no-verify   (and then think about why you needed to)
 
@@ -33,7 +33,7 @@ if [ -z "$py" ]; then
     exit 0
 fi
 
-"$py" tools/check_invariants.py --hook || {
+"$py" tools/ci/check_invariants.py --hook || {
     echo "" >&2
     echo "commit refused: the project invariants do not hold (see above)" >&2
     exit 1

@@ -1,7 +1,7 @@
-# tools\env\check.ps1 - verify (and repair) everything this project's toolchain needs.
+# tools\setup\check-env.ps1 - verify (and repair) everything this project's toolchain needs.
 #
-#   .\tools\env\check.ps1              check, and repair what can be repaired from local copies
-#   .\tools\env\check.ps1 -CheckOnly   report only, change nothing
+#   .\tools\setup\check-env.ps1              check, and repair what can be repaired from local copies
+#   .\tools\setup\check-env.ps1 -CheckOnly   report only, change nothing
 #
 # Why: the lift needs lz4/capstone/unicorn inside the DSH python, and every fresh session used to
 # rediscover that by hitting ModuleNotFoundError halfway through a build. This answers

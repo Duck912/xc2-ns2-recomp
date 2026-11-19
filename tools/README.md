@@ -6,11 +6,23 @@ here should still be useful to the next person.
 All scripts resolve their paths relative to themselves (`os.path.dirname(__file__)`, `$PSScriptRoot`,
 `%~dp0`), so the whole directory can be copied to another machine.
 
-## env/
+## ci/
 
 | file | what |
 |---|---|
-| `check.ps1` | one command that reports whether the environment is complete: host toolchain, the Python packages the lifter needs, the ExeFS and romfs, the build outputs. `-CheckOnly` reports without changing anything. |
+| `check_invariants.py` | the project rules: no private paths, no game data, ASCII build inputs, CRLF in .cmd files |
+| `check_links.py` | every relative link in the tracked markdown resolves |
+| `install-git-hooks.ps1` | copies `hooks/pre-commit` into `.git/hooks`; the hook runs the two checks above on every commit |
+| `hooks/pre-commit` | the hook itself (needs `python` on PATH) |
+
+## setup/
+
+| file | what |
+|---|---|
+| `xc2_setup.py` | the first-run program: doctor, sources, runtime build, lift, link, ingest a `.nup` |
+| `doctor.ps1` | what this machine is missing, checked against `deps.lock.json`; `-Json` for the setup page |
+| `check-env.ps1` | whether the toolchain is complete, and repairs the Python packages it can copy locally |
+| `deps.lock.json` | the pinned external sources and their hashes |
 
 ## shader/
 

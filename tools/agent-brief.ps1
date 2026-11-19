@@ -56,7 +56,7 @@ try {
         '1. Overwrite docs/internal/STATE.md (one screen: what works, what is in flight, what is next).',
         '2. If you settled something, append one line to docs/internal/DECISIONS.md.',
         '3. Write the round into docs/internal/handover/NN-<date>-<topic>.md.',
-        '4. pwsh -File tools/check_invariants.ps1 equivalent: python tools/check_invariants.py'
+        '4. pwsh -File tools/check_invariants.ps1 equivalent: python tools/ci/check_invariants.py'
     ) | ForEach-Object { '  ' + $_ }
 
     Write-Host ''

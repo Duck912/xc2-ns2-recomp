@@ -9,8 +9,8 @@
   install failed halfway".
 
 .EXAMPLE
-  pwsh -File tools/bootstrap/doctor.ps1
-  pwsh -File tools/bootstrap/doctor.ps1 -CacheDir D:\deps -Install
+  pwsh -File tools/setup/doctor.ps1
+  pwsh -File tools/setup/doctor.ps1 -CacheDir D:\deps -Install
 #>
 param(
     # The archive cache CMake uses (gfx_deps.cmake: NXRT_DEPS_DIR), so a working machine reports "ok" rather than

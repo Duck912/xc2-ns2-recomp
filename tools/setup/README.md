@@ -15,7 +15,7 @@ Each one is skipped when its artifact is already there, so a second run is nearl
 
 | step | what it does | artifact it looks for |
 |---|---|---|
-| `doctor` | `tools/bootstrap/doctor.ps1` | exit 0 |
+| `doctor` | `tools/setup/doctor.ps1` | exit 0 |
 | `sources` | nxrecomp from `deps.lock.json`, then `fetch_third_party.ps1` | `third_party/nxrecomp` |
 | `runtime` | the two cmake configures and their builds | `third_party/fefw-recomp/build/*` |
 | `ingest` | a `.nup`, or a folder that already holds the modules | `<install>/exefs`, `<install>/romfs` |

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check every relative link in the tracked Markdown files.
 
-Run from the repository root:  python tools/check_links.py
+Run from the repository root:  python tools/ci/check_links.py
 Exit code 1 lists the links that point at a path git does not track.
 """
 import re

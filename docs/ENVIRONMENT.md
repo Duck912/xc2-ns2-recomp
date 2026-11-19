@@ -1,7 +1,7 @@
 # Environment and toolchain
 
 Everything needed to lift, compile and run the game on Windows. Run
-`pwsh -NoProfile -File tools\env\check.ps1` first: it reports what is missing and can fill in the Python
+`pwsh -NoProfile -File tools\setup\check-env.ps1` first: it reports what is missing and can fill in the Python
 packages the lifter needs.
 
 ## 1. Host toolchain
@@ -34,7 +34,7 @@ $env:XC2_ENV = '<path to your env script>.ps1'     # optional, if the tools are 
 | `zstandard` | `tools/analysis/nup_extract.py` (zstd records in a `.nup`) |
 | `pyelftools` | only the upstream survey tools (optional) |
 
-`tools\env\check.ps1` installs `lz4`/`capstone`/`unicorn` for you if it can find them locally.
+`tools\setup\check-env.ps1` installs `lz4`/`capstone`/`unicorn` for you if it can find them locally.
 `ModuleNotFoundError: No module named 'lz4'` (from `nso_info`) or `'capstone'` (from `jumptables`) means the
 environment is incomplete.
 
@@ -67,7 +67,7 @@ The stub link at the end of `build.ps1` always fails; that is by design and does
 
 | task | tool |
 |---|---|
-| environment check | `tools\env\check.ps1` |
+| environment check | `tools\setup\check-env.ps1` |
 | address → symbol | `tools\analysis\symat.py --dump <module>` |
 | disassemble a range | `tools\analysis\dis.py <start> <stop>` |
 | NSO → segments | `tools\analysis\nso_seg.py <module>` |
