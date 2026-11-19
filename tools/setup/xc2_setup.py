@@ -518,6 +518,21 @@ def link_boot_romfs(r, repo, install):
     return junction(repo / "xc2" / "build" / "boot" / "game" / "romfs-301", romfs, r)
 
 
+def romfs_missing(looked_near, romfs_in):
+    """Say which folder was checked and which file is missing, instead of "pass --romfs".
+
+    The check is (folder / "bf2.ard"), not "does the folder exist", so a romfs that sits right next to exefs still
+    fails when the archive is not inside it - and the old wording ("no romfs near <exefs>; pass --romfs") pointed at
+    the wrong thing twice: it ignored that --romfs had already been passed, and it blamed the folder rather than the
+    missing bf2.ard (issue #11, 2026-11-19).
+    """
+    if romfs_in:
+        return ("the romfs at %s has no bf2.ard; the archive is required, and it has to sit directly in that folder"
+                % romfs_in)
+    return ("no bf2.ard in %s, %s, %s or %s; pass --romfs <the folder that holds bf2.ard>"
+            % (looked_near, looked_near / "romfs", looked_near.parent, looked_near.parent / "romfs"))
+
+
 def find_romfs(dump, explicit):
     # --romfs wins when it is given. Measured 2026-11-17: a run that passed --romfs looked like it had linked the
     # maintainer tree instead, and had not - Path.resolve() dereferences a junction, and the folder passed in WAS a
@@ -566,7 +581,7 @@ def step_ingest(r, repo, install, nup, dump, exefs_in, romfs_in):
             return r.end_step("ingest", started, False, "no NSO modules in %s" % exefs_in)
         rom = find_romfs(exefs_in, romfs_in)
         if rom is None:
-            return r.end_step("ingest", started, False, "no romfs near %s; pass --romfs" % exefs_in)
+            return r.end_step("ingest", started, False, romfs_missing(exefs_in, romfs_in))
         if junction(exefs, exefs_in, r) != 0:
             return r.end_step("ingest", started, False, "could not link exefs")
         if junction(romfs, rom, r) != 0:
@@ -580,8 +595,7 @@ def step_ingest(r, repo, install, nup, dump, exefs_in, romfs_in):
             return r.end_step("ingest", started, False, "could not link exefs")
         rom = find_romfs(dump, romfs_in)
         if rom is None:
-            return r.end_step("ingest", started, False,
-                              "no romfs found (looked in %s, its romfs/, and its parent); pass --romfs" % dump)
+            return r.end_step("ingest", started, False, romfs_missing(dump, romfs_in))
         if junction(romfs, rom, r) != 0:
             return r.end_step("ingest", started, False, "could not link romfs")
         link_dlc(install, r)

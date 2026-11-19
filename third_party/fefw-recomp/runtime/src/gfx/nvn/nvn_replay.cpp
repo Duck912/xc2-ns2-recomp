@@ -2413,13 +2413,17 @@ VkDescriptorSet build_set(const ProgLayout& pl, uint32_t set) {
                     static const std::string list = nxrt::config_get_str("nvn", "ds_depth_shaders", "");
                     if (!list.empty() && list.find(S.stage[kFragment]->hash) != std::string::npos) vr.depth_aspect = true;
                 }
-                // [nvn] ds_debug: which fragment shaders read a depth-stencil texture's STENCIL plane through a float
-                // sampler. That descriptor is illegal in Vulkan (VUID-vkCmdDrawIndexed-format-07753, the view is
-                // S8_UINT and the shader declares float) but it is what reproduces Maxwell's "the integer lands in the
-                // float register unchanged". AMD tolerates it, NVIDIA is free to return anything. Each shader is
-                // reported once, so a short run names the whole set that would need a uint-sampling patch.
-                static const bool ds_debug = nxrt::config_get_bool("nvn", "ds_debug", false);
-                if (ds_debug && tex_is_depth(r.tex) && vr.component == 1 && !vr.depth_aspect && S.stage[kFragment]) {
+                // Which fragment shaders read a depth-stencil texture's STENCIL plane through a float sampler. That
+                // descriptor is illegal in Vulkan (VUID-vkCmdDrawIndexed-format-07753: the view is S8_UINT, the shader
+                // declares float) but it is what reproduces Maxwell's "the integer lands in the float register
+                // unchanged". AMD tolerates it; NVIDIA is free to return anything and does - it can lose the device,
+                // which reaches the player as a frozen "Loading" screen with the music still playing.
+                //
+                // Reported always, once per (shader, binding), because tools/shader/patch_ds_samplers.py can only
+                // rewrite modules a log names. This used to sit behind [nvn] ds_debug, which meant the one run that
+                // mattered - the one that died - was the one with nothing to patch it with (issue #10, 2026-11-19).
+                // The set is bounded by the title's own shaders and each entry costs one line.
+                if (tex_is_depth(r.tex) && vr.component == 1 && !vr.depth_aspect && S.stage[kFragment]) {
                     static std::set<std::string> told;
                     const std::string& h = S.stage[kFragment]->hash;
                     char key[96];

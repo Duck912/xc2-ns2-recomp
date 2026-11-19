@@ -200,7 +200,9 @@ path alone is complete.
 **Stencil samplers.** `format-07753` (a float sampler reading a stencil plane as an integer) is undefined behaviour
 on NVIDIA and can end in a lost device. `tools\shader\patch_ds_samplers.py` retypes the affected samplers; the
 launcher runs it automatically after a session that reported them, using your own log, so nothing derived from the
-game is distributed.
+game is distributed. The runtime names each of them once per (shader, binding) as `ds_debug: fs <hash> ...` in every
+log — the `[nvn] ds_debug` switch used to gate that, which meant the one run that mattered, the one that lost the
+device, recorded nothing to patch from (issue #10, 2026-11-19).
 
 ## 5. Run
 
