@@ -860,7 +860,9 @@ bool install_movie_decoder_hle() {
             return;
         }
         g_log = config_get_bool("media", "video_decoder_log", false);
-        g_threads = static_cast<int>(std::clamp<int64_t>(config_get_int("media", "video_decoder_threads", 4), 1, 16));
+        // Same default as video_codec.cpp: half the cores, 4 to 8, for the 4K AV1 films.
+    const int64_t def_threads = std::min<int64_t>(8, std::max<int64_t>(4, static_cast<int64_t>(std::thread::hardware_concurrency()) / 2));
+    g_threads = static_cast<int>(std::clamp<int64_t>(config_get_int("media", "video_decoder_threads", def_threads), 1, 16));
         for (const Import& im : kImports) {
             hle_register(im.name, im.fn);
             module_override_symbol(im.name);

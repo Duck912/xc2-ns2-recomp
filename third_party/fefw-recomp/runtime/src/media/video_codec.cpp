@@ -1232,13 +1232,19 @@ bool install_video_codec_hle() {
             return;
         }
         g_log = config_get_bool("media", "video_decoder_log", false);
-        g_threads = static_cast<int>(std::clamp<int64_t>(config_get_int("media", "video_decoder_threads", 4), 1, 16));
+        // 4 was the default and is enough for the 1080p films; the retail build's 4K AV1 openings want more, and above 8 a
+    // single 3840x2160 frame stops splitting usefully. Half the cores, at least 4, at most 8.
+    const int64_t def_threads = std::min<int64_t>(8, std::max<int64_t>(4, static_cast<int64_t>(std::thread::hardware_concurrency()) / 2));
+    g_threads = static_cast<int>(std::clamp<int64_t>(config_get_int("media", "video_decoder_threads", def_threads), 1, 16));
         // Diagnostic: the player drops a frame whose timestamp is more than a frame or so behind its own movie clock, and a software 4K
         // AV1 decode plus the pool->VideoFrame copies put every frame ~85 ms behind, so it dropped all but the first. Reporting the
         // timestamps this much later makes them look on time (at the cost of that much A/V offset).
         // Default 100 ms: the XAudio2 output queue plus the device buffer, the amount the video has to wait to stay in lip sync.
         // Measured 110-120 ms on the author's machine (1440p window); 100 is the safe default, the launcher can override it.
-        g_pts_shift_ns = config_get_int("media", "movie_pts_shift_ms", 100) * 1000000;
+        // The XAudio2 sink queues 33-40 ms plus the device buffer, so a film that follows its own timestamps runs ahead of its
+    // sound; this delays the picture instead of the audio. 110 ms was the value that lined the 4K CG up on the maintainer's
+    // device at a 1440p window (2026-11-18/19: 50 too early, 120-180 the sound arrives first). Per-device, so it stays a key.
+    g_pts_shift_ns = config_get_int("media", "movie_pts_shift_ms", 110) * 1000000;
         g_pts_wallclock = config_get_bool("media", "movie_pts_wallclock", false);
         install_player_trace();   // [media] player_trace: the player's message queue and timer, logged as they are called
         for (const Import& im : kImports) {

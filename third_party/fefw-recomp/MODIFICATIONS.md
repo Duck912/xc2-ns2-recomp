@@ -58,8 +58,9 @@ vendored into the Xenoblade Chronicles 2 NS2E recomp project. Upstream base and 
 | `runtime/src/kernel/svc_thread.cpp` | 2026-11-16 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |
 | `runtime/src/loader/module.cpp` | 2026-11-16 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |
 | `runtime/apps/video_codec_probe.cpp` | 2026-11-18 | probe: AV1 on the SDK 3.0.1 nn::codec entry points (video_codec_probe <movie.webm> <out.png> <frame>) |
-| `runtime/src/media/movie_vdec.cpp` | 2026-11-18 | movie: [media] video_decoder = library leaves movie::VideoDecoder to the library (it drives nn::codec AV1) and keeps the host AudioDecoder |
-| `runtime/src/media/video_codec.cpp` | 2026-11-18 | vcodec: nn::codec AV1 via dav1d and the SDK 3.0.1 names (ByTransferMemory, ImageTilingMode preference, event-returning submission event) - the movie library's VideoDecoder path |
+| `runtime/src/media/movie_trace.cpp` | 2026-11-19 | movie: [media] player_trace wrappers over the SDK's os calls, and the host-side poke that makes the player's per-frame timer due (one ticker for every timer, not one thread per timer) - without it the 4K CG froze for 7-8 s at a time (handover 58) |
+| `runtime/src/media/movie_vdec.cpp` | 2026-11-19 | movie: [media] video_decoder = library leaves movie::VideoDecoder to the library (it drives nn::codec AV1) and keeps the host AudioDecoder; same decoder-thread default as video_codec.cpp |
+| `runtime/src/media/video_codec.cpp` | 2026-11-19 | vcodec: nn::codec AV1 via dav1d and the SDK 3.0.1 names (ByTransferMemory, ImageTilingMode preference, event-returning submission event); decoder threads default to half the cores (4-8) and the film delay to 110 ms - the movie library's VideoDecoder path |
 | `runtime/src/mem/memory.cpp` | 2026-11-14 | heap: lazy commit is implemented and measured, but it stays off (crashes at 0.82 s) |
 | `runtime/src/services/audren/Server/AudioRenderSystem.h` | 2026-11-12 | nvn: trace the depth/blend state a draw is submitted with, summarize the frame; audren: log every voice the ga |
 | `runtime/src/services/common.cpp` | 2026-11-16 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |

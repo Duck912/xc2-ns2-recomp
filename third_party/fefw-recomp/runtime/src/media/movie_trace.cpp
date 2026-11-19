@@ -132,6 +132,62 @@ void recv_msg(::Ctx* c) {   // (u64* out, nn::os::MessageQueueType*) -> nn::Resu
     }
     A(0) = r;
 }
+// One host ticker for every periodic timer the player starts. The first version started a detached thread per timer that
+// gave up the moment the timer's state byte (+0x13) read 0, which a stop/start cycle does transiently: that thread then
+// never came back, and the player waited on a timer nobody poked. Measured 2026-11-19: 7.4 s and 8.3 s of frozen picture
+// while the game itself kept 54 fps, and the player's own "frame ready" message sat in its queue for the same 7 s. So: one
+// thread, a list, and a state byte of 0 only skips this tick - it never unregisters. StopTimerEvent unregisters, and a timer
+// that stays stopped for five seconds is dropped so a freed guest object cannot be written through.
+struct PokedTimer {
+    uint64_t timer;
+    int64_t period_ns;
+    std::chrono::steady_clock::time_point next;
+    std::chrono::steady_clock::time_point idle_since;
+};
+
+std::mutex g_poke_mu;
+std::vector<PokedTimer> g_poked;
+std::once_flag g_poke_once;
+
+void poke_ticker() {
+    for (;;) {
+        {
+            std::lock_guard<std::mutex> lk(g_poke_mu);
+            const auto now = std::chrono::steady_clock::now();
+            for (auto it = g_poked.begin(); it != g_poked.end();) {
+                if (rd8(it->timer + 19) == 0) {
+                    if (it->idle_since == std::chrono::steady_clock::time_point{}) it->idle_since = now;
+                    else if (now - it->idle_since > std::chrono::seconds(5)) { it = g_poked.erase(it); continue; }
+                } else {
+                    it->idle_since = {};
+                    if (now >= it->next) {
+                        wr8(it->timer + 18, 1);
+                        it->next = now + std::chrono::nanoseconds(it->period_ns);
+                    }
+                }
+                ++it;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+}
+
+void poke_add(uint64_t timer, int64_t period_ns) {
+    std::call_once(g_poke_once, [] { std::thread(poke_ticker).detach(); });
+    std::lock_guard<std::mutex> lk(g_poke_mu);
+    for (auto& e : g_poked) {
+        if (e.timer == timer) { e.period_ns = period_ns; e.idle_since = {}; return; }
+    }
+    g_poked.push_back(PokedTimer{timer, period_ns, std::chrono::steady_clock::now(), {}});
+}
+
+void poke_remove(uint64_t timer) {
+    std::lock_guard<std::mutex> lk(g_poke_mu);
+    for (auto it = g_poked.begin(); it != g_poked.end(); ++it) {
+        if (it->timer == timer) { g_poked.erase(it); return; }
+    }
+}
+
 void start_timer(::Ctx* c) {   // (TimerEventType*, TimeSpan first, TimeSpan period)
     const uint64_t t = A(0), i1 = A(1), i2 = A(2), lr = c->x[30];
     const uint64_t fn = fn_start();
@@ -139,19 +195,12 @@ void start_timer(::Ctx* c) {   // (TimerEventType*, TimeSpan first, TimeSpan per
     const uint64_t r = call_original(c, fn);
     if (g_on && (from_main(lr) || heap_address(t)) && seen(g_holder_seen, t, 20))
         NXLOG_I(kTag, "timer start: 0x%llx, first %lld ns, period %lld ns, lr 0x%llx, -> 0x%llx", t, (long long)i1, (long long)i2, lr, r);
-    // Diagnostic: the MultiWait's timer holder reads the timer's own signalled byte (+0x12) and its deadline, and in this runtime the
-    // deadline comparison never turns it due (no ClearTimerEvent follows the player's StartPeriodicTimerEvent). Mark it due every
-    // period from the host instead, so the movie can say whether the rest of the player works. Bounded in time; stops when the
-    // timer's state byte (+0x13) clears.
+    // The MultiWait's timer holder reads the timer's own signalled byte (+0x12) and its deadline, and in this runtime the deadline
+    // comparison never turns it due (no ClearTimerEvent follows the player's StartPeriodicTimerEvent). Mark it due from the host
+    // instead, or the player's frame loop simply never wakes: one picture read, then nothing.
     if (g_poke && heap_address(t) && i2 > 0 && i2 <= 1000000000) {
         NXLOG_I(kTag, "timer poke: 0x%llx every %lld ns", t, (long long)i2);
-        std::thread([t, period = i2] {
-            for (int i = 0; i < 40000; ++i) {   // at most ~160 s at 4 ms
-                std::this_thread::sleep_for(std::chrono::nanoseconds(period));
-                if (rd8(t + 19) == 0) return;
-                wr8(t + 18, 1);
-            }
-        }).detach();
+        poke_add(t, i2);
     }
     A(0) = r;
 }
@@ -160,6 +209,7 @@ void stop_timer(::Ctx* c) {
     const uint64_t fn = fn_stop();
     if (!fn) { A(0) = 0; return; }
     const uint64_t r = call_original(c, fn);
+    poke_remove(t);
     if (g_on && seen(g_holder_seen, t ^ 1, 20)) NXLOG_I(kTag, "timer stop: 0x%llx, lr 0x%llx", t, lr);
     A(0) = r;
 }
