@@ -642,6 +642,11 @@ TexGpu* create_texture_gpu(Texture* t, float want_scale) {
                     static_cast<unsigned>(flags), static_cast<unsigned>(usage));
     }
     g->usage = usage;
+    // [nvn] log_textures = 1: every image the game creates, with the size and the flags it asked for. The resolution work
+    // needs the classification (output-sized post/UI vs scene vs half-size effect) from data, not from a guess.
+    if (nxrt::config_get_bool("nvn", "log_textures", false))
+        NXLOG_I(kTag, "tex-create %u: %s %ux%u flags 0x%x target %d levels %u layers %u samples %u", t->id, g->fmt->name, s.base.width, s.base.height,
+                static_cast<unsigned>(t->b.flags), static_cast<int>(t->b.target), s.levels, s.layers, s.samples);
 
     // Resolution scale: the image is the NVN size times the scale. Other modules keep the NVN size (tex_extent) and ask tex_scale /
     // tex_image_extent where the image size matters (render area, viewports, copies, the support buffer's render_scale).
