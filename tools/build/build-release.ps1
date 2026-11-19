@@ -29,7 +29,18 @@ if ($env:XC2_ENV) { if (-not (Test-Path $env:XC2_ENV)) { throw "XC2_ENV points a
 if (-not $Jobs -or $Jobs -lt 1) { $Jobs = (Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors - 1; if ($Jobs -lt 2) { $Jobs = 2 } }
 if (-not $OutDir) { $OutDir = Join-Path $root 'build\release' }
 if (-not $DllBuildDir) { $DllBuildDir = Join-Path $root 'build\release\dll' }
-if (-not $LiftDir) { $LiftDir = Join-Path $root 'build\lift-301' }
+if (-not $LiftDir) {
+    # The release layout keeps its own lift (build\lift-301). A checkout that only ever ran the development route has
+    # build\301\lift instead, which is the same seven modules in the same shape, so the exe step works from either one -
+    # measured 2026-11-19, a release build stopped at "no lifted sources for main" until this fallback existed.
+    $releaseLift = Join-Path $root 'build\lift-301'
+    $devLift = Join-Path $root 'build\301\lift'
+    if (Test-Path (Join-Path $releaseLift 'main')) { $LiftDir = $releaseLift }
+    elseif (Test-Path (Join-Path $devLift 'main')) {
+        $LiftDir = $devLift
+        Write-Host ("lift: using the development lift at {0} (no release-layout lift here)" -f $devLift)
+    } else { $LiftDir = $releaseLift }
+}
 
 # The bundled Zig is what makes this build need no MSVC and no Windows SDK: it carries its own headers and CRT.
 if (-not $Zig) {
