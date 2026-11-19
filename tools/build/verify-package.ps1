@@ -61,7 +61,7 @@ if ($Mode -eq 'package') {
 } else {
     Need 'xc2_boot.exe'
     Need 'setup_state.tsv'
-    Need 'nxrt.ini'
+    if (Test-Path -LiteralPath (Join-Path $Path 'nxrt.ini')) { Ok 'nxrt.ini' } else { Write-Host '  note  no nxrt.ini yet: the launcher writes it on the first play' }
     $state = Get-Content -LiteralPath (Join-Path $Path 'setup_state.tsv') -Raw
     if ($state -match 'finished\s+1') { Ok 'setup finished' } else { Fail "setup_state.tsv does not say finished: $($state.Trim())" }
     # build.json is the only thing that ties an exe to a commit: check it when the caller names one.

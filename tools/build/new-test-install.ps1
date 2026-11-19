@@ -42,6 +42,10 @@ if ($LASTEXITCODE -ne 0) { throw "the package failed verify-package.ps1: $target
 if ($Nup) {
     if (-not (Test-Path -LiteralPath $Nup)) { throw "no dump at $Nup" }
     $py = Join-Path $target 'tools\python\python.exe'
+    # The setup shells out to "python" for its helpers: put the package's own interpreter first, or a machine with
+    # another python on PATH (this one has the DeepSeek runtime's) runs the helpers without zstandard.
+    $env:PATH = (Join-Path $target 'tools\python') + ';' + $env:PATH
+    $env:XC2_PYTHON = $py
     $engine = Join-Path $target 'engine\xc2_setup.py'
     $t1 = Get-Date
     Write-Host ("setup   {0} (this is the long one)" -f (Split-Path $Nup -Leaf))

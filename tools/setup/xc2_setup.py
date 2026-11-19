@@ -932,6 +932,10 @@ def step_done_package(r, repo, install):
     # Also here, not only in the shaders step: a package whose cache was already complete skips that step entirely,
     # and the launcher still needs the switches.
     launch_env(install)
+    if not r.dry:
+        gone = sweep_leftovers(install)
+        if gone:
+            r.log("  removed after the build: " + ", ".join(sorted(gone)))
     game = install / "game"
     if not r.dry:
         game.mkdir(parents=True, exist_ok=True)
@@ -942,10 +946,28 @@ def step_done_package(r, repo, install):
     return r.end_step("done", started, True, "ready to play")
 
 
+def sweep_leftovers(install):
+    """A link leaves a .pdb next to the exe and the cache builder keeps a results.tsv backup; neither ships.
+
+    Measured on a fresh 0.1.3 install: xc2_boot.pdb was 469 MB of a 2.5 GB tree, and the backup 2.5 MB.
+    """
+    gone = []
+    for path in list(install.glob("*.pdb")) + list((install / "shader_cache" / "spirv").glob("results.tsv.bak-*")):
+        try:
+            path.unlink()
+            gone.append(path.name)
+        except OSError:
+            pass
+    return gone
+
+
 def step_done(r, repo, install):
     started = r.step("done")
     link_boot_romfs(r, repo, install)
     if not r.dry:
+        gone = sweep_leftovers(install)
+        if gone:
+            r.log("  removed after the build: " + ", ".join(sorted(gone)))
         (install / "setup_state.tsv").write_text("mprs_setup_state\t1\nmeta\tfinished\t1\n", encoding="utf-8")
     r.write_status(state="done", note="ready to play")
     return r.end_step("done", started, True, "ready to play")
