@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <unordered_set>
@@ -326,6 +327,12 @@ DlssOptimal dlss_optimal(int out_w, int out_h, int method) {
     if (scale == 1.0f) {
         hi = 1.0f;
         lo = 0.99f;
+    } else if (const char* mn = std::getenv("XC2_DLSS_MIN_SCALE")) {
+        // Experiment: the game keeps its 3D scene inside the range this call reports, and it picks the range's floor
+        // today (1280x720 = 0.5 of the 2560x1440 output). Raising the floor makes the game render the scene higher
+        // through its own dynamic resolution instead of us faking the record (HANDOVER 217).
+        const float v = static_cast<float>(std::atof(mn));
+        if (v > lo && v <= hi) lo = v;
     }
     auto r = [](float v) { return static_cast<int>(std::lround(v)); };
     DlssOptimal o;
