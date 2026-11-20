@@ -1,6 +1,6 @@
 # XC2 NS2 Recomp v0.1.4 — the frame on screen is the frame the game finished
 
-**Tested on a Radeon RX 6800 XT and an RTX 4060 Laptop.**
+**Tested on a Radeon RX 6800 XT and an RTX 4060 Laptop** (thank you PJ my friend).
 
 This release closes the three NVIDIA reports — stripes and flicker, tearing, and a black screen after a few seconds — and
 gives cutscenes their sound back, in sync with the picture. The three reports turned out to be separate faults, and the
@@ -101,10 +101,10 @@ translated from it. Installation: [README](https://github.com/weile10000/xc2-ns2
 
 ## Credits
 
-- **[@capibawa](https://github.com/capibawa)** — [nxnative, branch `xc2-ns2-profile`](https://github.com/capibawa/nxnative/tree/xc2-ns2-profile): the
-  four launch switches and the host-side movie/audio takeover this project follows (`dm/host/hle_movie.c`, `hle_audio.c`).
 - **[Goldoire/fefw-recomp](https://github.com/Goldoire/fefw-recomp)** — the Switch runtime this project is built on: NVN/NVN2 replay,
   service HLE, the shader pipeline and the exe + DLL split all started there.
+- **[@capibawa](https://github.com/capibawa)** — [nxnative, branch `xc2-ns2-profile`](https://github.com/capibawa/nxnative/tree/xc2-ns2-profile): the
+  four launch switches and the host-side movie/audio takeover this project follows (`dm/host/hle_movie.c`, `hle_audio.c`).
 - [nxrecomp](https://github.com/drakolordx7/nxrecomp) — the static recompiler that lifts the game's code.
 - [dav1d](https://code.videolan.org/videolan/dav1d) — the film's video decoder; [libvorbis](https://github.com/xiph/vorbis) — its sound.
 - The reports that shaped this release: @Kain2k ([#10](https://github.com/weile10000/xc2-ns2-recomp/issues/10),
@@ -119,7 +119,7 @@ translated from it. Installation: [README](https://github.com/weile10000/xc2-ns2
 
 # XC2 NS2 Recomp v0.1.4 —— 屏幕上的那一帧，是游戏画完的那一帧
 
-**本版在 Radeon RX 6800 XT 与 RTX 4060 Laptop 上测试。**
+**本版在 Radeon RX 6800 XT 与 RTX 4060 Laptop 上测试**（谢谢你我的朋友 PJ）。
 
 这一版收掉三份 NVIDIA 报告——横条闪烁、撕裂、进游戏几秒后黑屏——并把过场的声音还了回来、与画面对齐。三份报告查下来是
 三个不同的故障，而 CG 无声是第四个：影片的音频和游戏自己的音频在抢同一个设备。此外，4K 开场默认交给显卡解码，手柄面板
@@ -201,10 +201,10 @@ translated from it. Installation: [README](https://github.com/weile10000/xc2-ns2
 
 ## 致谢
 
-- **[@capibawa](https://github.com/capibawa)** —— [nxnative 的 `xc2-ns2-profile` 分支](https://github.com/capibawa/nxnative/tree/xc2-ns2-profile)：
-  四个启动开关，以及本项目沿用的宿主端影片/音频接管（`dm/host/hle_movie.c`、`hle_audio.c`）。
 - **[Goldoire/fefw-recomp](https://github.com/Goldoire/fefw-recomp)** —— 本项目的运行时来源：NVN/NVN2 重放、服务 HLE、
   着色器管线、exe + DLL 拆分都从这里起。
+- **[@capibawa](https://github.com/capibawa)** —— [nxnative 的 `xc2-ns2-profile` 分支](https://github.com/capibawa/nxnative/tree/xc2-ns2-profile)：
+  四个启动开关，以及本项目沿用的宿主端影片/音频接管（`dm/host/hle_movie.c`、`hle_audio.c`）。
 - [nxrecomp](https://github.com/drakolordx7/nxrecomp) —— 把游戏代码 lift 出来的静态重编译器。
 - [dav1d](https://code.videolan.org/videolan/dav1d) —— 影片视频解码；[libvorbis](https://github.com/xiph/vorbis) —— 影片声音。
 - 塑造了这一版的报告：@Kain2k（[#10](https://github.com/weile10000/xc2-ns2-recomp/issues/10)、
