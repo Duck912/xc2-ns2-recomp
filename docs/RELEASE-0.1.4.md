@@ -79,6 +79,9 @@ the shader cache are kept.
   default upscaler because it needs no extra DLL. FSR and DLSS are in the launcher.
 - Cloud-sea shimmer and the blue-grey rim where geometry meets the cloud sea remain, on AMD GPUs only (inside the game's
   own volumetric fog).
+- **The DLC campaigns are not optimised yet.** A cutscene from the add-on content can still show a few blocky frames
+  while the GPU is saturated, and its first seconds stutter while the hardware decoder is created. One decoder per film
+  stream is what 0.1.4 fixes (that was the bulk of it); the rest is future work. The base game's own cutscenes are fine.
 - **On a display that Windows reports as HDR**, a cutscene's frames can come out with a green cast: the film's frame does
   not go through the HDR10 encode yet. Setting `[hdr] mode = off` in `nxrt.ini` (the launcher's video page has the same
   setting) brings the colours back.
@@ -184,6 +187,8 @@ licence text and the source offer are in `licenses/FFMPEG-LICENSE.txt` and `THIR
 - 画面仍比 1 代重编译版柔（[#9](https://github.com/weile10000/xc2-ns2-recomp/issues/9) @UrsineBear）：内部场景是 1280×720，
   默认 TAAU 是因为它不需要额外 DLL；FSR 与 DLSS 在启动器里可选。
 - 云海闪烁、以及几何体与云海交界的蓝灰边仍然存在，**仅限 AMD 显卡**（位于游戏自己的体积雾内部）。
+- **DLC 的剧情还没充分优化。** 追加内容的过场在 GPU 顶满时**可能偶发方块**，开头几秒会卡顿（硬件解码器正在创建）。
+  0.1.4 修掉的是主要那部分（一路影片流只用一个解码器），剩下的留给后续版本。正篇的过场没有问题。
 - **在 Windows 报告为 HDR 的显示器上**，过场画面可能整片发绿：影片帧还没有进入 HDR10 的编码链路。把 `nxrt.ini` 里的
   `[hdr] mode` 设为 `off`（启动器的视频页有同一个开关）即可恢复正常颜色。
 

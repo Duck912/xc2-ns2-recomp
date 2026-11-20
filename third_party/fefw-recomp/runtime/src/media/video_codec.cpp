@@ -398,7 +398,14 @@ void decode_into(Decoder& d, const uint8_t* data, size_t size, int64_t pts, std:
     // 2026-11-18 finding of the dav1d path (52, 155.3) - and the picture then never advances (one frame, then frozen).
     // FFmpeg is used from the worker and from the player's own fallback alike: one decoder per stream. Feeding the same
     // packets to dav1d as well left two decoder states and the picture stopped after a few frames (2026-11-20).
-    if (g_hwdec && t_on_worker && data && size && (!d.ff_tried || d.ff)) {
+    // Whoever decodes creates the one hardware decoder for this stream, worker or not: a submit only queues, and the one
+    // place outside the worker that decodes is Acquire, when the worker is late. Letting that path fall through to dav1d
+    // opened a SECOND decoder in the middle of the stream - dav1d cannot start from a non-keyframe, answered -22, and the
+    // cutscene came out in blocky garbage (0.1.4 on the 6800 XT, 2026-11-21; the blocks lasted until the worker's decoder
+    // took over). Creation runs under dec_mu, which serialises it against the worker.
+    if (g_hwdec && data && size && (!d.ff_tried || d.ff)) {
+        // No lock of d.mu here: decode_one already runs the decode under dec_mu, and the submit path holds d.mu. Taking both
+        // in the other order deadlocked on the first frame (2026-11-21).
         if (!d.ff && !d.ff_tried) {
             d.ff_tried = true;
             std::string why;
