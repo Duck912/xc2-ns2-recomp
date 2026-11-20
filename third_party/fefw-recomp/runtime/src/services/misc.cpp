@@ -402,6 +402,25 @@ static const std::vector<uint32_t>& aoc_indices() {
                 }
             }
             std::fclose(f);
+        } else {
+            // Fallback when indices.txt is absent: scan <[aoc] dir> for <16-hex data id>/romfs folders belonging to this title.
+            std::error_code ec;
+            const uint64_t base = profile().program_id + kAocBaseIdOffset;
+            const auto root = std::filesystem::u8path(dir);
+            if (std::filesystem::is_directory(root, ec)) {
+                for (const auto& entry : std::filesystem::directory_iterator(root, ec)) {
+                    if (!entry.is_directory(ec)) continue;
+                    const std::string name = entry.path().filename().string();
+                    if (name.size() != 16) continue;
+                    char* end = nullptr;
+                    const unsigned long long id = std::strtoull(name.c_str(), &end, 16);
+                    if (!end || *end != '\0' || id < base || id - base > 0xFFFull) continue;
+                    if (std::filesystem::is_directory(entry.path() / "romfs", ec)) {
+                        v.push_back(static_cast<uint32_t>(id - base));
+                    }
+                }
+                std::sort(v.begin(), v.end());
+            }
         }
         std::string list;
         for (uint32_t n : v) list += (list.empty() ? "" : ",") + std::to_string(n);
