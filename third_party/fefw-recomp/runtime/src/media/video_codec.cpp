@@ -52,6 +52,7 @@
 #include "nxrt/module.h"
 #include "nxrt/video_codec.h"
 #include "video_nvdec.h"
+#include "video_ffmpeg.h"
 
 #if NXRT_HAVE_LIBVPX
 #include <vpx/vp8dx.h>
@@ -86,6 +87,7 @@ constexpr size_t kBacklog = 1;   // decoded pictures waiting for a buffer before
 
 bool g_log = false;
 int g_threads = 4;
+thread_local bool t_on_worker = false;   // the decode worker: the only thread allowed to take a hardware decoder
 bool g_hwdec = true;   // [media] hwdec: NVDEC for VP8/VP9/AV1 when the GPU is an NVIDIA one (video_nvdec.cpp)
 std::atomic<bool> g_enabled{false};
 std::atomic<uint64_t> s_created{0}, s_destroyed{0}, s_packets{0}, s_decoded{0}, s_delivered{0}, s_read{0}, s_errors{0};
@@ -207,6 +209,8 @@ struct Decoder {
     // hardware path is off or unavailable; every failure falls back to libvpx/dav1d for the rest of the stream.
     NvDec* nv = nullptr;
     bool nv_tried = false;
+    FfDec* ff = nullptr;      // FFmpeg's libavcodec + D3D11VA: the path the emulators use
+    bool ff_tried = false;
     uint32_t id = 0;
     int codec = 9;   // 8 VP8, 9 VP9, 10 AV1 (dav1d; the SDK 3.0.1 movie library decodes AV1)
     std::mutex mu;
@@ -390,7 +394,37 @@ void after_change(::Ctx* c, Decoder& d, bool fences) {
 void decode_into(Decoder& d, const uint8_t* data, size_t size, int64_t pts, std::vector<Picture>& out) {
     // [media] hwdec (default on): let the GPU's decoder do VP8/VP9/AV1 when it is an NVIDIA one. It decodes 4K AV1 far
     // faster than dav1d on the CPU, which is what the DLC openings need to play in real time (2026-11-20).
-    if (g_hwdec && data && size) {
+    // Hardware decoding only on the worker thread: a decode in the player's own submit call blocks the player - the
+    // 2026-11-18 finding of the dav1d path (52, 155.3) - and the picture then never advances (one frame, then frozen).
+    // FFmpeg is used from the worker and from the player's own fallback alike: one decoder per stream. Feeding the same
+    // packets to dav1d as well left two decoder states and the picture stopped after a few frames (2026-11-20).
+    if (g_hwdec && t_on_worker && data && size && (!d.ff_tried || d.ff)) {
+        if (!d.ff && !d.ff_tried) {
+            d.ff_tried = true;
+            std::string why;
+            d.ff = ffdec_create(d.codec, &why);
+            if (d.ff) NXLOG_I("vcodec", "decoder %u: %s on FFmpeg/D3D11VA (hardware)", d.id, d.codec == 10 ? "AV1" : d.codec == 9 ? "VP9" : "VP8");
+            else NXLOG_I("vcodec", "decoder %u: no FFmpeg hardware decoder (%s)", d.id, why.c_str());
+        }
+        if (d.ff) {
+            std::vector<FfDecPicture> pics;
+            if (ffdec_decode(d.ff, data, size, pts, &pics)) {
+                for (FfDecPicture& q : pics) {
+                    Picture pic;
+                    pic.w = static_cast<uint16_t>(q.w);
+                    pic.h = static_cast<uint16_t>(q.h);
+                    pic.pts = q.pts;
+                    pic.nv12 = std::move(q.nv12);
+                    out.push_back(std::move(pic));
+                }
+                return;
+            }
+            NXLOG_W("vcodec", "decoder %u: FFmpeg hardware decode failed; falling back", d.id);
+            ffdec_destroy(d.ff);
+            d.ff = nullptr;
+        }
+    }
+    if (g_hwdec && t_on_worker && data && size) {
         if (!d.nv && !d.nv_tried) {
             d.nv_tried = true;
             std::string why;
@@ -836,6 +870,7 @@ void decode_one(Decoder& d) {
 // adding to them. It only fills ready: fences are completed on the guest thread (Assign in Acquire / Submit), which is the only
 // place a guest event may be signalled.
 void worker_loop(Decoder& d) {
+    t_on_worker = true;
     // The film starts while the game is still loading, and the player's own thread is what loses the CPU then (frames every
     // 2-8 s for the first ~20 s). Keep the decoders off its way.
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
@@ -856,6 +891,7 @@ Decoder::~Decoder() {
     cv.notify_all();
     if (worker.joinable()) worker.join();
     if (nv) nvdec_destroy(nv);
+    if (ff) ffdec_destroy(ff);
 }
 // The body shared by the two Submit*DecoderInputBuffer shapes: SDK 3.0.1's AV1 one has no size_t* out parameter, the VP8 / VP9 one
 // has it first.

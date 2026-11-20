@@ -112,11 +112,25 @@ if ($LASTEXITCODE -ne 0) { throw 'compile failed: x2_opus301.cpp' }
     "/I$nxinc" "/I$rt\runtime\include" "/I$rt\runtime\games" "/I$volk" "/I$vkinc" "/I$vma" "/I$sdlinc"
 if ($LASTEXITCODE -ne 0) { throw 'compile failed: x2_audio301.cpp' }
 
+# FFmpeg's hardware movie decoder (runtime/src/media/video_ffmpeg.cpp): nxrt.lib references avcodec/avutil when the
+# runtime was configured with NXRT_FFMPEG_DIR, so the link needs the same two import libraries.
+$ffLibs = @()
+$ffCache = Join-Path $gfxDir 'CMakeCache.txt'
+if (Test-Path -LiteralPath $ffCache) {
+    $ffLine = Select-String -LiteralPath $ffCache -Pattern '^NXRT_FFMPEG_DIR:PATH=.?' | Select-Object -First 1
+    if ($ffLine -and $ffLine.Line -match '=(.+)$') {
+        $ffDir = $Matches[1].Trim()
+        if ($ffDir -and (Test-Path -LiteralPath (Join-Path $ffDir 'lib\avcodec.lib'))) {
+            $ffLibs = @((Join-Path $ffDir 'lib\avcodec.lib'), (Join-Path $ffDir 'lib\avutil.lib'))
+            Write-Host ('ffmpeg    : ' + $ffDir)
+        }
+    }
+}
 $exe = Join-Path $bd 'xc2_boot.exe'
 & clang-cl.exe /nologo /MT "/Fe:$exe" $obj $objOpus $objAudio `
     "$gfxDir\nxrt_gfx.lib" "$gfxDir\nxrt.lib" "$game\nxrt_game_xc2ns2_core.lib" "$game\nxrt_game_xc2ns2_data.lib" `
     $mainlib (Join-Path $libdir 'sdk.lib') `
-    (Join-Path $libdir 'subsdk0.lib') (Join-Path $libdir 'rtld.lib') @extraLibs @vpxLibs `
+    (Join-Path $libdir 'subsdk0.lib') (Join-Path $libdir 'rtld.lib') @extraLibs @vpxLibs @ffLibs `
     "$gfxDir\nxrt_imgui.lib" "$gfxDir\nxrt_volk.lib" "$gfxDir\nxrt_tiling.lib" "$gfxDir\nxrt_astc2bc7.lib" "$gfxDir\nxrt_zstd.lib" `
     "$gfxDir\_deps\sdl3-build\SDL3-static.lib" "$gfxDir\third_party\dav1d\nxrt_dav1d.lib" `
     kernel32.lib user32.lib gdi32.lib winmm.lib imm32.lib ole32.lib oleaut32.lib version.lib uuid.lib advapi32.lib `
