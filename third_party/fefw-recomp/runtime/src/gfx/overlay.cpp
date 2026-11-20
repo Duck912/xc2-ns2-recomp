@@ -17,6 +17,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <string>
 #include <utility>
 #include <vector>
@@ -447,9 +448,86 @@ std::unique_ptr<Overlay> Overlay::create(const Context& ctx, std::string* error)
     io.LogFilename = nullptr;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
     io.BackendFlags |= ImGuiBackendFlags_HasGamepad;      // set_menu_pad feeds it
-    ImGui::StyleColorsDark();
-    io.Fonts->AddFontDefaultVector();          // the scalable default font: stays sharp at every UI scale (update_scale)
-    ImGui::GetStyle().FontSizeBase = 16.0f;
+    // XC2 Aegis Theme (Deep Ocean Slate + Aegis Emerald / Warm Gold accents), adapted from totk-pc-recomp / SavageWindRecomp (MIT).
+    {
+        ImGuiStyle& st = ImGui::GetStyle();
+        ImGui::StyleColorsDark(&st);
+        st.WindowRounding = 14.0f;
+        st.ChildRounding = 10.0f;
+        st.FrameRounding = 8.0f;
+        st.PopupRounding = 8.0f;
+        st.ScrollbarRounding = 8.0f;
+        st.GrabRounding = 8.0f;
+        st.TabRounding = 8.0f;
+        st.WindowPadding = ImVec2(24.0f, 18.0f);
+        st.FramePadding = ImVec2(12.0f, 7.0f);
+        st.ItemSpacing = ImVec2(12.0f, 10.0f);
+        st.ScrollbarSize = 14.0f;
+        st.WindowBorderSize = 1.0f;
+        st.ChildBorderSize = 0.0f;
+        st.PopupBorderSize = 1.0f;
+        st.TabBarBorderSize = 1.0f;
+        ImVec4* c = st.Colors;
+        const ImVec4 gold(0.94f, 0.78f, 0.36f, 1.0f);
+        const ImVec4 teal(0.14f, 0.42f, 0.44f, 1.0f);
+        const ImVec4 teal_hi(0.18f, 0.56f, 0.54f, 1.0f);
+        c[ImGuiCol_WindowBg] = ImVec4(0.055f, 0.085f, 0.135f, 0.94f);
+        c[ImGuiCol_ChildBg] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+        c[ImGuiCol_PopupBg] = ImVec4(0.06f, 0.10f, 0.16f, 0.97f);
+        c[ImGuiCol_Border] = ImVec4(0.22f, 0.46f, 0.54f, 0.45f);
+        c[ImGuiCol_Text] = ImVec4(0.94f, 0.96f, 0.98f, 1.0f);
+        c[ImGuiCol_TextDisabled] = ImVec4(0.58f, 0.66f, 0.74f, 1.0f);
+        c[ImGuiCol_TitleBg] = ImVec4(0.045f, 0.075f, 0.125f, 0.98f);
+        c[ImGuiCol_TitleBgActive] = ImVec4(0.055f, 0.095f, 0.155f, 0.98f);
+        c[ImGuiCol_FrameBg] = ImVec4(0.09f, 0.15f, 0.22f, 0.95f);
+        c[ImGuiCol_FrameBgHovered] = ImVec4(0.13f, 0.25f, 0.35f, 1.0f);
+        c[ImGuiCol_FrameBgActive] = ImVec4(0.16f, 0.33f, 0.43f, 1.0f);
+        c[ImGuiCol_Button] = ImVec4(0.11f, 0.21f, 0.30f, 1.0f);
+        c[ImGuiCol_ButtonHovered] = teal;
+        c[ImGuiCol_ButtonActive] = teal_hi;
+        c[ImGuiCol_Header] = ImVec4(0.12f, 0.28f, 0.36f, 0.90f);
+        c[ImGuiCol_HeaderHovered] = teal;
+        c[ImGuiCol_HeaderActive] = teal_hi;
+        c[ImGuiCol_Tab] = ImVec4(0.09f, 0.15f, 0.22f, 0.90f);
+        c[ImGuiCol_TabHovered] = teal;
+        c[ImGuiCol_TabSelected] = ImVec4(0.14f, 0.36f, 0.42f, 1.0f);
+        c[ImGuiCol_TabSelectedOverline] = gold;
+        c[ImGuiCol_SliderGrab] = ImVec4(0.22f, 0.74f, 0.68f, 1.0f);
+        c[ImGuiCol_SliderGrabActive] = gold;
+        c[ImGuiCol_CheckMark] = ImVec4(0.30f, 0.88f, 0.78f, 1.0f);
+        c[ImGuiCol_NavCursor] = gold;
+        c[ImGuiCol_Separator] = ImVec4(0.24f, 0.44f, 0.52f, 0.50f);
+        c[ImGuiCol_ScrollbarBg] = ImVec4(0.04f, 0.07f, 0.11f, 0.60f);
+        c[ImGuiCol_ScrollbarGrab] = ImVec4(0.20f, 0.38f, 0.46f, 0.80f);
+        c[ImGuiCol_ScrollbarGrabHovered] = teal;
+        c[ImGuiCol_ScrollbarGrabActive] = gold;
+    }
+    // Load crisp system CJK font (ImGui 1.92 dynamic atlas rasterizes glyphs on demand at native DPI).
+    {
+        bool font_loaded = false;
+        static const char* const kCjkFonts[] = {
+            "C:\\Windows\\Fonts\\msyh.ttc",
+            "C:\\Windows\\Fonts\\Deng.ttf",
+            "C:\\Windows\\Fonts\\simhei.ttf",
+        };
+        std::error_code ec;
+        for (const char* path : kCjkFonts) {
+            if (std::filesystem::exists(path, ec) && !ec) {
+                ImFontConfig fc;
+                fc.FontNo = 0;
+                if (io.Fonts->AddFontFromFileTTF(path, 0.0f, &fc) != nullptr) {
+                    NXLOG_I(kTag, "overlay font loaded: %s", path);
+                    font_loaded = true;
+                    break;
+                }
+            }
+        }
+        if (!font_loaded) {
+            io.Fonts->AddFontDefaultVector();
+            NXLOG_I(kTag, "overlay font: default vector fallback");
+        }
+    }
+    ImGui::GetStyle().FontSizeBase = 18.0f;
     s.base_style = ImGui::GetStyle();
     const VkExtent2D e = ctx.renderer->extent();
     io.DisplaySize = ImVec2(static_cast<float>(e.width), static_cast<float>(e.height));

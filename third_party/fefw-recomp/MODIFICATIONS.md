@@ -50,6 +50,13 @@ vendored into the Xenoblade Chronicles 2 NS2E recomp project. Upstream base and 
 | `runtime/src/gfx/nvn/nvn_spirv_patch.cpp` | 2026-11-16 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |
 | `runtime/src/gfx/nvn/nvn_spirv_patch.h` | 2026-11-16 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |
 | `runtime/src/gfx/platform.cpp` | 2026-11-16 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |
+| `runtime/include/nxrt/play.h` | 2026-11-20 | expose overlay_blocks_game() for hosts with a custom input source |
+| `runtime/src/gfx/play/play_types.h` | 2026-11-20 | default FPS counter hotkey changed to F10 |
+| `runtime/src/gfx/play/play.cpp` | 2026-11-20 | pump overlay/settings/events when hook_update is 0, add F11 fullscreen toggle, implement overlay_blocks_game(), use clean Settings menu |
+| `runtime/src/gfx/play/play_ui.h` | 2026-11-20 | add draw_settings_menu() wrapper replacing Diagnostics overlay |
+| `runtime/src/gfx/overlay.cpp` | 2026-11-21 | XC2 Aegis Deep Ocean + Emerald/Gold ImGui theme and Windows CJK font (msyh.ttc) dynamic loading |
+| `runtime/src/gfx/play/play_ui.cpp` | 2026-11-21 | TOTK-style two-pane card-row bilingual (zh-Hans/en) F1 settings menu (adapted from totk-pc-recomp / SavageWindRecomp, MIT) |
+| `runtime/src/services/misc.cpp` | 2026-11-20 | auto-discover DLC folders in [aoc] dir when indices.txt is absent |
 | `runtime/src/gfx/vk_device.cpp` | 2026-11-16 | replay: pipe/fb hot-path audit (round 45, 9.7-15.4 -> 5.3-6.8 ms); fsr_follow_size; fs trace_stack_file off; s |
 | `runtime/src/ipc/ipc.cpp` | 2026-11-14 | dlc: the title never asks aoc, so the Torna entry is save driven (HANDOVER 66) |
 | `runtime/src/kernel/handles.cpp` | 2026-11-16 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |

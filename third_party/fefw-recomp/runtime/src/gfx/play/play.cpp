@@ -537,7 +537,8 @@ void handle_event(const input::Event& e, uint64_t now) {
             if (st.quit_on_close) quit_now("window closed");
             break;
         case EventType::KeyDown:
-            if ((e.u.key.scancode == SDL_SCANCODE_RETURN || e.u.key.scancode == SDL_SCANCODE_KP_ENTER) && (e.mods & SDL_KMOD_ALT)) {
+            if (e.u.key.scancode == SDL_SCANCODE_F11 ||
+                ((e.u.key.scancode == SDL_SCANCODE_RETURN || e.u.key.scancode == SDL_SCANCODE_KP_ENTER) && (e.mods & SDL_KMOD_ALT))) {
                 if (!(e.flags & input::kFlagRepeat)) toggle_fullscreen();
                 return;
             }
@@ -694,6 +695,43 @@ void poll_pads(uint64_t now) {
 // set while update_hook runs: keyboard_service stays out of it
 thread_local bool t_in_update = false;
 
+void apply_pending_settings(uint64_t now) {
+    G& st = g();
+    std::unique_lock<std::mutex> lk(st.mu);
+    if (!st.have_pending) return;
+    Settings s = st.pending;
+    st.have_pending = false;
+    const std::string old_mode = st.settings.display.window_mode;
+    const int old_monitor = st.settings.display.monitor;
+    const int old_w = st.settings.display.width, old_h = st.settings.display.height;
+    st.settings = s;
+    st.settings_epoch++;
+    lk.unlock();
+    if (st.engine) st.engine->set_settings(s, now);
+    apply_frame_cap(s);
+    display_tuning(s.display);
+    if (const GamePlay* gp = game_play(); gp && gp->settings_changed) gp->settings_changed(s);     // the game's display options, lock-on
+    extras::set_settings(s.extras);
+    extras::hdr_refresh_levels();
+    apply_fps_counter(s.fps);
+    st.want_present.store(static_cast<int>(present_mode_for(s.display)));
+    apply_audio(s.audio);
+    if (st.window && s.display.monitor != old_monitor && s.display.monitor > 0) {
+        if (platform::move_to_display(s.display.monitor)) st.limiter.reset_schedule();
+        apply_frame_cap(s);                        // another display can mean another refresh rate
+    }
+    if (s.display.window_mode != old_mode) {
+        set_window_mode(s.display.window_mode);
+        apply_frame_cap(s);                        // another window mode can mean another refresh rate (vsync cap)
+    }
+    // The windowed size is live while the window is windowed; in fullscreen it is the size the window goes back to (the next start).
+    if (st.window && (s.display.width != old_w || s.display.height != old_h) && platform::fullscreen_mode() == platform::FullscreenMode::Windowed)
+        platform::set_window_size(s.display.width, s.display.height);
+    std::string err;
+    if (!save_settings(st.path, s, &err)) NXLOG_W(kTag, "cannot save %s: %s", st.path.c_str(), err.c_str());
+    else NXLOG_I(kTag, "settings applied and saved to %s", st.path.c_str());
+}
+
 int update_hook(::Ctx*, uint64_t, void*) {
     G& st = g();
     ft::mark("main.update");
@@ -735,42 +773,7 @@ int update_hook(::Ctx*, uint64_t, void*) {
     if (st.window && on_pump_thread) platform::pump_events();
 
     // settings queued by the page
-    {
-        std::unique_lock<std::mutex> lk(st.mu);
-        if (st.have_pending) {
-            Settings s = st.pending;
-            st.have_pending = false;
-            const std::string old_mode = st.settings.display.window_mode;
-            const int old_monitor = st.settings.display.monitor;
-            const int old_w = st.settings.display.width, old_h = st.settings.display.height;
-            st.settings = s;
-            st.settings_epoch++;
-            lk.unlock();
-            st.engine->set_settings(s, now);
-            apply_frame_cap(s);
-            display_tuning(s.display);
-            if (const GamePlay* gp = game_play(); gp && gp->settings_changed) gp->settings_changed(s);     // the game's display options, lock-on
-            extras::set_settings(s.extras);
-            extras::hdr_refresh_levels();
-            apply_fps_counter(s.fps);
-            st.want_present.store(static_cast<int>(present_mode_for(s.display)));
-            apply_audio(s.audio);
-            if (st.window && s.display.monitor != old_monitor && s.display.monitor > 0) {
-                if (platform::move_to_display(s.display.monitor)) st.limiter.reset_schedule();
-                apply_frame_cap(s);                        // another display can mean another refresh rate
-            }
-            if (s.display.window_mode != old_mode) {
-                set_window_mode(s.display.window_mode);
-                apply_frame_cap(s);                        // another window mode can mean another refresh rate (vsync cap)
-            }
-            // The windowed size is live while the window is windowed; in fullscreen it is the size the window goes back to (the next start).
-            if (st.window && (s.display.width != old_w || s.display.height != old_h) && platform::fullscreen_mode() == platform::FullscreenMode::Windowed)
-                platform::set_window_size(s.display.width, s.display.height);
-            std::string err;
-            if (!save_settings(st.path, s, &err)) NXLOG_W(kTag, "cannot save %s: %s", st.path.c_str(), err.c_str());
-            else NXLOG_I(kTag, "settings applied and saved to %s", st.path.c_str());
-        }
-    }
+    apply_pending_settings(now);
 
     apply_unfocused_mute();
 
@@ -934,14 +937,26 @@ void keyboard_service() {
     if (t - last_ms < 8 || t_in_update) return;
     last_ms = t;
     G& st = g();
-    if (!st.started || !st.overlay || !st.overlay->keyboard_open()) return;
+    if (!st.started) return;
+    const bool swkbd = st.overlay && st.overlay->keyboard_open();
+    if (!swkbd && st.hook_update != 0) return;
     const uint64_t now = now_ns();
     platform::pump_events();          // also headless (scripted runs): SDL's virtual pads update here
+    if (st.window) g_last_pump_ms.store(t, std::memory_order_relaxed);
+    apply_pending_settings(now);
+    apply_unfocused_mute();
     if (st.window) {
-        g_last_pump_ms.store(t, std::memory_order_relaxed);
-        platform::set_text_input(true);
-        if (platform::relative_mouse()) platform::set_relative_mouse(false);
-        platform::set_cursor_visible(true);
+        if (swkbd) {
+            platform::set_text_input(true);
+            if (platform::relative_mouse()) platform::set_relative_mouse(false);
+            platform::set_cursor_visible(true);
+        } else if (st.overlay) {
+            platform::set_text_input(false);
+            if (st.overlay->blocks_game()) {
+                if (platform::relative_mouse()) platform::set_relative_mouse(false);
+                platform::set_cursor_visible(true);
+            }
+        }
     }
     input::Event buf[64];
     for (;;) {
@@ -949,8 +964,10 @@ void keyboard_service() {
         if (!got) break;
         for (size_t i = 0; i < got; ++i) handle_event(buf[i], now);
     }
-    poll_pads(now);
-    nvn::present_last_frame_again();
+    if (swkbd) {
+        poll_pads(now);
+        nvn::present_last_frame_again();
+    }
 }
 
 // ---- what the game module gets from play mode (play_game.h GameHost) ----------------------------------------------------------------------
@@ -1273,11 +1290,11 @@ bool start(const StartOptions& opt) {
             if (!st.overlay) {
                 NXLOG_W(kTag, "no overlay: %s", err.c_str());
             } else {
+                gfx::Overlay* ov = st.overlay.get();
                 if (const GamePlay* gp = game_play(); gp && gp->settings_menu) {   // the game's own menu (GamePlay::settings_menu)
-                    gfx::Overlay* ov = st.overlay.get();
                     st.overlay->set_menu([gp, ov] { gp->settings_menu(g_host, *ov); });
                 } else {
-                    st.overlay->add_panel("Settings", [] { draw_settings_page(g_host); });
+                    st.overlay->set_menu([ov] { draw_settings_menu(g_host, *ov); });
                 }
                 st.overlay->install_on_renderer();
                 apply_fps_counter(st.settings.fps);
@@ -1333,6 +1350,11 @@ void stop() {
     }
     st.limiter.set_pre_frame_hook(nullptr, nullptr);
     st.started = false;
+}
+
+bool overlay_blocks_game() {
+    const G& st = g();
+    return st.started && st.overlay && st.overlay->blocks_game();
 }
 
 Stats stats() {

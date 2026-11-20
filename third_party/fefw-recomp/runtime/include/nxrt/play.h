@@ -51,6 +51,7 @@ struct StartOptions {
 };
 bool start(const StartOptions& opt);        // after nxrt::init, the renderer and the NVN back end; installs the hid input source and the hooks
 void stop();                                // saves changed settings, removes the hooks and the input source
+bool overlay_blocks_game();                 // true while the F1 overlay (or on-screen keyboard) wants keyboard/mouse/pad input
 
 // Counters for the tests and the log.
 struct Stats {

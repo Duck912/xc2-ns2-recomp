@@ -216,9 +216,10 @@ enum class Corner : uint8_t { TopLeft = 0, TopRight, BottomLeft, BottomRight };
 const char* corner_name(Corner c);                       // "top_left" "top_right" "bottom_left" "bottom_right"
 bool parse_corner(const std::string& s, Corner* out);    // case-insensitive, '-' and ' ' equal '_'
 constexpr int32_t kScancodeF2 = 59;                      // SDL_SCANCODE_F2
+constexpr int32_t kScancodeF10 = 67;                     // SDL_SCANCODE_F10
 struct FpsSettings {
     bool show = false;                                   // [fps] show
-    InputId key = {InKind::Key, kScancodeF2};            // [fps] key: the hotkey that flips `show` (a keyboard key; never reaches the game)
+    InputId key = {InKind::Key, kScancodeF10};           // [fps] key: the hotkey that flips `show` (a keyboard key; never reaches the game)
     Corner corner = Corner::TopLeft;                     // [fps] corner
     int detail = 1;                                      // [fps] detail: 0 frame rate only, 1 frame rate and frame time, 2 also the 1% low and the worst frame
     bool in_screenshots = false;                         // [fps] in_screenshots: the counter is drawn into screenshots too (test tooling asks for this)
