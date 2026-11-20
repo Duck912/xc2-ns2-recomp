@@ -501,7 +501,11 @@ def step_link_package(r, repo, install, zig, rtlib, jobs):
              str(rtlib), "-o", str(exe)])
     if r.run(argv) != 0:
         return r.end_step("link", started, False, "the exe did not link")
-    shutil.copy2(str(rtlib.parent / "xc2_rt.dll"), str(install / "xc2_rt.dll"))
+    # Every DLL in runtime goes beside the exe: xc2_rt.dll itself, and the FFmpeg shared libraries it loads for the film's
+    # hardware decoders (avcodec-63.dll and friends). Missing ones are not an error - the runtime then says "built without
+    # FFmpeg" and decodes films on the CPU.
+    for dll in sorted(rtlib.parent.glob("*.dll")):
+        shutil.copy2(str(dll), str(install / dll.name))
     return r.end_step("link", started, True)
 
 def junction(link, target, r):

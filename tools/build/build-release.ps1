@@ -78,6 +78,15 @@ if (-not $SkipDll) {
             break
         }
     }
+    # FFmpeg (GPL-3.0-or-later shared build): the film's hardware decoders (libavcodec + D3D11VA). Without this the runtime
+    # says "built without FFmpeg" and every 4K opening runs on the CPU - measured 2026-11-21 on the packaged DLL, which had
+    # [media] hwdec on and no FFmpeg at all, so the option did nothing. The DLLs travel in the package next to xc2_boot.exe.
+    $ffmpeg = ''
+    foreach ($ff in @($env:NXRT_FFMPEG_DIR, 'E:\XC2\lan\ffmpeg\ffmpeg-master-latest-win64-gpl-shared')) {
+        if ($ff -and (Test-Path (Join-Path $ff 'lib\avcodec.lib'))) { $ffmpeg = $ff; break }
+    }
+    if ($ffmpeg) { $cfg += '-DNXRT_FFMPEG_DIR=' + $ffmpeg.Replace('\', '/') }
+    else { Write-Warning 'FFmpeg not found: this build has no hardware film decoder' }
     & cmake @cfg 2>&1 | ForEach-Object { if ($_ -match 'error|Error') { Write-Host "  $_" } }
     if ($LASTEXITCODE -ne 0) { throw 'the release project could not be configured' }
     & cmake --build $DllBuildDir --target xc2_rt 2>&1 | ForEach-Object { if ($_ -match 'error|Linking|undefined') { Write-Host "  $_" } }

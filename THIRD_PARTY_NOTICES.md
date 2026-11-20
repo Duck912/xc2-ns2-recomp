@@ -24,6 +24,13 @@ their path; components fetched at build time by CMake (`FetchContent`, see
 | component | where | licence |
 |---|---|---|
 | SPIRV-Tools `spirv-val.exe` (the harness validates every translated shader with it) | `tools\spirv-val\` | Apache-2.0 (see its `LICENSE.txt` there) |
+| FFmpeg, shared GPL build `avcodec-63 / avformat-63 / avutil-61 / swresample-7 / swscale-10` (the film's hardware decoders through libavcodec + D3D11VA) | `runtime\` next to `xc2_boot.exe` | GPL-3.0-or-later; full text in `licenses\FFMPEG-LICENSE.txt` |
+
+FFmpeg is executed as a library, unmodified, from the shared build published at
+<https://github.com/BtbN/FFmpeg-Builds> (`ffmpeg-master-latest-win64-gpl-shared`). The runtime that loads it is
+GPL-3.0-or-later, so the combination stays under the same licence. Corresponding source for the FFmpeg libraries: the
+same release tree (`ffmpeg-master-latest-win64-gpl-shared` publishes the matching sources next to the binaries), or on
+request — written offers are honoured for three years from the release date.
 
 ## Tool sources
 

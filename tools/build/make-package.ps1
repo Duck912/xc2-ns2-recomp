@@ -72,6 +72,28 @@ New-Item -ItemType Directory -Force (Join-Path $Out 'runtime') | Out-Null
 Copy-Item $dll, $lib (Join-Path $Out 'runtime') -Force
 Say ("runtime       {0:N1} MB  (xc2_rt.dll + the import library)" -f (((Get-Item $dll).Length + (Get-Item $lib).Length) / 1MB))
 
+# FFmpeg (GPL-3.0-or-later shared build): the film's hardware decoders (libavcodec + D3D11VA). The runtime loads them from
+# its own directory, so they go in runtime and the setup copies every runtime*.dll next to xc2_boot.exe. A package without
+# them still runs - every 4K opening falls back to the CPU decoders (8-17 fps against 30).
+$ffmpeg = ''
+foreach ($cand in @($env:NXRT_FFMPEG_DIR, 'E:\XC2\lan\ffmpeg\ffmpeg-master-latest-win64-gpl-shared')) {
+    if ($cand -and (Test-Path (Join-Path $cand 'bin\avcodec-63.dll'))) { $ffmpeg = $cand; break }
+}
+if ($ffmpeg) {
+    $ffDlls = @('avcodec-63.dll', 'avformat-63.dll', 'avutil-61.dll', 'swresample-7.dll', 'swscale-10.dll')
+    $ffBytes = 0
+    foreach ($n in $ffDlls) {
+        $srcDll = Join-Path $ffmpeg ('bin\' + $n)
+        if (Test-Path $srcDll) { Copy-Item $srcDll (Join-Path $Out 'runtime') -Force; $ffBytes += (Get-Item $srcDll).Length }
+    }
+    $lic = Join-Path $Out 'licenses'
+    New-Item -ItemType Directory -Force $lic | Out-Null
+    if (Test-Path (Join-Path $ffmpeg 'LICENSE.txt')) { Copy-Item (Join-Path $ffmpeg 'LICENSE.txt') (Join-Path $lic 'FFMPEG-LICENSE.txt') -Force }
+    Say ("ffmpeg        {0:N1} MB  (GPL-3.0 shared build, the film's hardware decoders)" -f ($ffBytes / 1MB))
+} else {
+    Write-Warning 'FFmpeg not found: the package ships no hardware film decoder, so 4K openings run on the CPU'
+}
+
 # --- 3. the tools: an embeddable Python with the lifter in it, the shader harness, Zig -----------------------------
 $py = Join-Path $root 'xc2\build\release\tools\python'
 if (-not $SkipPython) {
@@ -182,6 +204,7 @@ Bundled tools, each with its own licence:
   tools/spirv_harness  Ryujinx's shader translator (MIT) in a self-contained .NET 10 runtime (MIT)
   tools/build/zig      Zig 0.17.0 (MIT); its bundled clang, lld and libc++ carry Apache-2.0 WITH LLVM-exception
   runtime/xc2_rt.dll   this project and the fefw-recomp runtime (GPL-3.0-or-later)
+  runtime/av*.dll      FFmpeg shared GPL build (GPL-3.0-or-later): the film's hardware decoders; see licenses/FFMPEG-LICENSE.txt
 "@
 Set-Content -LiteralPath (Join-Path $lic 'BUNDLED_TOOLS.txt') -Value $notes -Encoding utf8NoBOM
 
