@@ -93,7 +93,7 @@ pipelines for about 20 seconds (once per driver).
 
 | file | size | sha256 |
 |---|---|---|
-| `XC2-package-dist-0.1.4.zip` | 216.7 MB (643.4 MB unpacked) | `C239A3B7BAAEF71A08322E66AFD09CAF53B0B1D862D1BC7FA9F711EA40EAC658` |
+| `XC2-package-dist-0.1.4.zip` | 216.7 MB (643.4 MB unpacked) | `742DC8D9F9FA40AD764CC6ACC211DB67193C0E3023B9009FE8DD06FFE5424F4C` |
 | `xc2-launcher-0.1.4-src.zip` | 0.5 MB | `F3DCA4DFDC4D1FBBBFFFFA7A466ED253DE91C9B3192A2E4B0D20632FBF2D7B44` |
 
 The package contains no game files: the executable is built on your machine from your own dump and the shaders are
@@ -196,7 +196,7 @@ licence text and the source offer are in `licenses/FFMPEG-LICENSE.txt` and `THIR
 
 | 文件 | 大小 | sha256 |
 |---|---|---|
-| `XC2-package-dist-0.1.4.zip` | 216.7 MB（解压 643.4 MB） | `C239A3B7BAAEF71A08322E66AFD09CAF53B0B1D862D1BC7FA9F711EA40EAC658` |
+| `XC2-package-dist-0.1.4.zip` | 216.7 MB（解压 643.4 MB） | `742DC8D9F9FA40AD764CC6ACC211DB67193C0E3023B9009FE8DD06FFE5424F4C` |
 | `xc2-launcher-0.1.4-src.zip` | 0.5 MB | `F3DCA4DFDC4D1FBBBFFFFA7A466ED253DE91C9B3192A2E4B0D20632FBF2D7B44` |
 
 包里不含任何游戏文件：exe 用你自己的 dump 在你机器上编出来，着色器也从它翻译。安装说明见
