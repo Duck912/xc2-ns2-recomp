@@ -412,7 +412,9 @@ const Bit kBits[] = {{"A", nxrt::hid::btn(nxrt::hid::kBtnA)},     {"B", nxrt::hi
                      {"X", nxrt::hid::btn(nxrt::hid::kBtnX)},     {"Y", nxrt::hid::btn(nxrt::hid::kBtnY)},
                      {"PLUS", nxrt::hid::btn(nxrt::hid::kBtnPlus)}, {"MINUS", nxrt::hid::btn(nxrt::hid::kBtnMinus)},
                      {"L", nxrt::hid::btn(nxrt::hid::kBtnL)},     {"R", nxrt::hid::btn(nxrt::hid::kBtnR)},
-                     {"ZL", nxrt::hid::btn(nxrt::hid::kBtnZL)},   {"ZR", nxrt::hid::btn(nxrt::hid::kBtnZR)}};
+                     {"ZL", nxrt::hid::btn(nxrt::hid::kBtnZL)},   {"ZR", nxrt::hid::btn(nxrt::hid::kBtnZR)},
+                     {"DPD", nxrt::hid::btn(nxrt::hid::kBtnDown)}, {"DPU", nxrt::hid::btn(nxrt::hid::kBtnUp)},
+                     {"DPL", nxrt::hid::btn(nxrt::hid::kBtnLeft)}, {"DPR", nxrt::hid::btn(nxrt::hid::kBtnRight)}};
 struct Rec {
     std::mutex mu;
     FILE *f = nullptr;
@@ -1715,6 +1717,10 @@ int main(int argc, char **argv) {
                 else if (name == "R") bit = nxrt::hid::btn(nxrt::hid::kBtnR);
                 else if (name == "ZL") bit = nxrt::hid::btn(nxrt::hid::kBtnZL);
                 else if (name == "ZR") bit = nxrt::hid::btn(nxrt::hid::kBtnZR);
+                else if (name == "DPD") bit = nxrt::hid::btn(nxrt::hid::kBtnDown);
+                else if (name == "DPU") bit = nxrt::hid::btn(nxrt::hid::kBtnUp);
+                else if (name == "DPL") bit = nxrt::hid::btn(nxrt::hid::kBtnLeft);
+                else if (name == "DPR") bit = nxrt::hid::btn(nxrt::hid::kBtnRight);
                 if (bit != ~0ull) evs.push_back({ms, bit, -1, 0, 0, hold * 1000.0});
                 else if (stick >= 0) evs.push_back({ms, 0, stick, sx, sy, hold * 1000.0});
             }

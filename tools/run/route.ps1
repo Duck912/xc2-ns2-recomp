@@ -19,6 +19,7 @@ param(
     [string]$Ab,
     [string[]]$A = @(),
     [string[]]$B = @(),
+    [string]$Press,
     [int]$Repeat = 1,
     [int]$Seconds = 40,
     [string]$Profile = 'dev',
@@ -70,6 +71,9 @@ if (-not (Test-Path $work)) { New-Item -ItemType Directory -Path $work -Force | 
 if ($Record) {
     Clear-RouteEnv
     Set-Item Env:\XC2_ROUTE_OUT $Record
+    # -Press drives the recording with a script instead of a person: the presses go through the same poll() the game
+    # sees, so they land in the route file like any other input.
+    if ($Press) { Set-Item Env:\XC2_PRESS $Press }
     Write-Output "recording to $Record for $Seconds s - play now"
     & pwsh -NoProfile -File $playScript -Profile $Profile -Seconds $Seconds
     if (Test-Path -LiteralPath $Record) {
