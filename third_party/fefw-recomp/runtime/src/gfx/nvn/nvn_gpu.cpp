@@ -816,7 +816,11 @@ void submit_recorded() {
 
 bool take_batch_for_present(std::vector<VkCommandBuffer>* cmds, gfx::Renderer::SubmitPrefix* p) {
     if (!g || !g->frame_batch || g->batch.empty()) {
+        // The frame's draws go to the GPU on their own submission here. The present then copies the window texture they
+        // write, and nothing on the queue orders the two: hand the timeline value the flush signalled to the present, so
+        // its submit waits for the draws (issue: N card stripes/flicker, the copy overtaking the frame).
         submit_recorded();
+        if (g) { p->wait = g->timeline; p->wait_value = g->flushed; }
         return false;
     }
     cmds->clear();

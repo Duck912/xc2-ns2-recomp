@@ -222,7 +222,8 @@ void present_on_render_thread(Window* w, int index, bool again) {
     gfx::Renderer::SubmitPrefix pre;
     const bool merged = take_batch_for_present(&cmds, &pre);
     extras::framegen_present_begin(fi.cmd, fi.extent, VkExtent2D{e.width, e.height}, crop, keep_aspect(), again);
-    { NXFT("present.end"); nxrt::HitchTimer ht(nxrt::kHpRenderPresentEnd); rend->end_frame(merged ? &pre : nullptr); }
+    // pre carries the wait for the frame's own submission when it was not merged (see take_batch_for_present)
+    { NXFT("present.end"); nxrt::HitchTimer ht(nxrt::kHpRenderPresentEnd); rend->end_frame(&pre); }
     extras::framegen_present_end();
     if (merged) present_batch_done(pre);
     if (!again) frame_csv_line(static_cast<int64_t>(counters().presents.load()), frame_start, FrameLimiter::now_ns(), frame_wait, frame_rate);
