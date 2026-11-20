@@ -48,8 +48,8 @@ ships a game file, and CI checks that it never does.
 
 | file | size | sha256 |
 |---|---|---|
-| `XC2-package-dist-0.1.4.zip` | see the release page | see the release page |
-| `xc2-launcher-0.1.4-src.zip` | see the release page | see the release page |
+| `XC2-package-dist-0.1.4.zip` | 158.5 MB (497.8 MB unpacked) | `022DECBDE06C7BA1028666FCD4D29C4315B8D10B6458EEE8638E6F423ABBAE6A` |
+| `xc2-launcher-0.1.4-src.zip` | 0.5 MB | `F3DCA4DFDC4D1FBBBFFFFA7A466ED253DE91C9B3192A2E4B0D20632FBF2D7B44` |
 
 ## Credits
 
