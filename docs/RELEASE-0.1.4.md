@@ -86,8 +86,8 @@ pipelines for about 20 seconds (once per driver).
 
 | file | size | sha256 |
 |---|---|---|
-| `XC2-package-dist-0.1.4.zip` | see the release page | see the release page |
-| `xc2-launcher-0.1.4-src.zip` | see the release page | see the release page |
+| `XC2-package-dist-0.1.4.zip` | 158.5 MB (497.8 MB unpacked) | `20404D6DDE974512497A110857CB4A05F82F2F3A4E4F10DA3567BF4D9B98FBDF` |
+| `xc2-launcher-0.1.4-src.zip` | 0.5 MB | `F3DCA4DFDC4D1FBBBFFFFA7A466ED253DE91C9B3192A2E4B0D20632FBF2D7B44` |
 
 The package contains no game files: the executable is built on your machine from your own dump and the shaders are
 translated from it. Installation: [README](https://github.com/weile10000/xc2-ns2-recomp#readme).
@@ -182,8 +182,8 @@ translated from it. Installation: [README](https://github.com/weile10000/xc2-ns2
 
 | 文件 | 大小 | sha256 |
 |---|---|---|
-| `XC2-package-dist-0.1.4.zip` | 见发布页 | 见发布页 |
-| `xc2-launcher-0.1.4-src.zip` | 见发布页 | 见发布页 |
+| `XC2-package-dist-0.1.4.zip` | 158.5 MB（解压 497.8 MB） | `20404D6DDE974512497A110857CB4A05F82F2F3A4E4F10DA3567BF4D9B98FBDF` |
+| `xc2-launcher-0.1.4-src.zip` | 0.5 MB | `F3DCA4DFDC4D1FBBBFFFFA7A466ED253DE91C9B3192A2E4B0D20632FBF2D7B44` |
 
 包里不含任何游戏文件：exe 用你自己的 dump 在你机器上编出来，着色器也从它翻译。安装说明见
 [README](https://github.com/weile10000/xc2-ns2-recomp#readme)。
