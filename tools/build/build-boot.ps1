@@ -62,6 +62,18 @@ foreach ($vpxRoot in $vpxRoots) {
 if (-not $vpxLibs) {
     Write-Warning ("libvpx not found (looked in: {0}). If the runtime was built with it, this link fails on vpx_codec_*: vcpkg install libvpx:x64-windows-static, or set VCPKG_ROOT" -f ($vpxRoots -join ', '))
 }
+# libvorbis (BSD-3) decodes the films' sound (runtime/src/media/movie_adec.cpp); xc2/release links the same two libraries, and
+# without them the runtime is configured with NXRT_HAVE_VORBIS=0 and the movie player has no sound. Same search order.
+$vorbisLibs = @()
+foreach ($vorbisRoot in $vpxRoots) {
+    $vorbisDir = Join-Path $vorbisRoot 'installed\x64-windows-static\lib'
+    $vorbisLib = Join-Path $vorbisDir 'vorbis.lib'
+    $oggLib = Join-Path $vorbisDir 'ogg.lib'
+    if ((Test-Path $vorbisLib) -and (Test-Path $oggLib)) { $vorbisLibs = @($vorbisLib, $oggLib); break }
+}
+if (-not $vorbisLibs) {
+    Write-Warning ("libvorbis not found (looked in: {0}). If the runtime was built with it, this link fails on vorbis_*: vcpkg install libvorbis:x64-windows-static" -f ($vpxRoots -join ', '))
+}
 New-Item -ItemType Directory -Force -Path $bd | Out-Null
 
 $need = @(
@@ -130,7 +142,7 @@ $exe = Join-Path $bd 'xc2_boot.exe'
 & clang-cl.exe /nologo /MT "/Fe:$exe" $obj $objOpus $objAudio `
     "$gfxDir\nxrt_gfx.lib" "$gfxDir\nxrt.lib" "$game\nxrt_game_xc2ns2_core.lib" "$game\nxrt_game_xc2ns2_data.lib" `
     $mainlib (Join-Path $libdir 'sdk.lib') `
-    (Join-Path $libdir 'subsdk0.lib') (Join-Path $libdir 'rtld.lib') @extraLibs @vpxLibs @ffLibs `
+    (Join-Path $libdir 'subsdk0.lib') (Join-Path $libdir 'rtld.lib') @extraLibs @vpxLibs @vorbisLibs @ffLibs `
     "$gfxDir\nxrt_imgui.lib" "$gfxDir\nxrt_volk.lib" "$gfxDir\nxrt_tiling.lib" "$gfxDir\nxrt_astc2bc7.lib" "$gfxDir\nxrt_zstd.lib" `
     "$gfxDir\_deps\sdl3-build\SDL3-static.lib" "$gfxDir\third_party\dav1d\nxrt_dav1d.lib" `
     kernel32.lib user32.lib gdi32.lib winmm.lib imm32.lib ole32.lib oleaut32.lib version.lib uuid.lib advapi32.lib `

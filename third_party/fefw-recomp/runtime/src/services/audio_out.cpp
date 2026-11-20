@@ -119,11 +119,23 @@ HostSink& host() {
 }
 
 // Caller holds host().mu. True when the sink is open for this format.
+// audout plays through a device handle of its own. The game's nn::audio OutputStream owns the process-wide sink
+// (xc2/src/x2_audio301.cpp) and reports its free space as its buffer size minus that queue; while both shared one voice, a
+// film that kept the queue deep left the game 0 free frames and its audio stopped, and the other way round the film's writes
+// pushed the game's frames out and the film skipped ahead (measured 2026-11-21). Two voices never contend.
+std::shared_ptr<nxrt::audio::AudioSink> own_sink() {
+    std::shared_ptr<nxrt::audio::AudioSink> s = nxrt::audio::make_xaudio2_sink();
+    if (!s) s = std::make_shared<nxrt::audio::NullSink>();
+    const std::string wav = nxrt::config_get_str("audio", "wav_dump", "");
+    if (!wav.empty()) s = nxrt::audio::make_wav_tee(s, wav);
+    return s;
+}
+
 bool open_host_locked(uint32_t rate, uint32_t channels) {
     HostSink& h = host();
-    auto cur = nxrt::audio::sink();
-    if (cur == h.sink && rate == h.rate && channels == h.channels) return h.open_ok;
-    h.sink = cur;
+    if (!h.sink) h.sink = own_sink();
+    auto cur = h.sink;
+    if (rate == h.rate && channels == h.channels && h.open_ok) return true;
     h.rate = rate;
     h.channels = channels;
     h.open_ok = cur->open(rate, channels);
@@ -157,7 +169,7 @@ HostMark play_host(uint32_t rate, uint32_t channels, const int16_t* pcm, uint32_
 bool host_played(uint64_t gen, uint64_t* pos) {
     std::lock_guard<std::mutex> lk(host().mu);
     HostSink& h = host();
-    if (!h.open_ok || !h.sink || h.gen != gen || h.sink != nxrt::audio::sink() || !h.sink->has_device_clock()) return false;
+    if (!h.open_ok || !h.sink || h.gen != gen || !h.sink->has_device_clock()) return false;
     const uint64_t q = h.sink->queued_frames();
     *pos = h.written > q ? h.written - q : 0;
     return true;

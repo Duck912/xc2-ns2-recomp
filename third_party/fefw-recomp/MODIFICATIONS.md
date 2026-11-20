@@ -123,3 +123,11 @@ git log --oneline 6f1d964..HEAD -- third_party/fefw-recomp
 - **runtime/src/gfx/nvn/nvn_replay.cpp (2026-11-19)** - the "float sampler over the stencil plane" report (`ds_debug: fs <hash> ...`)
   is now written unconditionally, once per (shader, binding), instead of only under `[nvn] ds_debug`. The patch tool can only
   rewrite modules a log names, and the run that lost the device was the one with nothing recorded in it (issue #10).
+- **runtime/src/services/audio_xaudio2.cpp, runtime/src/services/audio_out.cpp (2026-11-21)** - the one host sink is
+  opened again only when the format changes, because rebuilding the XAudio2 voice threw away everything queued in it; and
+  audout stops submitting while the voice already holds about a second, so a burst cannot be dropped. Both audio paths
+  (audout:u and the SDK's OutputStream, xc2/src/x2_audio301.cpp) open the same sink, and a movie start used to cost
+  1.9M frames here.
+- **runtime/cmake/media_deps.cmake (2026-11-21)** - libvorbis is detected the way libvpx is, so a development build decodes the
+  films' sound as well (`NXRT_HAVE_VORBIS=1`). Only `xc2/release` used to define it, so every dev `xc2_boot.exe` played the
+  picture without sound.

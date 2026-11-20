@@ -22,6 +22,7 @@
 #include "nxrt/kernel.h"
 #include "nxrt/log.h"
 #include "nxrt/module.h"
+#include "nxrt/memory.h"
 #include "nxrt/movie_vdec.h"
 #include "nxrt/services.h"
 
@@ -42,6 +43,10 @@ constexpr uint64_t kBufData = 0x00, kBufSize = 0x08, kBufFilled = 0x10, kBufTime
 constexpr uint64_t kAfBuffer = 0x00, kAfChannels = 0x14;   // AudioFrame: buffer, then the channel count
 
 bool g_log = false;
+// [media] movie_audio: decode the film's own audio track on the host. Off by default: every packet this library hands the
+// decoder arrives one byte long (measured 2026-11-21, both video_decoder modes: filled 1, payload 0x0a/0x0e, cadence a
+// correct 21.3 ms), so nothing decodes and the player only loses the sound it used to play itself.
+bool g_audio = false;
 struct Fns {
     uint64_t create_event, attach_event, get_int32, set_int32, set_size;
 };
@@ -340,7 +345,8 @@ void adec_start(::Ctx* c) {
     AudioDecoder* d = adec_of(A(0));
     if (d) {
 #if NXRT_HAVE_VORBIS
-        if (!open_vorbis(*d)) NXLOG_W(kTag, "AudioDecoder: no Vorbis decoder; its sound stays silent");
+        if (g_audio && !open_vorbis(*d)) NXLOG_W(kTag, "AudioDecoder: no Vorbis decoder; its sound stays silent");
+        if (!g_audio) NXLOG_I(kTag, "AudioDecoder: the host decoder is off ([media] movie_audio = 0): no frames are delivered");
 #endif
         d->in_ready.signal();
     }
@@ -409,6 +415,28 @@ void adec_decode_async(::Ctx* c) {
     const uint64_t data = rd64(buf + kBufData);
     const uint64_t cap = rd64(buf + kBufSize);
     ++d->packets;
+    // One-shot diagnostic (2026-11-21): the film's audio is silent and every packet reports one byte. Dump the packet
+    // header, the payload's first bytes and where its non-zero run ends, so the length field can be identified from a run
+    // instead of guessed.
+    if (g_log && d->packets <= 6) {
+        char head[3 * 16 + 1] = {};
+        int used = 0;
+        uint64_t nz = 0;
+        if (data && nxrt::mem::is_mapped(data, 4096)) {
+            const uint8_t* q = reinterpret_cast<const uint8_t*>(static_cast<uintptr_t>(data));
+            for (uint64_t i = 0; i < 4096; ++i)
+                if (q[i]) nz = i + 1;
+            for (int i = 0; i < 16; ++i) used += std::snprintf(head + used, sizeof head - static_cast<size_t>(used), " %02x", q[i]);
+        } else {
+            std::snprintf(head, sizeof head, " (not mapped)");
+        }
+        NXLOG_I(kTag, "AudioDecoder: packet %llu from caller 0x%llx", static_cast<unsigned long long>(d->packets),
+                static_cast<unsigned long long>(c->x[30]));
+        NXLOG_I(kTag, "AudioDecoder: packet %llu: data %llx filled %llu cap %llu time %lld flags %llu, last non-zero %llu, head:%s",
+                static_cast<unsigned long long>(d->packets), static_cast<unsigned long long>(data),
+                static_cast<unsigned long long>(bytes), static_cast<unsigned long long>(cap), static_cast<long long>(time),
+                static_cast<unsigned long long>(rd64(buf + kBufFlags)), static_cast<unsigned long long>(nz), head);
+    }
     d->in_ready.signal();   // room for the next packet
 #if NXRT_HAVE_VORBIS
     // What the player calls the packet's length differs between the paths this library takes; take the field that looks like a
@@ -519,6 +547,7 @@ bool install_audio_decoder_hle() {
         const game::Info& gi = game::info();
         if (gi.platform != game::Platform::Switch2 || !gi.movie_video_decoder) return;
         g_log = config_get_bool("media", "video_decoder_log", false);
+        g_audio = config_get_bool("media", "movie_audio", false);
         for (const Import& im : kImports) {
             hle_register(im.name, im.fn);
             module_override_symbol(im.name);

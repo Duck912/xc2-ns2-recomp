@@ -24,6 +24,30 @@ else()
     target_compile_definitions(nxrt PRIVATE NXRT_HAVE_LIBVPX=0)
 endif()
 
+# libvorbis (BSD-3-Clause) for the movie player's sound (src/media/movie_adec.cpp, movie::AudioDecoder). Prebuilt from vcpkg
+# like libvpx:  vcpkg install libvorbis:x64-windows-static
+# NXRT_VORBIS_ROOT points at that install (default: C:/vcpkg, then $VCPKG_ROOT). Without it the film is silent
+# (NXRT_HAVE_VORBIS=0) and the picture is unaffected; the release project (xc2/release) detects the same library on its own.
+set(NXRT_VORBIS_ROOT "" CACHE PATH "vcpkg x64-windows-static install with libvorbis (include/vorbis, lib/vorbis.lib); empty: look in the usual places")
+set(_nxrt_vorbis_roots "${NXRT_VORBIS_ROOT}" "C:/vcpkg/installed/x64-windows-static")
+if(DEFINED ENV{VCPKG_ROOT})
+    list(APPEND _nxrt_vorbis_roots "$ENV{VCPKG_ROOT}/installed/x64-windows-static")
+endif()
+list(TRANSFORM _nxrt_vorbis_roots APPEND "/include" OUTPUT_VARIABLE _nxrt_vorbis_inc)
+list(TRANSFORM _nxrt_vorbis_roots APPEND "/lib" OUTPUT_VARIABLE _nxrt_vorbis_lib)
+find_path(NXRT_VORBIS_INCLUDE vorbis/codec.h PATHS ${_nxrt_vorbis_inc} NO_DEFAULT_PATH)
+find_library(NXRT_VORBIS_LIB NAMES vorbis PATHS ${_nxrt_vorbis_lib} NO_DEFAULT_PATH)
+find_library(NXRT_OGG_LIB NAMES ogg PATHS ${_nxrt_vorbis_lib} NO_DEFAULT_PATH)
+if(NXRT_VORBIS_INCLUDE AND NXRT_VORBIS_LIB AND NXRT_OGG_LIB)
+    message(STATUS "nxrt: libvorbis ${NXRT_VORBIS_LIB} (movie audio)")
+    target_include_directories(nxrt SYSTEM PRIVATE "${NXRT_VORBIS_INCLUDE}")
+    target_link_libraries(nxrt PUBLIC "${NXRT_VORBIS_LIB}" "${NXRT_OGG_LIB}")
+    target_compile_definitions(nxrt PRIVATE NXRT_HAVE_VORBIS=1)
+else()
+    message(STATUS "nxrt: libvorbis not found (looked in: ${_nxrt_vorbis_roots}): the film stays silent")
+    target_compile_definitions(nxrt PRIVATE NXRT_HAVE_VORBIS=0)
+endif()
+
 # dav1d (BSD-2-Clause, third_party/dav1d) for the Switch 2 movie player's AV1 decoder (src/media/movie_vdec.cpp): built from source, C only.
 option(NXRT_DAV1D "Build dav1d for AV1 movies (src/media/movie_vdec.cpp)" ON)
 if(NXRT_DAV1D)
