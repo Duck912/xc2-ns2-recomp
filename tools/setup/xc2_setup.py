@@ -557,6 +557,45 @@ def find_romfs(dump, explicit):
     return None
 
 
+# The title's program id. Add-on content ids are program id + 0x1000 + index for Nintendo's rule and program id + 1 +
+# index for the packages XC2 ships (both bases are tried by the runtime, see src/services/misc.cpp), so an index can be
+# read back from a folder name whichever base it used.
+XC2_PROGRAM_ID = 0x0100E95004038000
+
+
+def ensure_aoc_indices(aoc_dir, r):
+    """Write <aoc>/indices.txt when the folder has add-on content but no list.
+
+    The runtime reports the add-on contents that indices.txt names (one index per line) and mounts each of them, so a
+    folder of extracted content without the list is "no add-on content": the game runs, the DLC is simply gone. The NUP
+    path in particular extracts the folders and nothing else (issue: 0.1.4 test on a second machine, 2026-11-21).
+    """
+    aoc = Path(aoc_dir)
+    if not aoc.is_dir() or (aoc / "indices.txt").is_file():
+        return
+    indices = []
+    for child in sorted(aoc.iterdir()):
+        name = child.name.lower()
+        if len(name) != 16 or not child.is_dir():
+            continue
+        try:
+            ident = int(name, 16)
+        except ValueError:
+            continue
+        for base in (0x1000, 1):
+            index = ident - XC2_PROGRAM_ID - base
+            if 0 <= index < 0x1000:
+                indices.append(index)
+                break
+    if not indices:
+        return
+    if r.dry:
+        r.log("  dlc: would write indices.txt for %d add-on(s)" % len(indices))
+        return
+    (aoc / "indices.txt").write_text("".join("%d\n" % i for i in indices), encoding="ascii")
+    r.log("  dlc: wrote indices.txt for %d add-on(s) (%s)" % (len(indices), ", ".join(str(i) for i in indices)))
+
+
 def link_dlc(install, r):
     """Link the dump's add-on content in: without it the game loads no DLC at all.
 
@@ -570,6 +609,7 @@ def link_dlc(install, r):
     game = install / "game"
     if not r.dry:
         game.mkdir(parents=True, exist_ok=True)
+    ensure_aoc_indices(src, r)
     if junction(game / "dlc-301", Path(src), r) == 0:
         r.log("  dlc: linked %s" % src)
 
@@ -944,6 +984,7 @@ def step_done_package(r, repo, install):
         game.mkdir(parents=True, exist_ok=True)
     junction(game / "romfs-301", install / "romfs", r)
     if (install / "nup_dump" / "dlc").is_dir():
+        ensure_aoc_indices(install / "nup_dump" / "dlc", r)
         junction(game / "dlc-301", install / "nup_dump" / "dlc", r)
     if not r.dry:
         (install / "setup_state.tsv").write_text("mprs_setup_state\t1\nmeta\tfinished\t1\n", encoding="utf-8")
