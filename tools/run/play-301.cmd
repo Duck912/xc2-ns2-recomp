@@ -123,7 +123,6 @@ rem It OVERRIDES the ini, and it used to persist across runs: a session left on 
 rem taau, which cost an afternoon of chasing a shimmer that the upscaler was causing. Start every run from the ini.
 set NXRT_DLSS_HOT_FILE=%ROOT%\work\dlss_hot.txt
 if exist "%NXRT_DLSS_HOT_FILE%" del /q "%NXRT_DLSS_HOT_FILE%"
-echo upscaler = taau> "%NXRT_DLSS_HOT_FILE%"
 rem The preload pack is read BEFORE the loose .spv files, so a pack built before a shader was replaced hides that
 rem replacement: the change looks like it did nothing. It is dropped on every launch, unconditionally, because the
 rem mtime heuristic that used to guard it is wrong exactly when it matters - Copy-Item keeps the source's timestamp,

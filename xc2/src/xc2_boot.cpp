@@ -169,6 +169,7 @@ void LiveInput::live(nxrt::hid::InputSnapshot &out) {
     const HWND own = static_cast<HWND>(nxrt::platform::native_hwnd());
     const HWND fg = ::GetForegroundWindow();
     const bool focused = own && fg == own;
+    const bool menu_blocked = nxrt::play::overlay_blocks_game();
     // one line the first time a mapped key is down, so a hands-on session can be told from "the keyboard is not seen"
     static bool said_focus = false;
     if (!said_focus && own && (down('W') || down(VK_SPACE) || down(VK_RETURN) || down(VK_ESCAPE) || down('A'))) {
@@ -176,7 +177,7 @@ void LiveInput::live(nxrt::hid::InputSnapshot &out) {
         NXLOG_I("input", "keyboard seen: window %p, foreground %p (%s)", static_cast<void *>(own), static_cast<void *>(fg),
                 focused ? "keys go to the game" : "the game does not have the focus: keys are ignored");
     }
-    if (focused) {
+    if (focused && !menu_blocked) {
         // left stick: WASD or the arrow keys; right stick (camera): IJKL
         if (down('W') || down(VK_UP)) ky += 32767;
         if (down('S') || down(VK_DOWN)) ky -= 32767;
@@ -199,6 +200,8 @@ void LiveInput::live(nxrt::hid::InputSnapshot &out) {
         if (down(VK_OEM_MINUS)) kb |= btn(kBtnMinus);
         if (down(VK_SHIFT)) kb |= btn(kBtnStickL);
         if (down(VK_CONTROL)) kb |= btn(kBtnStickR);
+    }
+    if (focused) {
         // F12: write the next presented frame as shots_manual/shot_NNNN.png (RGBA8). Works any time, also mid-cutscene.
         const bool f12 = down(VK_F12);
         if (f12 && !f12_was_down) {
@@ -211,16 +214,14 @@ void LiveInput::live(nxrt::hid::InputSnapshot &out) {
             }
         }
         f12_was_down = f12;
-        // F11: trace the next presented frame into the log and dump every render target it uses as trace_t<id>_<fmt>.png
-        // in the working directory (with [nvn] trace_dump_tex set, every sampled texture too). The hands-on counterpart of
-        // NXRT_NVN_TRACE_SEC: stand in front of something that looks wrong, press F11, and the frame can be taken apart.
-        const bool f11 = down(VK_F11);
+        // Ctrl+F11: trace the next presented frame (plain F11 is fullscreen toggle in play mode).
+        const bool f11 = down(VK_CONTROL) && down(VK_F11);
         if (f11 && !f11_was_down) {
             nxrt::nvn::backend_trace_next_frame();
-            NXLOG_I("input", "F11: tracing the next frame (render targets -> trace_t<id>_<fmt>.png here)");
+            NXLOG_I("input", "Ctrl+F11: tracing the next frame (render targets -> trace_t<id>_<fmt>.png here)");
         }
         f11_was_down = f11;
-    } else if (down(VK_F11) || down(VK_F12)) {
+    } else if (down(VK_F12)) {
         // a hotkey is held but the window does not have the focus: say so once, so a session log can tell it apart from
         // "the hotkey is broken"
         static bool said = false;
@@ -233,7 +234,7 @@ void LiveInput::live(nxrt::hid::InputSnapshot &out) {
     // it. Left button down = one finger at the pointer, scaled from the window's client area to the 1280x720 touch screen.
     // XC2_NO_TOUCH=1 turns it off.
     static const bool touch_off = std::getenv("XC2_NO_TOUCH") != nullptr;
-    if (!touch_off && focused && own) {
+    if (!touch_off && focused && own && !menu_blocked) {
         POINT pt{};
         RECT rc{};
         if (::GetCursorPos(&pt) && ::ScreenToClient(own, &pt) && ::GetClientRect(own, &rc)) {
@@ -256,14 +257,13 @@ void LiveInput::live(nxrt::hid::InputSnapshot &out) {
             }
         }
     }
-    // gamepad: SDL's pad state (and a newly plugged pad) only moves when its event queue is pumped
+    // gamepad: play mode pumps SDL's event queue on the window-owning main thread (play.cpp keyboard_service),
+    // which keeps pad discovery and state fresh without cross-thread SDL_PollEvent races.
     int px = 0, py = 0, prx = 0, pry = 0;
     uint64_t pb = 0;
     uint32_t raw_buttons = 0;   // the SDL button mask as the pads report it (XC2_PAD_DEBUG)
     uint32_t raw_unmapped = 0;  // the device's own mask, before SDL's gamepad mapping
-    pump_platform_events(nxrt::input::gamepad_count() != 0);
-    SDL_UpdateGamepads();
-    if (nxrt::input::gamepad_count()) {
+    if (!menu_blocked && nxrt::input::gamepad_count()) {
         // SDL hands a pad that went away and came back a NEW instance id (a power-save drop, a Bluetooth hiccup, the
         // window losing the foreground and getting it again: the log shows "gamepad 3 added ... removed ... gamepad 4
         // added ..."). A cached id nothing answers to means no pad input for the rest of the run, which reads as "the
@@ -869,6 +869,152 @@ static void arm_frame_rate(uint64_t main_base) {
             }
         }
     }).detach();
+}
+
+// ---- native resolution override (3.0.1) -------------------------------------------------------------------------------------
+// [xc2] native_res = 0 (off) | 1 (native 100%, DLSS off) | 2 (DLSS/FSR 1:1 Native AA at [xc2] native_w x native_h)
+// [xc2] native_w / native_h: target 3D render size for native_res=2 (default 2560x1440, matching network 1/2 output)
+// [xc2] res_class  = 0 (auto) | 2 (force mode 5: 2560x1440) | 1 (force mode 1: 3840x2160)
+static void arm_native_res(uint64_t main_base) {
+    static int64_t g_nat_mode = 0;
+    g_nat_mode = nxrt::config_get_int("xc2", "native_res", 0);
+    const int64_t mode = g_nat_mode;
+    const int64_t rcls = nxrt::config_get_int("xc2", "res_class", 0);
+    static int32_t g_nat_w = static_cast<int32_t>(nxrt::config_get_int("xc2", "native_w", 2560));
+    static int32_t g_nat_h = static_cast<int32_t>(nxrt::config_get_int("xc2", "native_h", 1440));
+    // Always attach lightweight RT rebuild logger (logs first 8 calls or size changes) so logs confirm actual 3D resolution.
+    nxrt::hook_add_entry(main_base + 0x844120, [](::Ctx* c, uint64_t, void*) -> int {
+        static int last_rw = -1, last_rh = -1, last_bw = -1, last_bh = -1, count = 0;
+        const uint64_t rtmgr = c->x[0];
+        if (g_nat_mode == 2 && rtmgr && nxrt::mem::is_mapped(rtmgr + 0x928, 4)) {
+            const float s = (std::min)(1.0f, static_cast<float>(g_nat_w) / 3840.0f);
+            std::memcpy(reinterpret_cast<void*>(rtmgr + 0x928), &s, 4);
+        }
+        if (rtmgr && nxrt::mem::is_mapped(rtmgr + 8, 8)) {
+            uint64_t ctx = 0;
+            std::memcpy(&ctx, reinterpret_cast<const void*>(rtmgr + 8), 8);
+            if (ctx && nxrt::mem::is_mapped(ctx + 0x5e0, 8)) {
+                uint64_t view = 0;
+                std::memcpy(&view, reinterpret_cast<const void*>(ctx + 0x5e0), 8);
+                if (view && nxrt::mem::is_mapped(view + 0x18, 16)) {
+                    int32_t d[4] = {};
+                    std::memcpy(d, reinterpret_cast<const void*>(view + 0x18), 16);
+                    if (d[0] != last_rw || d[1] != last_rh || d[2] != last_bw || d[3] != last_bh || count < 3) {
+                        last_rw = d[0]; last_rh = d[1]; last_bw = d[2]; last_bh = d[3];
+                        ++count;
+                        NXLOG_I("xc2", "native_res: rt_rebuild #%d render=%dx%d base=%dx%d w1=%llu", count, d[0], d[1], d[2], d[3],
+                                static_cast<unsigned long long>(c->x[1]));
+                    }
+                }
+            }
+        }
+        return 0;
+    });
+    if (rcls > 0) {
+        nxrt::hook_add_entry(main_base + 0x8d9ce0, [](::Ctx* c, uint64_t, void* u) -> int {
+            c->x[0] = static_cast<uint64_t>(reinterpret_cast<intptr_t>(u));
+            return 1;
+        }, reinterpret_cast<void*>(static_cast<intptr_t>(rcls)));
+        NXLOG_I("xc2", "native_res: display res_class forced to %lld", static_cast<long long>(rcls));
+    }
+    if (mode <= 0) return;
+    if (mode == 1) {
+        nxrt::hook_add_entry(main_base + 0x84d230, [](::Ctx* c, uint64_t, void*) -> int {
+            c->x[0] = 0;
+            return 1;
+        });
+        nxrt::hook_add_entry(main_base + 0x85f090, [](::Ctx* c, uint64_t, void*) -> int {
+            c->x[2] = 0;
+            return 0;
+        });
+        nxrt::hook_add_entry(main_base + 0x85f3c0, [](::Ctx* c, uint64_t, void*) -> int {
+            const uint64_t obj = c->x[0];
+            if (obj && nxrt::mem::is_mapped(obj + 0x58c, 8)) {
+                const float one = 1.0f;
+                std::memcpy(reinterpret_cast<void*>(obj + 0x58c), &one, 4);
+                std::memcpy(reinterpret_cast<void*>(obj + 0x590), &one, 4);
+            }
+            return 1;
+        });
+    } else if (mode == 2) {
+        // Keep DLSS/FSR slot active and permanently lock [obj+0x58c/0x590/0x594] to native_w/base_w x native_h/base_h
+        // (e.g. 2560/3840 = 0.6667f), so 0x85f090 never overwrites 0x58c/0x590 back to 0.5f on subsequent frames.
+        nxrt::hook_add_entry(main_base + 0x85f090, [](::Ctx* c, uint64_t, void*) -> int {
+            const uint64_t obj = c->x[0];
+            const int32_t bw = static_cast<int32_t>(c->x[3]);
+            const int32_t bh = static_cast<int32_t>(c->x[4]);
+            if (!obj || bw <= 0 || bh <= 0 || !nxrt::mem::is_mapped(obj + 0x57c, 0x40)) return 0;
+            int16_t cd = 0;
+            std::memcpy(&cd, reinterpret_cast<const void*>(obj + 0x5b4), 2);
+            if (cd > 0) {
+                uint32_t st = 0;
+                std::memcpy(&st, reinterpret_cast<const void*>(obj + 0x5b0), 4);
+                --cd;
+                std::memcpy(reinterpret_cast<void*>(obj + 0x5b4), &cd, 2);
+                const uint32_t ret = (st == 1) ? 1u : 0u;
+                const uint32_t nst = ret << 1;
+                std::memcpy(reinterpret_cast<void*>(obj + 0x5b0), &nst, 4);
+                c->x[0] = ret;
+                return 1;
+            }
+            const int32_t tw = (std::min)(bw, g_nat_w) & ~1;
+            const int32_t th = (std::min)(bh, g_nat_h) & ~1;
+            const float sx = static_cast<float>(tw) / static_cast<float>(bw);
+            const float sy = static_cast<float>(th) / static_cast<float>(bh);
+            float cur_x = 0.0f, cur_y = 0.0f;
+            uint8_t inited = 0;
+            std::memcpy(&cur_x, reinterpret_cast<const void*>(obj + 0x58c), 4);
+            std::memcpy(&cur_y, reinterpret_cast<const void*>(obj + 0x590), 4);
+            std::memcpy(&inited, reinterpret_cast<const void*>(obj + 0x57f), 1);
+            const bool changed = !inited || std::fabs(cur_x - sx) > 0.001f || std::fabs(cur_y - sy) > 0.001f;
+            std::memcpy(reinterpret_cast<void*>(obj + 0x584), &sx, 4);
+            std::memcpy(reinterpret_cast<void*>(obj + 0x588), &sy, 4);
+            std::memcpy(reinterpret_cast<void*>(obj + 0x58c), &sx, 4);
+            std::memcpy(reinterpret_cast<void*>(obj + 0x590), &sy, 4);
+            const uint32_t pct = (static_cast<uint32_t>(sx * 100.0f) & 0xFFu) | ((static_cast<uint32_t>(sy * 100.0f) & 0xFFu) << 8);
+            std::memcpy(reinterpret_cast<void*>(obj + 0x594), &pct, 4);
+            if (changed) {
+                const uint8_t one_b = 1;
+                const int16_t two_h = 2;
+                const uint32_t one_w = 1;
+                std::memcpy(reinterpret_cast<void*>(obj + 0x57f), &one_b, 1);
+                std::memcpy(reinterpret_cast<void*>(obj + 0x5b4), &two_h, 2);
+                std::memcpy(reinterpret_cast<void*>(obj + 0x5b0), &one_w, 4);
+                c->x[0] = 1;
+            } else {
+                const uint32_t zero_w = 0;
+                std::memcpy(reinterpret_cast<void*>(obj + 0x5b0), &zero_w, 4);
+                c->x[0] = 0;
+            }
+            return 1;
+        });
+        nxrt::hook_add_entry(main_base + 0x85f3c0, [](::Ctx* c, uint64_t, void*) -> int {
+            const uint64_t obj = c->x[0], pw = c->x[1], ph = c->x[2];
+            if (pw && ph && nxrt::mem::is_mapped(pw, 4) && nxrt::mem::is_mapped(ph, 4)) {
+                int32_t bw = 0, bh = 0;
+                std::memcpy(&bw, reinterpret_cast<const void*>(pw), 4);
+                std::memcpy(&bh, reinterpret_cast<const void*>(ph), 4);
+                if (bw > 0 && bh > 0) {
+                    const int32_t tw = (std::min)(bw, g_nat_w) & ~1;
+                    const int32_t th = (std::min)(bh, g_nat_h) & ~1;
+                    std::memcpy(reinterpret_cast<void*>(pw), &tw, 4);
+                    std::memcpy(reinterpret_cast<void*>(ph), &th, 4);
+                    if (obj && nxrt::mem::is_mapped(obj + 0x58c, 8)) {
+                        const float sx = static_cast<float>(tw) / static_cast<float>(bw);
+                        const float sy = static_cast<float>(th) / static_cast<float>(bh);
+                        std::memcpy(reinterpret_cast<void*>(obj + 0x58c), &sx, 4);
+                        std::memcpy(reinterpret_cast<void*>(obj + 0x590), &sy, 4);
+                    }
+                }
+            }
+            return 1;
+        });
+        nxrt::hook_add_inline(main_base + 0x7cfc2c, [](::Ctx* c, uint64_t, void*) {
+            // s0 was 0.5f; override to native_w / 3840 (e.g. 2560/3840 = 0.6667f)
+            c->v[0].f[0] = (std::min)(1.0f, static_cast<float>(g_nat_w) / 3840.0f);
+        });
+    }
+    NXLOG_I("xc2", "native_res: armed mode %lld (target %dx%d)", static_cast<long long>(mode), g_nat_w, g_nat_h);
 }
 
 // ---- delta scan (diagnostic, HANDOVER 57) -----------------------------------------------------------------------------------
@@ -1544,27 +1690,20 @@ int main(int argc, char **argv) {
         gfx_renderer = nxrt::gfx::Renderer::create(*gfx_device, rd, &err);
         if (!gfx_renderer) die("renderer: %s", err.c_str());
         g_renderer = gfx_renderer.get();   // the F12 hotkey writes the next presented frame through it
-        // The frame limiter the NVN back end paces presents with (nvn_present.cpp). Without one, `[nvn] present_interval_hz` has no
-        // effect at all: XC2 never calls nvnWindowSetPresentInterval, so the game's own rate comes from that key, and the limiter's
-        // game rate (set_game_fps, from the present call) is what actually waits. The rate itself is configured below.
-        static nxrt::FrameLimiter frame_limiter;
-        g_frame_limiter = &frame_limiter;
+        // Use play mode's shared FrameLimiter so the F1 overlay, corner FPS counter, present-mode switches and
+        // arm_frame_rate all observe the same presented frames.
+        nxrt::FrameLimiter *frame_limiter = nxrt::play::limiter();
+        g_frame_limiter = frame_limiter;
         nxrt::nvn::BackendDesc bd;
         bd.device = gfx_device.get();
         bd.renderer = gfx_renderer.get();
-        bd.limiter = &frame_limiter;
+        bd.limiter = frame_limiter;
         if (!nxrt::nvn::install_backend(bd)) die("NVN back end failed to start (see the log)");
         nxrt::play::StartOptions po;
         po.device = gfx_device.get();
         po.renderer = gfx_renderer.get();
         po.window = !headless;
-        // The F1 settings page (gfx/play/play_ui.cpp, 68 KB, already in nxrt_gfx) is compiled into this exe either
-        // way. Turning it on creates it - the log says "overlay ready (toggle key F1)" - but F1 still does nothing,
-        // and the reason is the event path, not the overlay: platform::pump_events() (called on the input thread
-        // below) fills input::queue, while the only drain is play.cpp's update function, which runs from the frame
-        // hook. XC2 declares no frame-step site, so that hook never runs and the queue is never drained.
-        // Wire that up (call play's update from the input pump, or expose a pump) before switching this on.
-        po.overlay = false;
+        po.overlay = !headless;
         nxrt::play::start(po);
     }
     // Input: the hid service reads this source every 5 ms. It is live (keyboard + first gamepad, see LiveInput above)
@@ -1698,6 +1837,7 @@ int main(int argc, char **argv) {
     // without a re-lift: both site addresses are already in build\sites-main.txt (HANDOVER 19.9, step P3).
     if (std::getenv("XC2_MODEL_PROBE")) arm_model_probe(nxmod_main.base);
     arm_frame_rate(nxmod_main.base);
+    arm_native_res(nxmod_main.base);
     // XC2_BUMP_MENU_RESOURCE=<bytes>: raise the compiled-in MenuResource budget (HANDOVER 84, DIAGNOSTIC). The 3.0.0 content
     // needs more than the 76,800 KB this build was built with, and the 64 region budgets use only 5,440 MiB of the 10,642 MiB
     // heap, so there is ~5.1 GiB of slack. The midhook sits on the bl that creates the region: x1 is the size.
