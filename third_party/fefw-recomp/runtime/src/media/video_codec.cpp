@@ -51,6 +51,7 @@
 #include "nxrt/log.h"
 #include "nxrt/module.h"
 #include "nxrt/video_codec.h"
+#include "video_nvdec.h"
 
 #if NXRT_HAVE_LIBVPX
 #include <vpx/vp8dx.h>
@@ -85,6 +86,7 @@ constexpr size_t kBacklog = 1;   // decoded pictures waiting for a buffer before
 
 bool g_log = false;
 int g_threads = 4;
+bool g_hwdec = true;   // [media] hwdec: NVDEC for VP8/VP9/AV1 when the GPU is an NVIDIA one (video_nvdec.cpp)
 std::atomic<bool> g_enabled{false};
 std::atomic<uint64_t> s_created{0}, s_destroyed{0}, s_packets{0}, s_decoded{0}, s_delivered{0}, s_read{0}, s_errors{0};
 std::mutex g_err_mu;
@@ -201,6 +203,10 @@ struct Pending {
 };
 struct Decoder {
     ~Decoder();
+    // NVDEC: the GPU's own decoder when the GPU is NVIDIA (video_nvdec.cpp). Null while the CPU path decodes or when the
+    // hardware path is off or unavailable; every failure falls back to libvpx/dav1d for the rest of the stream.
+    NvDec* nv = nullptr;
+    bool nv_tried = false;
     uint32_t id = 0;
     int codec = 9;   // 8 VP8, 9 VP9, 10 AV1 (dav1d; the SDK 3.0.1 movie library decodes AV1)
     std::mutex mu;
@@ -382,6 +388,34 @@ void after_change(::Ctx* c, Decoder& d, bool fences) {
 }
 
 void decode_into(Decoder& d, const uint8_t* data, size_t size, int64_t pts, std::vector<Picture>& out) {
+    // [media] hwdec (default on): let the GPU's decoder do VP8/VP9/AV1 when it is an NVIDIA one. It decodes 4K AV1 far
+    // faster than dav1d on the CPU, which is what the DLC openings need to play in real time (2026-11-20).
+    if (g_hwdec && data && size) {
+        if (!d.nv && !d.nv_tried) {
+            d.nv_tried = true;
+            std::string why;
+            d.nv = nvdec_create(d.codec, 0, 0, &why);
+            if (d.nv) NXLOG_I("vcodec", "decoder %u: %s on NVDEC (hardware)", d.id, d.codec == 10 ? "AV1" : d.codec == 9 ? "VP9" : "VP8");
+            else NXLOG_I("vcodec", "decoder %u: no NVDEC (%s); the CPU decodes", d.id, why.c_str());
+        }
+        if (d.nv) {
+            std::vector<NvDecPicture> pics;
+            if (nvdec_decode(d.nv, data, size, pts, &pics)) {
+                for (NvDecPicture& q : pics) {
+                    Picture pic;
+                    pic.w = static_cast<uint16_t>(q.w);
+                    pic.h = static_cast<uint16_t>(q.h);
+                    pic.pts = q.pts;
+                    pic.nv12 = std::move(q.nv12);
+                    out.push_back(std::move(pic));
+                }
+                return;
+            }
+            NXLOG_W("vcodec", "decoder %u: NVDEC failed; the CPU takes over for the rest of this stream", d.id);
+            nvdec_destroy(d.nv);
+            d.nv = nullptr;
+        }
+    }
 #if NXRT_HAVE_DAV1D
     if (d.codec == 10) {   // AV1 (nn::codec's Av1DecoderType): the SDK 3.0.1 movie library's video path
         if (!data || !size) return;   // nothing to drain: max_frame_delay 1 gives a picture per packet
@@ -821,6 +855,7 @@ Decoder::~Decoder() {
     }
     cv.notify_all();
     if (worker.joinable()) worker.join();
+    if (nv) nvdec_destroy(nv);
 }
 // The body shared by the two Submit*DecoderInputBuffer shapes: SDK 3.0.1's AV1 one has no size_t* out parameter, the VP8 / VP9 one
 // has it first.
@@ -1236,6 +1271,7 @@ bool install_video_codec_hle() {
     // single 3840x2160 frame stops splitting usefully. Half the cores, at least 4, at most 8.
     const int64_t def_threads = std::min<int64_t>(8, std::max<int64_t>(4, static_cast<int64_t>(std::thread::hardware_concurrency()) / 2));
     g_threads = static_cast<int>(std::clamp<int64_t>(config_get_int("media", "video_decoder_threads", def_threads), 1, 16));
+    g_hwdec = config_get_bool("media", "hwdec", true);
         // Diagnostic: the player drops a frame whose timestamp is more than a frame or so behind its own movie clock, and a software 4K
         // AV1 decode plus the pool->VideoFrame copies put every frame ~85 ms behind, so it dropped all but the first. Reporting the
         // timestamps this much later makes them look on time (at the cost of that much A/V offset).
