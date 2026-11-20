@@ -113,6 +113,10 @@ git log --oneline 6f1d964..HEAD -- third_party/fefw-recomp
 - **runtime/src/gfx/play/play.cpp (2026-11-20)** - `[gfx] present_mode` wins over `[display] vsync`. The renderer read the key
   when it was created, and `play::start` replaced it 115 ms later with the mode derived from vsync, so a player who picked
   FIFO in the launcher presented in Immediate (issue #12).
+- **runtime/src/gfx/play/play_config.cpp (2026-11-20)** - a controls.ini written before revision 1 takes `[display] vsync = 1`:
+  the factory file said `0` while the launcher's "FIFO (vsync)" entry wrote nothing, so existing installs presented in
+  Immediate and the swapchain change above could not reach them. The runtime's own factory revision (1) is applied through
+  the same table the game uses, before the .bak/save, and is never reported below 1 (issue #12).
 - **runtime/src/gfx/vk_device.cpp, runtime/src/gfx/nvn/nvn_gpu.cpp (2026-11-20)** - `VK_EXT_device_fault` is enabled when
   the driver offers it, and the first failed submit logs the driver's own fault description and address instead of only the
   `-4` vkQueueSubmit2 returned (issue #10).

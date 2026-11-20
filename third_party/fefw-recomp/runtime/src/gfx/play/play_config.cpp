@@ -153,11 +153,22 @@ Settings builtin_settings() {
 
 enum class Sec { None, Unknown, Meta, Mouse, Pad, PadMap, Timing, Display, Audio, Hdr, Upscale, Latency, Picture, Prompts, Fps, Switch, Aim, Camera, Tweaks, Bindings };
 
+// Factory values this runtime changed for every title, applied exactly like GameDefaults::changes: a controls.ini written at an
+// older revision that still holds the old factory value takes the new one, once. 1 (2026-11-20): [display] vsync was 0 in the
+// factory file, while the launcher's entry labelled "FIFO (vsync)" wrote nothing at all, so the shipped default presented in
+// Immediate and the picture tore (issue 12). The launcher writes the mode now, and this moves an existing file off the old
+// default. A value the player picked themselves stays: the revision in the file has moved past 1 by then.
+constexpr int kRuntimeFactoryRev = 1;
+const GameDefaultChange kRuntimeChanges[] = {
+    {1, "display", "vsync", "0", "1"},
+};
+
 // The factory-defaults revision this build writes ([meta] defaults_rev) and the factory bindings an older controls.ini does not have: the
-// game's (play_types.h GameDefaults).
+// game's (play_types.h GameDefaults), and never below the runtime's own snapshot.
 int defaults_rev() {
     const GameDefaults* d = game_defaults();
-    return d ? d->defaults_rev : 0;
+    const int game_rev = d ? d->defaults_rev : 0;
+    return game_rev > kRuntimeFactoryRev ? game_rev : kRuntimeFactoryRev;
 }
 
 const char* sec_label(Sec s) {
@@ -599,10 +610,9 @@ Sec fixed_sec(const std::string& key) {
 
 // Factory values a later revision changed (GameDefaults::changes): where the file still has the old factory value, it takes the new one.
 // "Still has" = setting the old value changes nothing in the written file, so any value the player picked stays.
-void apply_default_changes(Settings* s, int file_rev, std::string* added) {
-    const GameDefaults* gd = game_defaults();
-    for (unsigned i = 0; gd && i < gd->change_count; ++i) {
-        const GameDefaultChange& c = gd->changes[i];
+void apply_changes(const GameDefaultChange* table, unsigned count, Settings* s, int file_rev, std::string* added) {
+    for (unsigned i = 0; i < count; ++i) {
+        const GameDefaultChange& c = table[i];
         const Sec sec = fixed_sec(lower(c.section));
         if (c.rev <= file_rev || sec == Sec::Unknown) continue;
         Settings old = *s, now = *s;
@@ -615,6 +625,10 @@ void apply_default_changes(Settings* s, int file_rev, std::string* added) {
         if (!added->empty()) *added += ", ";
         *added += std::string(c.key) + " = " + c.to + " in [" + c.section + "]";
     }
+}
+
+void apply_default_changes(Settings* s, int file_rev, std::string* added) {
+    if (const GameDefaults* gd = game_defaults()) apply_changes(gd->changes, gd->change_count, s, file_rev, added);
 }
 
 void apply_default_additions(Settings* s, int file_rev, std::string* added) {
@@ -784,12 +798,25 @@ bool parse_onto(const std::string& text, Settings* s, std::string* err, std::vec
             std::string added;
             apply_default_additions(s, file_rev, &added);
             apply_default_changes(s, file_rev, &added);
+            apply_changes(kRuntimeChanges, static_cast<unsigned>(sizeof kRuntimeChanges / sizeof kRuntimeChanges[0]), s, file_rev, &added);
             s->defaults_rev = defaults_rev();
             s->migrated = true;
             s->migration_added = added;
         }
     } else if (with_default_bindings) {
-        s->defaults_rev = defaults_rev();   // the factory bindings were applied, so the result is at the current revision
+        // The factory bindings were applied, so the result is at the current revision; a file without [bindings.*] still takes
+        // the value changes above, or a default that moved would never reach the installs that need it most.
+        const int file_rev = s->defaults_rev;
+        if (file_rev < defaults_rev()) {
+            std::string added;
+            apply_changes(kRuntimeChanges, static_cast<unsigned>(sizeof kRuntimeChanges / sizeof kRuntimeChanges[0]), s, file_rev,
+                          &added);
+            s->defaults_rev = defaults_rev();
+            if (!added.empty()) {
+                s->migrated = true;
+                s->migration_added = added;
+            }
+        }
     }
     return true;
 }
