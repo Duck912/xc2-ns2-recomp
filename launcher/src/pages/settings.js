@@ -40,8 +40,10 @@ const SECTIONS = [
       { id: 'hdr_mode', type: 'select', label: 'settings.hdr.label', sec: 'hdr', key: 'mode', def: 'auto',
         options: [['auto', 'settings.hdr.auto'], ['on', 'settings.hdr.on'], ['native', 'settings.hdr.native'], ['off', 'settings.hdr.off']],
         hint: 'settings.hdr.hint' },
-      { id: 'present_mode', type: 'select', label: 'settings.presentMode.label', sec: 'gfx', key: 'present_mode', def: '',
-        options: [['', 'settings.presentMode.default'], ['fifo', 'fifo'], ['fifo_relaxed', 'settings.presentMode.vrr'],
+      // FIFO is the default and is written explicitly: an empty value left the mode to [display] vsync, which the page
+      // does not offer, so the entry labelled "FIFO" produced Immediate (issue 12).
+      { id: 'present_mode', type: 'select', label: 'settings.presentMode.label', sec: 'gfx', key: 'present_mode', def: 'fifo',
+        options: [['fifo', 'settings.presentMode.default'], ['fifo_relaxed', 'settings.presentMode.vrr'],
           ['mailbox', 'mailbox'], ['immediate', 'immediate']],
         hint: 'settings.presentMode.hint' },
     ],

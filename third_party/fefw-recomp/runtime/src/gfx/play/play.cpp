@@ -290,9 +290,16 @@ G& g() {
 
 uint64_t now_ns() { return FrameLimiter::now_ns(); }
 
-// vsync off: immediate (tearing, lowest latency; mailbox where immediate is missing). vsync on: FIFO, except with [display] fps_limit = 0
-// (uncapped): mailbox, so the game renders as fast as it can and the display still shows whole frames.
+// [gfx] present_mode (nxrt.ini) is the mode the settings page writes and the only one a player can reach; [display] vsync
+// (controls.ini) is what this function knew before that key existed. The explicit key wins. Without it the renderer used
+// the key once, when it was created, and play::start() overwrote it a tenth of a second later: picking "FIFO" in the
+// launcher still presented in Immediate (issue 12, two swapchains 115 ms apart, measured 2026-11-20).
+// No key at all: vsync off is immediate (tearing, lowest latency; mailbox where immediate is missing). vsync on is FIFO,
+// except with [display] fps_limit = 0 (uncapped): mailbox, so the game renders as fast as it can and the display still shows whole frames.
 gfx::PresentMode present_mode_for(const DisplaySettings& d) {
+    const std::string cfg = config_get_str("gfx", "present_mode", "");
+    gfx::PresentMode pm = gfx::PresentMode::Fifo;
+    if (!cfg.empty() && gfx::parse_present_mode(cfg.c_str(), &pm)) return pm;
     if (!d.vsync) return gfx::PresentMode::Immediate;
     return d.fps_cap == 0 ? gfx::PresentMode::Mailbox : gfx::PresentMode::Fifo;
 }
