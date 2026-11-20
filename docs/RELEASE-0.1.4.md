@@ -103,17 +103,17 @@ translated from it. Installation: [README](https://github.com/weile10000/xc2-ns2
 
 - **[Goldoire/fefw-recomp](https://github.com/Goldoire/fefw-recomp)** — the Switch runtime this project is built on: NVN/NVN2 replay,
   service HLE, the shader pipeline and the exe + DLL split all started there.
+- [nxrecomp](https://github.com/drakolordx7/nxrecomp) — the static recompiler that lifts the game's code.
+- Ryujinx (MIT) — the shader translator in the offline harness; SDL3, Vulkan-Headers, VMA and the other vendored
+  dependencies are listed in `licenses/` in the package.
+- [dav1d](https://code.videolan.org/videolan/dav1d) — the film's video decoder; [libvorbis](https://github.com/xiph/vorbis) — its sound.
 - **[@capibawa](https://github.com/capibawa)** — [nxnative, branch `xc2-ns2-profile`](https://github.com/capibawa/nxnative/tree/xc2-ns2-profile): the
   four launch switches and the host-side movie/audio takeover this project follows (`dm/host/hle_movie.c`, `hle_audio.c`).
-- [nxrecomp](https://github.com/drakolordx7/nxrecomp) — the static recompiler that lifts the game's code.
-- [dav1d](https://code.videolan.org/videolan/dav1d) — the film's video decoder; [libvorbis](https://github.com/xiph/vorbis) — its sound.
 - The reports that shaped this release: @Kain2k ([#10](https://github.com/weile10000/xc2-ns2-recomp/issues/10),
   [#12](https://github.com/weile10000/xc2-ns2-recomp/issues/12), [#14](https://github.com/weile10000/xc2-ns2-recomp/issues/14),
   [#15](https://github.com/weile10000/xc2-ns2-recomp/issues/15)); and the ones still open — @TheSeeOHZee
   ([#4](https://github.com/weile10000/xc2-ns2-recomp/issues/4)), @ffhome ([#2](https://github.com/weile10000/xc2-ns2-recomp/issues/2)),
   @UrsineBear ([#9](https://github.com/weile10000/xc2-ns2-recomp/issues/9)).
-- Ryujinx (MIT) — the shader translator in the offline harness; SDL3, Vulkan-Headers, VMA and the other vendored
-  dependencies are listed in `licenses/` in the package.
 
 ---
 
@@ -203,13 +203,13 @@ translated from it. Installation: [README](https://github.com/weile10000/xc2-ns2
 
 - **[Goldoire/fefw-recomp](https://github.com/Goldoire/fefw-recomp)** —— 本项目的运行时来源：NVN/NVN2 重放、服务 HLE、
   着色器管线、exe + DLL 拆分都从这里起。
+- [nxrecomp](https://github.com/drakolordx7/nxrecomp) —— 把游戏代码 lift 出来的静态重编译器。
+- Ryujinx（MIT）—— 离线 harness 里的着色器翻译器；SDL3、Vulkan-Headers、VMA 等随包依赖列在包的 `licenses/` 里。
+- [dav1d](https://code.videolan.org/videolan/dav1d) —— 影片视频解码；[libvorbis](https://github.com/xiph/vorbis) —— 影片声音。
 - **[@capibawa](https://github.com/capibawa)** —— [nxnative 的 `xc2-ns2-profile` 分支](https://github.com/capibawa/nxnative/tree/xc2-ns2-profile)：
   四个启动开关，以及本项目沿用的宿主端影片/音频接管（`dm/host/hle_movie.c`、`hle_audio.c`）。
-- [nxrecomp](https://github.com/drakolordx7/nxrecomp) —— 把游戏代码 lift 出来的静态重编译器。
-- [dav1d](https://code.videolan.org/videolan/dav1d) —— 影片视频解码；[libvorbis](https://github.com/xiph/vorbis) —— 影片声音。
 - 塑造了这一版的报告：@Kain2k（[#10](https://github.com/weile10000/xc2-ns2-recomp/issues/10)、
   [#12](https://github.com/weile10000/xc2-ns2-recomp/issues/12)、[#14](https://github.com/weile10000/xc2-ns2-recomp/issues/14)、
   [#15](https://github.com/weile10000/xc2-ns2-recomp/issues/15)）；仍未关闭的——@TheSeeOHZee
   （[#4](https://github.com/weile10000/xc2-ns2-recomp/issues/4)）、@ffhome（[#2](https://github.com/weile10000/xc2-ns2-recomp/issues/2)）、
   @UrsineBear（[#9](https://github.com/weile10000/xc2-ns2-recomp/issues/9)）。
-- Ryujinx（MIT）—— 离线 harness 里的着色器翻译器；SDL3、Vulkan-Headers、VMA 等随包依赖列在包的 `licenses/` 里。
