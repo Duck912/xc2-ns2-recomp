@@ -1449,13 +1449,22 @@ void feedback_prepare(const ProgLayout& pl) {
         if (b.nvn.source != NvnSource::SamplerBinding && b.nvn.source != NvnSource::HandleInUniform) continue;
         TexResolved tmp;
         const TexResolved& r = resolve_texture_ref(d, tmp);
-        // [nvn] fb_debug: why a binding of one fragment shader is or is not treated as a self-sampled attachment (HANDOVER 90).
+        // [nvn] fb_debug: why a binding of a fragment shader is or is not treated as a self-sampled attachment (HANDOVER 90).
+        // [nvn] fb_debug_hash: a shader hash prefix to watch ("17cdd28d" is the one HANDOVER 90 used). Empty reports every
+        // binding that IS a self-sampled attachment, which is what a "one material flickers" report needs (issue 15: the eyes
+        // during a blink, the mouth while it speaks); capped so a busy scene cannot flood the log.
         static const bool fb_debug = nxrt::config_get_bool("nvn", "fb_debug", false);   // once: the loop below runs per sampler binding
-        if (fb_debug && S.stage[kFragment] && S.stage[kFragment]->hash.compare(0, 8, "17cdd28d") == 0) {
-            NXLOG_I(kTag, "fb_debug: fs %s binding set%u b%u tex t%s gpu %d feedback %d samples %u used %d ncolor %u",
-                    S.stage[kFragment]->hash.c_str(), d.set, d.binding, r.tex ? std::to_string(r.tex->id).c_str() : "-",
-                    r.tex ? (tex_gpu(r.tex) ? 1 : 0) : -1, r.tex ? (is_color_feedback(r.tex) ? 1 : 0) : -1,
-                    r.tex ? r.tex->b.samples : 0u, r.tex ? (g_fb_use.count(r.tex) ? 1 : 0) : -1, S.ncolor);
+        static const std::string fb_debug_hash = nxrt::config_get_str("nvn", "fb_debug_hash", "");
+        if (fb_debug && S.stage[kFragment]) {
+            const bool feedback = r.tex && tex_gpu(r.tex) && is_color_feedback(r.tex);
+            const bool wanted = fb_debug_hash.empty() ? feedback : S.stage[kFragment]->hash.rfind(fb_debug_hash, 0) == 0;
+            static std::atomic<uint32_t> fb_logged{0};
+            if (wanted && (fb_debug_hash.size() || fb_logged.fetch_add(1) < 500)) {
+                NXLOG_I(kTag, "fb_debug: fs %s binding set%u b%u tex t%s gpu %d feedback %d samples %u used %d ncolor %u",
+                        S.stage[kFragment]->hash.c_str(), d.set, d.binding, r.tex ? std::to_string(r.tex->id).c_str() : "-",
+                        r.tex ? (tex_gpu(r.tex) ? 1 : 0) : -1, r.tex ? (is_color_feedback(r.tex) ? 1 : 0) : -1,
+                        r.tex ? r.tex->b.samples : 0u, r.tex ? (g_fb_use.count(r.tex) ? 1 : 0) : -1, S.ncolor);
+            }
         }
         if (!r.tex || !tex_gpu(r.tex) || !is_color_feedback(r.tex) || r.tex->b.samples > 1 || g_fb_use.count(r.tex)) continue;
         any = true;
