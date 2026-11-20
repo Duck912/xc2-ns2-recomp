@@ -281,6 +281,37 @@ void LiveInput::live(nxrt::hid::InputSnapshot &out) {
             }
         }
     }
+    // [pad] label_abxy from the settings file decides the face buttons: 1 answers the letter printed on the button (an Xbox
+    // pad's A answers a prompt that says A), 0 answers the position (the bottom button answers the bottom prompt). The game's
+    // own prompts are baked Switch glyphs, so which reads better is the player's call (issue 14, 2026-11-21). Missing: position.
+    static const bool pad_by_label = [] {
+        const char* env = std::getenv("NXRT_INI");
+        std::FILE* f = std::fopen(env && *env ? env : "nxrt.ini", "r");
+        if (!f) return false;
+        bool in_pad = false, by_label = false;
+        char line[256];
+        while (std::fgets(line, sizeof line, f)) {
+            char* s = line;
+            while (*s == ' ' || *s == '\t') ++s;
+            if (*s == '[') { in_pad = std::strncmp(s, "[pad]", 5) == 0; continue; }
+            if (!in_pad) continue;
+            if (std::strncmp(s, "label_abxy", 10) != 0) continue;
+            s += 10;
+            while (*s == ' ' || *s == '\t') ++s;
+            if (*s == '=') ++s;
+            while (*s == ' ' || *s == '\t') ++s;
+            by_label = (*s == '1' || *s == 't' || *s == 'T' || *s == 'y' || *s == 'Y');
+            break;
+        }
+        std::fclose(f);
+        return by_label;
+    }();
+    static const bool pad_layout_logged = [] {
+        NXLOG_I("pad", "face buttons by %s (B bottom, A right, Y left, X top on a Switch pad)",
+                pad_by_label ? "the printed label" : "position");
+        return true;
+    }();
+    (void)pad_layout_logged;
     // gamepad: SDL's pad state (and a newly plugged pad) only moves when its event queue is pumped
     int px = 0, py = 0, prx = 0, pry = 0;
     uint64_t pb = 0;
@@ -313,10 +344,12 @@ void LiveInput::live(nxrt::hid::InputSnapshot &out) {
             auto has = [&](int bit) { return (m >> bit) & 1u; };
             auto hasr = [&](int bit) { return (raw.raw_buttons >> bit) & 1u; };
             if (raw_mode) {
-                if (hasr(0)) pb |= btn(kBtnA);
-                if (hasr(1)) pb |= btn(kBtnB);
-                if (hasr(2)) pb |= btn(kBtnX);
-                if (hasr(3)) pb |= btn(kBtnY);
+                // SDL's gamepad order is bottom, right, left, top. By label that is A, B, X, Y; by position it is B, A, Y, X
+                // (the Switch pad's own order). A Nintendo pad reports the same order either way.
+                if (hasr(0)) pb |= btn(pad_by_label ? kBtnA : kBtnB);
+                if (hasr(1)) pb |= btn(pad_by_label ? kBtnB : kBtnA);
+                if (hasr(2)) pb |= btn(pad_by_label ? kBtnX : kBtnY);
+                if (hasr(3)) pb |= btn(pad_by_label ? kBtnY : kBtnX);
                 if (hasr(4)) pb |= btn(kBtnL);
                 if (hasr(5)) pb |= btn(kBtnR);
                 if (hasr(6)) pb |= btn(kBtnMinus);
@@ -328,10 +361,10 @@ void LiveInput::live(nxrt::hid::InputSnapshot &out) {
                 if (hasr(13)) pb |= btn(kBtnLeft);
                 if (hasr(14)) pb |= btn(kBtnRight);
             } else {
-                if (has(0)) pb |= btn(kBtnA);          // the printed label (an Xbox pad's bottom button is A)
-                if (has(1)) pb |= btn(kBtnB);
-                if (has(2)) pb |= btn(kBtnX);
-                if (has(3)) pb |= btn(kBtnY);
+                if (has(0)) pb |= btn(pad_by_label ? kBtnA : kBtnB);
+                if (has(1)) pb |= btn(pad_by_label ? kBtnB : kBtnA);
+                if (has(2)) pb |= btn(pad_by_label ? kBtnX : kBtnY);
+                if (has(3)) pb |= btn(pad_by_label ? kBtnY : kBtnX);
                 if (has(9)) pb |= btn(kBtnL);
                 if (has(10)) pb |= btn(kBtnR);
                 if (has(6)) pb |= btn(kBtnPlus);

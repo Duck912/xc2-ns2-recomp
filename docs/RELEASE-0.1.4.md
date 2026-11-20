@@ -1,5 +1,7 @@
 # XC2 NS2 Recomp v0.1.4 — the frame on screen is the frame the game finished
 
+**Tested on a Radeon RX 6800 XT and an RTX 4060 Laptop.**
+
 This release closes the three NVIDIA reports: stripes and flicker, tearing, and a black screen after a few seconds. They
 turned out to be three different faults. It also restores a cutscene's audio and keeps it locked to the picture, decodes the
 4K openings on the GPU by default, and maps the pad's face buttons by position. Unzip over your install; saves, settings and
@@ -41,11 +43,12 @@ the shader cache are kept.
 - **The 4K openings decode on the GPU by default.** `[media] hwdec` is on: 30 fps on a 4060 Laptop where the CPU decoders
   managed 8–17. A GPU without the hardware decoder falls back to the CPU path by itself, and `hwdec = off` still disables
   it.
-- **The face buttons are mapped by position.** An Xbox pad's A is the bottom button, and label mapping pressed the Switch
-  button on the right, so the Arts prompts answered the neighbouring slot. The bottom button is the bottom prompt on every
-  pad, and a Switch pad maps the same either way
-  ([#14](https://github.com/weile10000/xc2-ns2-recomp/issues/14) @Kain2k). Factory revision 2 moves an existing install once;
-  a layout the player chose stays.
+- **The pad's face buttons answer the Switch's positions.** The game lays its Arts out like the Switch pad, so the default
+  layout is the Switch one: **B at the bottom, A on the right, Y on the left, X at the top.** On an Xbox pad the bottom
+  button is therefore B and its printed A sits on the right, and a Switch pad maps the same either way. `[pad] label_abxy = 1`
+  in `controls.ini` switches to the printed letters instead (an Xbox A answers a prompt that says A); the launcher's pad page
+  has the same switch ([#14](https://github.com/weile10000/xc2-ns2-recomp/issues/14) @Kain2k). Factory revision 2 moves an
+  existing install to the positional default once, and a layout the player chose stays.
 - **A lost device reports the driver's own fault.** `VK_EXT_device_fault` is enabled where the driver offers it; the first
   failed submit logs the driver's fault description and address next to the `-4` (issue #10).
 - **A `0xD401` at start is retried.** The 60 GiB VAMM setup fails on a rare launch; that launch is started again, and each
@@ -77,7 +80,6 @@ the shader cache are kept.
   default upscaler because it needs no extra DLL. FSR and DLSS are in the launcher.
 - Cloud-sea shimmer and the blue-grey rim where geometry meets the cloud sea remain, on AMD GPUs only (inside the game's
   own volumetric fog).
-- **Tested on a Radeon RX 6800 XT and an RTX 4060 Laptop.**
 
 ## Before you press Play
 
@@ -116,6 +118,8 @@ translated from it. Installation: [README](https://github.com/weile10000/xc2-ns2
 
 # XC2 NS2 Recomp v0.1.4 —— 屏幕上的那一帧，是游戏画完的那一帧
 
+**本版在 Radeon RX 6800 XT 与 RTX 4060 Laptop 上测试。**
+
 这一版收掉三份 NVIDIA 报告：横条闪烁、撕裂、进游戏几秒后黑屏。查下来是三个不同的故障。同时，过场的音频恢复并锁定在
 画面上；4K 开场默认交给显卡解码；手柄面板按键改为按位置映射。解压覆盖安装即可，存档、设置、着色器缓存都保留。
 
@@ -148,9 +152,10 @@ translated from it. Installation: [README](https://github.com/weile10000/xc2-ns2
   sink，`x2_audio301` 回到 0.1.3 的代码，未改动。
 - **4K 开场默认用显卡解码。** `[media] hwdec` 打开：4060 Laptop 上 30 fps，CPU 解码器只有 8–17。没有硬解能力的显卡
   会自动退回 CPU 路径；`hwdec = off` 仍可关闭。
-- **面板按键按位置映射。** Xbox 手柄的 A 在最下面，而按标签映射按下的是 Switch 右侧那颗键，于是战技提示答到了旁边
-  一格。现在最下面的按键就是最下面那个提示，Switch 手柄两种映射结果相同
-  ([#14](https://github.com/weile10000/xc2-ns2-recomp/issues/14) @Kain2k)。工厂修订 2 会把老安装迁移一次；
+- **手柄面板按键按 Switch 的位置对应。** 游戏的战技是按 Switch 手柄的位置排布的，所以默认布局就是 Switch 的位置：
+  **B 在下、A 在右、Y 在左、X 在上。** 于是 Xbox 手柄最下面那颗是 B、它印着 A 的那颗在右边；Switch 手柄两种映射结果相同。
+  想让按键按印着的字母来（提示 A 就按手柄上的 A），把 `controls.ini` 里的 `[pad] label_abxy` 改成 1，启动器手柄页也有同一个开关
+  ([#14](https://github.com/weile10000/xc2-ns2-recomp/issues/14) @Kain2k)。工厂修订 2 会把老安装迁移到“按位置”一次；
   玩家自己改过的布局不会被动。
 - **设备丢失会报驱动自己的 fault。** 驱动支持时启用 `VK_EXT_device_fault`；第一次提交失败会把驱动的 fault 描述与
   地址写在 `-4` 旁边（#10）。
@@ -176,7 +181,6 @@ translated from it. Installation: [README](https://github.com/weile10000/xc2-ns2
 - 画面仍比 1 代重编译版柔（[#9](https://github.com/weile10000/xc2-ns2-recomp/issues/9) @UrsineBear）：内部场景是 1280×720，
   默认 TAAU 是因为它不需要额外 DLL；FSR 与 DLSS 在启动器里可选。
 - 云海闪烁、以及几何体与云海交界的蓝灰边仍然存在，**仅限 AMD 显卡**（位于游戏自己的体积雾内部）。
-- **测试机器：Radeon RX 6800 XT 与 RTX 4060 Laptop。**
 
 ## 开始之前
 
