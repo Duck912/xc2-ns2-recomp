@@ -54,9 +54,6 @@ the shader cache are kept.
   failed submit logs the driver's fault description and address next to the `-4` (issue #10).
 - **A `0xD401` at start is retried.** The 60 GiB VAMM setup fails on a rare launch; that launch is started again, and each
   attempt gets its own line in the log.
-- **A NUP extraction keeps its add-on content.** The runtime mounts the add-on contents that `indices.txt` lists, and
-  the NUP path extracted the folders without that list, so the DLC was reported as absent and the game ran without it.
-  Set up derives the list from the folder names now (verified on this dump: 1–6 and 99).
 - **Source users**: `[nvn] fb_debug_hash` aims `[nvn] fb_debug` at one fragment shader (empty reports every binding that
   becomes a self-sampled attachment, capped at 500 lines), and the development link finds libvorbis on its own, so a dev
   build decodes a film's track like the shipped DLL.
@@ -168,8 +165,6 @@ licence text and the source offer are in `licenses/FFMPEG-LICENSE.txt` and `THIR
 - **设备丢失会报驱动自己的 fault。** 驱动支持时启用 `VK_EXT_device_fault`；第一次提交失败会把驱动的 fault 描述与
   地址写在 `-4` 旁边（#10）。
 - **启动时的 `0xD401` 会重试。** 60 GiB VAMM 在偶发的启动中失败；现在会重新启动那次运行，每次尝试各记一行。
-- **NUP 提取的追加内容不再丢失。** 运行时挂载 `indices.txt` 列出的追加内容，而 NUP 路径只解出了目录、没有这份清单，于
-  是 DLC 被当成不存在、游戏干脆不加载。现在 Set up 会按目录名反推清单（本 dump 实测 1–6 与 99）。
 - **源码用户**：`[nvn] fb_debug_hash` 让 `[nvn] fb_debug` 只盯一个 fragment shader（留空则报告所有最终成为自采样
   附件的绑定，上限 500 行）；开发链接会自己找到 libvorbis，开发版的影片解码因此与发布的 DLL 一致。
 
