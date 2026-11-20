@@ -2,9 +2,10 @@
 
 **Tested on a Radeon RX 6800 XT and an RTX 4060 Laptop.**
 
-This release closes the three NVIDIA reports: stripes and flicker, tearing, and a black screen after a few seconds. They
-turned out to be three different faults. It also restores a cutscene's audio and keeps it locked to the picture, decodes the
-4K openings on the GPU by default, and maps the pad's face buttons by position. Unzip over your install; saves, settings and
+This release closes the three NVIDIA reports — stripes and flicker, tearing, and a black screen after a few seconds — and
+gives cutscenes their sound back, in sync with the picture. The three reports turned out to be separate faults, and the
+cutscene's silence was a fourth: its audio and the game's own were fighting over one device. The 4K openings now decode on
+the GPU by default, and the pad's face buttons follow the Switch's positions. Unzip over your install; saves, settings and
 the shader cache are kept.
 
 > **Early version.** Set up and Play are the paths that work end to end; the launcher around them is still being built.
@@ -68,9 +69,10 @@ the shader cache are kept.
 
 ## Known issues
 
-- **NVIDIA, RTX 5080** ([#10](https://github.com/weile10000/xc2-ns2-recomp/issues/10) @Kain2k): a lost device in long
-  sessions is still open. Its fault shape differs from the one fixed here; the log carries the driver's own description
-  now, which is what the next report needs.
+- **NVIDIA, the long-session device loss in
+  [#10](https://github.com/weile10000/xc2-ns2-recomp/issues/10)** (@Kain2k, reporting from an RTX 5080): still open. Its
+  fault shape differs from the one fixed here; the log carries the driver's own description now, which is what the next
+  report needs.
 - **Eyes and mouth flicker while a character blinks or speaks**
   ([#15](https://github.com/weile10000/xc2-ns2-recomp/issues/15) @Kain2k): under investigation. This build carries the
   diagnostic for it (`[nvn] fb_debug`, `[nvn] fb_debug_hash`), and the issue says what to send.
@@ -109,8 +111,7 @@ translated from it. Installation: [README](https://github.com/weile10000/xc2-ns2
   [#12](https://github.com/weile10000/xc2-ns2-recomp/issues/12), [#14](https://github.com/weile10000/xc2-ns2-recomp/issues/14),
   [#15](https://github.com/weile10000/xc2-ns2-recomp/issues/15)); and the ones still open — @TheSeeOHZee
   ([#4](https://github.com/weile10000/xc2-ns2-recomp/issues/4)), @ffhome ([#2](https://github.com/weile10000/xc2-ns2-recomp/issues/2)),
-  @UrsineBear ([#9](https://github.com/weile10000/xc2-ns2-recomp/issues/9)), @Nolaye
-  ([#13](https://github.com/weile10000/xc2-ns2-recomp/issues/13)).
+  @UrsineBear ([#9](https://github.com/weile10000/xc2-ns2-recomp/issues/9)).
 - Ryujinx (MIT) — the shader translator in the offline harness; SDL3, Vulkan-Headers, VMA and the other vendored
   dependencies are listed in `licenses/` in the package.
 
@@ -120,8 +121,9 @@ translated from it. Installation: [README](https://github.com/weile10000/xc2-ns2
 
 **本版在 Radeon RX 6800 XT 与 RTX 4060 Laptop 上测试。**
 
-这一版收掉三份 NVIDIA 报告：横条闪烁、撕裂、进游戏几秒后黑屏。查下来是三个不同的故障。同时，过场的音频恢复并锁定在
-画面上；4K 开场默认交给显卡解码；手柄面板按键改为按位置映射。解压覆盖安装即可，存档、设置、着色器缓存都保留。
+这一版收掉三份 NVIDIA 报告——横条闪烁、撕裂、进游戏几秒后黑屏——并把过场的声音还了回来、与画面对齐。三份报告查下来是
+三个不同的故障，而 CG 无声是第四个：影片的音频和游戏自己的音频在抢同一个设备。此外，4K 开场默认交给显卡解码，手柄面板
+按键改为按 Switch 的位置对应。解压覆盖安装即可，存档、设置、着色器缓存都保留。
 
 > **早期版本。** 端到端可用的是 Set up 与 Play 两条路径；围绕它们的启动器仍在完善。
 
@@ -173,8 +175,8 @@ translated from it. Installation: [README](https://github.com/weile10000/xc2-ns2
 
 ## 已知问题
 
-- **NVIDIA RTX 5080**（[#10](https://github.com/weile10000/xc2-ns2-recomp/issues/10) @Kain2k）：长时游玩的设备丢失仍未
-  解决，其形态与这次修掉的不同；日志现在带驱动自己的描述，下一次报告可以直接用。
+- **NVIDIA，[#10](https://github.com/weile10000/xc2-ns2-recomp/issues/10) 里那种长时游玩后的设备丢失**（@Kain2k，
+  报告来自 RTX 5080）：仍未解决，其形态与这次修掉的不同；日志现在带驱动自己的描述，下一次报告可以直接用。
 - **角色眨眼、说话时眼与嘴周围闪烁**（[#15](https://github.com/weile10000/xc2-ns2-recomp/issues/15) @Kain2k）：仍在查。
   本版带有对应诊断（`[nvn] fb_debug`、`[nvn] fb_debug_hash`），issue 里写了需要提供哪些数据。
 - 4K 过场的第一帧可能闪一帧绿并短暂破碎，随后恢复。
@@ -209,6 +211,5 @@ translated from it. Installation: [README](https://github.com/weile10000/xc2-ns2
   [#12](https://github.com/weile10000/xc2-ns2-recomp/issues/12)、[#14](https://github.com/weile10000/xc2-ns2-recomp/issues/14)、
   [#15](https://github.com/weile10000/xc2-ns2-recomp/issues/15)）；仍未关闭的——@TheSeeOHZee
   （[#4](https://github.com/weile10000/xc2-ns2-recomp/issues/4)）、@ffhome（[#2](https://github.com/weile10000/xc2-ns2-recomp/issues/2)）、
-  @UrsineBear（[#9](https://github.com/weile10000/xc2-ns2-recomp/issues/9)）、@Nolaye
-  （[#13](https://github.com/weile10000/xc2-ns2-recomp/issues/13)）。
+  @UrsineBear（[#9](https://github.com/weile10000/xc2-ns2-recomp/issues/9)）。
 - Ryujinx（MIT）—— 离线 harness 里的着色器翻译器；SDL3、Vulkan-Headers、VMA 等随包依赖列在包的 `licenses/` 里。
