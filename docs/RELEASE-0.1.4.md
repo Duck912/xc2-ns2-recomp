@@ -82,6 +82,9 @@ the shader cache are kept.
   default upscaler because it needs no extra DLL. FSR and DLSS are in the launcher.
 - Cloud-sea shimmer and the blue-grey rim where geometry meets the cloud sea remain, on AMD GPUs only (inside the game's
   own volumetric fog).
+- **On a display that Windows reports as HDR**, a cutscene's frames can come out with a green cast: the film's frame does
+  not go through the HDR10 encode yet. Setting `[hdr] mode = off` in `nxrt.ini` (the launcher's video page has the same
+  setting) brings the colours back.
 
 ## Before you press Play
 
@@ -93,11 +96,14 @@ pipelines for about 20 seconds (once per driver).
 
 | file | size | sha256 |
 |---|---|---|
-| `XC2-package-dist-0.1.4.zip` | 158.5 MB (497.8 MB unpacked) | `4B3C818936E4957ECE20DD00A4DD3EFA710769D63D9E1AB57F1BE706B8C6C375` |
+| `XC2-package-dist-0.1.4.zip` | 216.7 MB (643.4 MB unpacked) | `C239A3B7BAAEF71A08322E66AFD09CAF53B0B1D862D1BC7FA9F711EA40EAC658` |
 | `xc2-launcher-0.1.4-src.zip` | 0.5 MB | `F3DCA4DFDC4D1FBBBFFFFA7A466ED253DE91C9B3192A2E4B0D20632FBF2D7B44` |
 
 The package contains no game files: the executable is built on your machine from your own dump and the shaders are
 translated from it. Installation: [README](https://github.com/weile10000/xc2-ns2-recomp#readme).
+
+It does carry FFmpeg (a shared GPL build) for the film's hardware decoders; it is loaded as a library, unmodified, and its
+licence text and the source offer are in `licenses/FFMPEG-LICENSE.txt` and `THIRD_PARTY_NOTICES.md`.
 
 ## Credits
 
@@ -183,6 +189,8 @@ translated from it. Installation: [README](https://github.com/weile10000/xc2-ns2
 - 画面仍比 1 代重编译版柔（[#9](https://github.com/weile10000/xc2-ns2-recomp/issues/9) @UrsineBear）：内部场景是 1280×720，
   默认 TAAU 是因为它不需要额外 DLL；FSR 与 DLSS 在启动器里可选。
 - 云海闪烁、以及几何体与云海交界的蓝灰边仍然存在，**仅限 AMD 显卡**（位于游戏自己的体积雾内部）。
+- **在 Windows 报告为 HDR 的显示器上**，过场画面可能整片发绿：影片帧还没有进入 HDR10 的编码链路。把 `nxrt.ini` 里的
+  `[hdr] mode` 设为 `off`（启动器的视频页有同一个开关）即可恢复正常颜色。
 
 ## 开始之前
 
@@ -193,11 +201,14 @@ translated from it. Installation: [README](https://github.com/weile10000/xc2-ns2
 
 | 文件 | 大小 | sha256 |
 |---|---|---|
-| `XC2-package-dist-0.1.4.zip` | 158.5 MB（解压 497.8 MB） | `4B3C818936E4957ECE20DD00A4DD3EFA710769D63D9E1AB57F1BE706B8C6C375` |
+| `XC2-package-dist-0.1.4.zip` | 216.7 MB（解压 643.4 MB） | `C239A3B7BAAEF71A08322E66AFD09CAF53B0B1D862D1BC7FA9F711EA40EAC658` |
 | `xc2-launcher-0.1.4-src.zip` | 0.5 MB | `F3DCA4DFDC4D1FBBBFFFFA7A466ED253DE91C9B3192A2E4B0D20632FBF2D7B44` |
 
 包里不含任何游戏文件：exe 用你自己的 dump 在你机器上编出来，着色器也从它翻译。安装说明见
 [README](https://github.com/weile10000/xc2-ns2-recomp#readme)。
+
+包里带了 FFmpeg（GPL 共享构建），供影片的硬件解码器使用：它作为库被加载、未做修改，许可证与源码获取说明见
+`licenses/FFMPEG-LICENSE.txt` 与 `THIRD_PARTY_NOTICES.md`。
 
 ## 致谢
 
