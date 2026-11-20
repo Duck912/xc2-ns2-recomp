@@ -61,7 +61,8 @@ the shader cache are kept.
 ## Upgrading from v0.1.3
 
 - Replace the folder; `save/` and `shader_cache/` can be copied over, and no new Set up is needed.
-- Two defaults change: hardware film decoding is on, and the pad layout is by position. A value the player set is kept.
+- Three defaults change: hardware film decoding is on, the pad layout is by position, and HDR output is off (the film overlay has no HDR10 encode yet). A value the player set is kept.
+- A `controls.ini` that carries `[hdr] mode = auto` from 0.1.3 keeps it; delete the line to take the new default.
 - The launcher and the runtime now come from the same commit, and every exe records which one in `build.json`.
 
 ## Known issues
@@ -82,9 +83,9 @@ the shader cache are kept.
 - **The DLC campaigns are not optimised yet.** A cutscene from the add-on content can still show a few blocky frames
   while the GPU is saturated, and its first seconds stutter while the hardware decoder is created. One decoder per film
   stream is what 0.1.4 fixes (that was the bulk of it); the rest is future work. The base game's own cutscenes are fine.
-- **On a display that Windows reports as HDR**, a cutscene's frames can come out with a green cast: the film's frame does
-  not go through the HDR10 encode yet. Setting `[hdr] mode = off` in `nxrt.ini` (the launcher's video page has the same
-  setting) brings the colours back.
+- **HDR is off by default in 0.1.4** (it used to be `auto`). The film overlay has no HDR10 encode yet, so on a display
+  Windows reports as HDR a cutscene's frame came out green. `[hdr] mode = auto` or `on` in `nxrt.ini` (the launcher's
+  video page has the same setting) turns HDR back on for the 3D scene, with that green film frame for now.
 
 ## Before you press Play
 
@@ -174,7 +175,8 @@ licence text and the source offer are in `licenses/FFMPEG-LICENSE.txt` and `THIR
 ## 从 v0.1.3 升级
 
 - 解压覆盖即可；`save/` 与 `shader_cache/` 可以拷过去，不需要重新 Set up。
-- 两个默认值变了：影片硬解打开、手柄布局按位置。玩家自己设过的值都保留。
+- 三个默认值变了：影片硬解打开、手柄布局按位置、HDR 默认关闭（影片覆盖层还没做 HDR10 编码）。玩家自己设过的值都保留。
+- 从 0.1.3 带过来的 `controls.ini` 里若写着 `[hdr] mode = auto`，会继续保持 auto；想用新默认就删掉那行。
 - 启动器与运行时现在来自同一个提交，每个 exe 在 `build.json` 里记录是哪一个。
 
 ## 已知问题

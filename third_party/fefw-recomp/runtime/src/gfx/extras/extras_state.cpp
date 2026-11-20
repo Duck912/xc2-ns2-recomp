@@ -48,7 +48,10 @@ const char* output_kind_name(OutputKind k) {
 
 Settings settings_from_config() {
     Settings s;
-    const std::string hm = lower(config_get_str("hdr", "mode", "auto"));
+    // Off by default since 0.1.4: the film overlay does not go through the HDR10 encode yet, so on a display Windows reports as
+// HDR every cutscene's frame came out green (2026-11-21). HDR is one key away - [hdr] mode = auto, or the launcher's video
+// page - and the 3D scene renders in HDR once it is on.
+const std::string hm = lower(config_get_str("hdr", "mode", "off"));
     s.hdr.mode = hm == "off" || hm == "0" || hm == "false" ? HdrMode::Off : hm == "on" || hm == "1" || hm == "true" ? HdrMode::On : hm == "native" ? HdrMode::Native : HdrMode::Auto;
     const std::string hf = lower(config_get_str("hdr", "format", "auto"));
     s.hdr.format = hf == "hdr10" ? HdrFormat::Hdr10 : hf == "scrgb" ? HdrFormat::ScRgb : HdrFormat::Auto;
