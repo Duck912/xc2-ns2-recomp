@@ -110,6 +110,12 @@ git log --oneline 6f1d964..HEAD -- third_party/fefw-recomp
   from a real guest mapping.
 - **runtime/src/gfx/extras/temporal_ffx.cpp (2026-11-19)** - `amd_fidelityfx_upscaler_vk.dll` is accepted as the FSR entry point when the
   39 KB loader is absent: both export the same five `ffx*` symbols, and a player who only has the one file should not fall back to TAAU.
+- **runtime/src/gfx/play/play.cpp (2026-11-20)** - `[gfx] present_mode` wins over `[display] vsync`. The renderer read the key
+  when it was created, and `play::start` replaced it 115 ms later with the mode derived from vsync, so a player who picked
+  FIFO in the launcher presented in Immediate (issue #12).
+- **runtime/src/gfx/vk_device.cpp, runtime/src/gfx/nvn/nvn_gpu.cpp (2026-11-20)** - `VK_EXT_device_fault` is enabled when
+  the driver offers it, and the first failed submit logs the driver's own fault description and address instead of only the
+  `-4` vkQueueSubmit2 returned (issue #10).
 - **runtime/src/gfx/nvn/nvn_replay.cpp (2026-11-19)** - the "float sampler over the stencil plane" report (`ds_debug: fs <hash> ...`)
   is now written unconditionally, once per (shader, binding), instead of only under `[nvn] ds_debug`. The patch tool can only
   rewrite modules a log names, and the run that lost the device was the one with nothing recorded in it (issue #10).
