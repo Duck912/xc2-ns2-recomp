@@ -164,11 +164,14 @@ nxrt::gfx::Renderer *g_renderer = nullptr;   // for the F12 screenshot hotkey
 //   gamepad   platform::gamepad_poll (SDL's cached pad state, refreshed here with SDL_UpdateGamepads)
 // XC2_PRESS presses stay on top of it, so a scripted run and a human can drive one process. XC2_NO_INPUT=1 turns the
 // live part off (a scripted run that must not see the keyboard).
+void route_record(const nxrt::hid::InputSnapshot &s);   // XC2_ROUTE_OUT (see "replay routes" below)
+
 class LiveInput final : public nxrt::hid::ManualInputSource {
 public:
     void poll(nxrt::hid::InputSnapshot &out) override {
         nxrt::hid::ManualInputSource::poll(out);   // scripted presses / connected pads from the harness
         live(out);
+        route_record(out);                         // what the game saw, for XC2_ROUTE_OUT
     }
 
 private:
@@ -393,6 +396,120 @@ void LiveInput::live(nxrt::hid::InputSnapshot &out) {
     }
 }
 
+
+// ---- replay routes (tools/run/route.ps1) ---------------------------------------------------------------
+// A route is the input of one run written down: XC2_ROUTE_OUT=<file> records what the game saw (one line per change,
+// milliseconds since the recorder started), XC2_ROUTE=<file> plays it back. Comparing two builds needs the same scene,
+// and the same buttons at the same milliseconds is what gets there: two runs of the same XC2_PRESS script landed 4100
+// and 736 draws/frame apart on 2026-11-20 (HANDOVER 228).
+//
+//   +1200 A            press A at 1.2 s
+//   -1450 A            release A at 1.45 s
+//   L3000 0 32767      left stick to (0, 32767) at 3.0 s, held until the next L/R line
+namespace route {
+struct Bit { const char *name; uint64_t bit; };
+const Bit kBits[] = {{"A", nxrt::hid::btn(nxrt::hid::kBtnA)},     {"B", nxrt::hid::btn(nxrt::hid::kBtnB)},
+                     {"X", nxrt::hid::btn(nxrt::hid::kBtnX)},     {"Y", nxrt::hid::btn(nxrt::hid::kBtnY)},
+                     {"PLUS", nxrt::hid::btn(nxrt::hid::kBtnPlus)}, {"MINUS", nxrt::hid::btn(nxrt::hid::kBtnMinus)},
+                     {"L", nxrt::hid::btn(nxrt::hid::kBtnL)},     {"R", nxrt::hid::btn(nxrt::hid::kBtnR)},
+                     {"ZL", nxrt::hid::btn(nxrt::hid::kBtnZL)},   {"ZR", nxrt::hid::btn(nxrt::hid::kBtnZR)}};
+struct Rec {
+    std::mutex mu;
+    FILE *f = nullptr;
+    bool init = false;
+    std::chrono::steady_clock::time_point t0;
+    uint64_t btn = 0;
+    int32_t lx = 0, ly = 0, rx = 0, ry = 0;
+};
+Rec &rec() {
+    static Rec r;
+    return r;
+}
+// One origin for recording and playback, set when the input source goes live in main: the hid service only samples
+// the source once the game asks for input (about 6 s in), so a recorder that started its own clock at the first
+// sample wrote +880 for a press scheduled at 7 s, and a playback that started at its thread's start fired 6 s early.
+std::chrono::steady_clock::time_point g_route_t0;
+long long ms_since(std::chrono::steady_clock::time_point t0) {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+}
+struct Ev { long long ms = 0; char kind = 'B'; bool down = false; uint64_t bit = 0; int32_t x = 0, y = 0; };
+}  // namespace route
+
+void route_record(const nxrt::hid::InputSnapshot &s) {
+    static const char *path = [] {
+        const char *p = std::getenv("XC2_ROUTE_OUT");
+        return (p && *p) ? p : nullptr;
+    }();
+    if (!path) return;
+    route::Rec &r = route::rec();
+    std::lock_guard<std::mutex> lk(r.mu);
+    const uint64_t buttons = s.npad[0].buttons;
+    const int32_t lx = s.npad[0].left.x, ly = s.npad[0].left.y, rx = s.npad[0].right.x, ry = s.npad[0].right.y;
+    if (!r.init) {
+        r.init = true;
+        r.t0 = std::chrono::steady_clock::now();
+        r.f = std::fopen(path, "wb");
+        if (r.f) std::fprintf(r.f, "# xc2 route v1, recorded by XC2_ROUTE_OUT; play it with XC2_ROUTE\n");
+        r.btn = buttons;
+        r.lx = lx; r.ly = ly; r.rx = rx; r.ry = ry;
+        return;
+    }
+    if (!r.f) return;
+    const long long ms = route::ms_since(route::g_route_t0);
+    for (const route::Bit &b : route::kBits)
+        if ((buttons ^ r.btn) & b.bit) std::fprintf(r.f, "%c%lld %s\n", (buttons & b.bit) ? '+' : '-', ms, b.name);
+    r.btn = buttons;
+    if (lx != r.lx || ly != r.ly) { std::fprintf(r.f, "L%lld %d %d\n", ms, lx, ly); r.lx = lx; r.ly = ly; }
+    if (rx != r.rx || ry != r.ry) { std::fprintf(r.f, "R%lld %d %d\n", ms, rx, ry); r.rx = rx; r.ry = ry; }
+    std::fflush(r.f);   // a route whose run ends with the window closed still has its tail on disk
+}
+
+// Reads the file and drives the source on its own thread. Unknown lines are skipped (a route is data, not a program).
+static void route_start(const std::shared_ptr<nxrt::hid::ManualInputSource> &src, const char *path) {
+    FILE *f = std::fopen(path, "rb");
+    if (!f) {
+        std::fprintf(stderr, "route: cannot open %s\n", path);
+        return;
+    }
+    std::vector<route::Ev> evs;
+    char line[512];
+    while (std::fgets(line, sizeof line, f)) {
+        char *p = line;
+        while (*p == ' ' || *p == '\t') ++p;
+        if (!*p || *p == '#' || *p == '\r' || *p == '\n') continue;
+        route::Ev e;
+        if (*p == '+' || *p == '-') {          // a button edge
+            e.down = *p == '+';
+            char name[32] = {};
+            if (std::sscanf(p + 1, "%lld %31s", &e.ms, name) != 2) continue;
+            for (const route::Bit &b : route::kBits)
+                if (!std::strcmp(b.name, name)) e.bit = b.bit;
+            if (!e.bit) continue;
+        } else if (*p == 'L' || *p == 'R') {   // a stick position
+            e.kind = *p;
+            if (std::sscanf(p + 1, "%lld %d %d", &e.ms, &e.x, &e.y) != 3) continue;
+        } else {
+            continue;
+        }
+        evs.push_back(e);
+    }
+    std::fclose(f);
+    long long delay = 0;
+    if (const char *d = std::getenv("XC2_ROUTE_DELAY")) delay = std::atoll(d);
+    std::fprintf(stderr, "route: %zu events from %s, starting at +%lld ms\n", evs.size(), path, delay);
+    std::thread([src, evs, delay] {
+        const auto start = route::g_route_t0;
+        for (const route::Ev &e : evs) {
+            std::this_thread::sleep_until(start + std::chrono::milliseconds(delay + e.ms));
+            if (e.kind == 'B') {
+                if (e.down) src->press(0, e.bit);
+                else src->release(0, e.bit);
+            } else {
+                src->stick(0, e.kind == 'R', e.x, e.y);
+            }
+        }
+    }).detach();
+}
 
 }  // namespace
 
@@ -1548,6 +1665,7 @@ int main(int argc, char **argv) {
         snap.npad[9].connected = true;                     // handheld slot: keep it a valid pad too
         snap.npad[9].style = nxrt::hid::NpadStyle::Handheld;
         input_src->set(snap);
+        route::g_route_t0 = std::chrono::steady_clock::now();   // the origin XC2_ROUTE_OUT and XC2_ROUTE share
         nxrt::hid::set_input_source(input_src);
         std::fprintf(stderr,
                      "input: live keyboard/gamepad on (WASD or arrows = move, IJKL = camera, Space/Enter = A, "
@@ -1620,6 +1738,10 @@ int main(int argc, char **argv) {
             }
         }).detach();
         std::fprintf(stderr, "scripted input armed: %s\n", press);
+    }
+    if (const char *route = std::getenv("XC2_ROUTE")) {   // a recorded run replayed (tools/run/route.ps1)
+        std::shared_ptr<nxrt::hid::ManualInputSource> src = input_src;
+        route_start(src, route);
     }
     nxrt::config_set("boot", "link", link.c_str());
     // The guest rtld relocates the images itself; when we skip it (host link + direct entry) the host's relocation must stay.
