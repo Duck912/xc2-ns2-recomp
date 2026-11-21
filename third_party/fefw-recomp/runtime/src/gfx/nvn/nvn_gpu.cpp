@@ -91,6 +91,7 @@ struct Gpu {
     bool frame_batch = false;
     std::atomic<uint64_t> flushed_pub{0};          // `flushed`, readable from any thread
     std::atomic<bool> flush_wanted{false};         // a thread waits for (or polls) a serial still in the batch
+    std::atomic<uint64_t> flush_want_serial{0};    // the highest serial a thread asked to be flushed (want_flush): a flush that does not reach it keeps flush_wanted
     uint64_t recording = 0;               // render thread: serial of the submission being recorded (0 outside)
     std::atomic<uint64_t> last_submitted{0};
     // Serials are handed out when a submission is queued (the game thread gets its serial at once and goes on while the render thread
@@ -302,6 +303,11 @@ static std::string device_fault_text(VkDevice dev) {
 // serial (the earlier ones of the batch complete with it). Every kernel submission costs a pass over all memory the device holds: on Linux
 // (Proton, RADV) the multi-gigabyte host-memory pool imports are user pages the kernel looks up again on each one, about 2 ms a
 // submission on a Legion Go S, so 11 submissions a frame took 20 of its 25 ms. Render thread.
+void after_flush(uint64_t serial) {
+    g->flush_wanted.store(false);
+    if (g->flush_want_serial.load() > serial) g->flush_wanted.store(true);
+}
+
 void flush_batch() {
     if (g->batch.empty()) return;
     std::vector<VkCommandBufferSubmitInfo> cbi(g->batch.size(), VkCommandBufferSubmitInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO});
@@ -346,7 +352,7 @@ void flush_batch() {
     }
     g->flushed = serial;
     g->flushed_pub.store(serial);
-    g->flush_wanted.store(false);
+    after_flush(serial);
     g->batch.clear();
     g->ctr.submits.fetch_add(1);
 }
@@ -354,7 +360,9 @@ void flush_batch() {
 // submit_batch = frame: a thread outside the render thread waits for a serial that may still sit in the batch; the render thread flushes
 // it at once instead of with the next present (which that thread may be the one to queue).
 void want_flush(uint64_t serial) {
-    if (!g->frame_batch || serial <= g->flushed_pub.load() || g->flush_wanted.exchange(true)) return;
+    if (!g->frame_batch || serial <= g->flushed_pub.load()) return;
+    for (uint64_t w = g->flush_want_serial.load(); serial > w && !g->flush_want_serial.compare_exchange_weak(w, serial);) {}
+    if (g->flush_wanted.exchange(true)) return;
     std::lock_guard<std::mutex> lk(g->qmu);
     g->qcv.notify_one();
 }
@@ -841,7 +849,7 @@ void present_batch_done(const gfx::Renderer::SubmitPrefix& p) {
     }
     g->flushed = p.value;
     g->flushed_pub.store(p.value);
-    g->flush_wanted.store(false);
+    after_flush(p.value);
     g->batch.clear();
     g->ctr.submits.fetch_add(1);
 }
