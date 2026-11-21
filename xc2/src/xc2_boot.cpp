@@ -176,12 +176,57 @@ public:
 
 private:
     static bool down(int vk) { return (::GetAsyncKeyState(vk) & 0x8000) != 0; }
+    // A hotkey is polled once per presented frame, so a quick tap can fall between two polls (20-30 fps in the port). The low
+    // bit is set when the key went down since the previous call and is cleared by it, which catches that tap.
+    static bool tapped(int vk) { return (::GetAsyncKeyState(vk) & 0x0001) != 0; }
     void live(nxrt::hid::InputSnapshot &out);
 
     unsigned shots = 0;
+    int f12_left = 0;              // frames still to write from one F12 press (NXRT_SHOT_BURST)
+    std::vector<uint8_t> shot_raw_buf;     // NXRT_SHOT_RAW: the last captured frame, RGBA
+    uint32_t shot_raw_w = 0, shot_raw_h = 0;
+    bool shot_raw_have = false;
+    unsigned shot_raw_idx = 0;
+    void write_raw_frame();
     bool f12_was_down = false;
     bool f11_was_down = false;
 };
+
+// Half resolution, raw RGBA, header of two uint32 (w, h): a burst that comes out in order and consecutive.
+void LiveInput::write_raw_frame() {
+    if (shot_raw_w < 2 || shot_raw_h < 2) return;
+    // The capture fills the vector and the dimensions together; anything else means a frame was skipped and the two no
+    // longer describe each other. Reading it without this check faulted at once (2026-11-21).
+    const size_t want = static_cast<size_t>(shot_raw_w) * shot_raw_h * 4;
+    if (shot_raw_buf.size() != want) {
+        static bool said = false;
+        if (!said) {
+            said = true;
+            NXLOG_E("input", "raw burst: buffer %zu bytes, but %ux%u needs %zu: skipped", shot_raw_buf.size(), shot_raw_w, shot_raw_h, want);
+        }
+        return;
+    }
+    const uint32_t w = shot_raw_w / 2, h = shot_raw_h / 2;
+    std::vector<uint8_t> half(static_cast<size_t>(w) * h * 4);
+    for (uint32_t y = 0; y < h; ++y) {
+        const uint8_t* r0 = shot_raw_buf.data() + static_cast<size_t>(2 * y) * shot_raw_w * 4;
+        const uint8_t* r1 = r0 + static_cast<size_t>(shot_raw_w) * 4;
+        uint8_t* o = half.data() + static_cast<size_t>(y) * w * 4;
+        for (uint32_t x = 0; x < w; ++x)
+            for (int c = 0; c < 4; ++c)
+                o[x * 4 + c] = static_cast<uint8_t>((r0[static_cast<size_t>(2 * x) * 4 + c] + r0[static_cast<size_t>(2 * x + 1) * 4 + c] +
+                                                     r1[static_cast<size_t>(2 * x) * 4 + c] + r1[static_cast<size_t>(2 * x + 1) * 4 + c]) / 4);
+    }
+    CreateDirectoryA("shots_raw", nullptr);
+    char path[64];
+    std::snprintf(path, sizeof path, "shots_raw\\frame_%04u.bin", shot_raw_idx++);
+    if (FILE* f = std::fopen(path, "wb")) {
+        const uint32_t head[2] = {w, h};
+        std::fwrite(head, sizeof head, 1, f);
+        std::fwrite(half.data(), 1, half.size(), f);
+        std::fclose(f);
+    }
+}
 
 void LiveInput::live(nxrt::hid::InputSnapshot &out) {
     using namespace nxrt::hid;
@@ -225,24 +270,60 @@ void LiveInput::live(nxrt::hid::InputSnapshot &out) {
         if (down(VK_SHIFT)) kb |= btn(kBtnStickL);
         if (down(VK_CONTROL)) kb |= btn(kBtnStickR);
         // F12: write the next presented frame as shots_manual/shot_NNNN.png (RGBA8). Works any time, also mid-cutscene.
-        const bool f12 = down(VK_F12);
+        // NXRT_SHOT_BURST=N makes one press take the next N frames: a flicker that lasts a few frames cannot be caught by
+        // hand, and a run of consecutive PNGs shows whether a part vanishes, moves or tears.
+        static const int shot_burst = [] {
+            const char* s = std::getenv("NXRT_SHOT_BURST");
+            const int n = s ? std::atoi(s) : 1;
+            return n > 0 ? n : 1;
+        }();
+        // NXRT_SHOT_RAW=1: the burst writes half-resolution raw RGBA instead of PNG. A 1440p PNG takes 200-300 ms to encode
+        // and the capture is one slot, so at 60 fps only every tenth frame of a burst survives; raw frames come out in order
+        // and consecutive, which is what a flicker that alternates per frame needs.
+        static const bool shot_raw = std::getenv("NXRT_SHOT_RAW") != nullptr;
+        const bool f12 = down(VK_F12) || tapped(VK_F12);
         if (f12 && !f12_was_down) {
+            f12_left = shot_burst;
+            shot_raw_have = false;
+            shot_raw_idx = 0;
+            NXLOG_I("input", "F12: %d frame(s) into %s", shot_burst, shot_raw ? "shots_raw" : "shots_manual");
+        }
+        f12_was_down = f12;
+        if (shot_raw) {
+            if (f12_left > 0 && shot_raw_have) {
+                write_raw_frame();     // the buffer filled at the end of the previous frame
+                --f12_left;
+            }
+            if (f12_left > 0 && g_renderer) {
+                g_renderer->capture_next_frame(&shot_raw_buf, &shot_raw_w, &shot_raw_h);
+                shot_raw_have = true;
+                if (f12_left == 1) NXLOG_I("input", "F12: %d raw frame(s) written", shot_raw_idx);
+            }
+        } else if (f12_left > 0 && g_renderer) {
             char path[64];
             std::snprintf(path, sizeof path, "shots_manual\\shot_%04u.png", ++shots);
             CreateDirectoryA("shots_manual", nullptr);
-            if (g_renderer) {
-                g_renderer->request_screenshot(path);
-                NXLOG_I("input", "F12: screenshot %s", path);
-            }
+            g_renderer->request_screenshot(path);
+            if (--f12_left == 0) NXLOG_I("input", "F12: %u screenshots written", shots);
         }
-        f12_was_down = f12;
         // F11: trace the next presented frame into the log and dump every render target it uses as trace_t<id>_<fmt>.png
         // in the working directory (with [nvn] trace_dump_tex set, every sampled texture too). The hands-on counterpart of
         // NXRT_NVN_TRACE_SEC: stand in front of something that looks wrong, press F11, and the frame can be taken apart.
-        const bool f11 = down(VK_F11);
+        const bool f11 = down(VK_F11) || tapped(VK_F11);
         if (f11 && !f11_was_down) {
-            nxrt::nvn::backend_trace_next_frame();
-            NXLOG_I("input", "F11: tracing the next frame (render targets -> trace_t<id>_<fmt>.png here)");
+            // NXRT_TRACE_SPAN=N: trace the next N presented frames instead of one. A flicker that alternates between frames
+            // cannot be caught by pressing a key at the right moment, and that is what this is for.
+            static const int trace_span = [] {
+                const char* s = std::getenv("NXRT_TRACE_SPAN");
+                return s ? std::atoi(s) : 0;
+            }();
+            if (trace_span > 0) {
+                nxrt::nvn::backend_trace_frames(trace_span);
+                NXLOG_I("input", "F11: tracing the next %d frames", trace_span);
+            } else {
+                nxrt::nvn::backend_trace_next_frame();
+                NXLOG_I("input", "F11: tracing the next frame (render targets -> trace_t<id>_<fmt>.png here)");
+            }
         }
         f11_was_down = f11;
     } else if (down(VK_F11) || down(VK_F12)) {
