@@ -41,10 +41,12 @@ namespace nxrt::nvn::be::gpu {
 namespace {
 
 constexpr const char* kTag = "nvn.gpu";
-constexpr uint32_t kSlots = 36;                  // about three frames of submissions (the game submits ~11 times a frame): with fewer, recording waits on
-                                                 // the GPU for a submission of a recent frame and the CPU cannot get frames ahead
+constexpr uint32_t kSlots = 72;                  // about six frames of submissions (the game submits ~11 times a frame): with fewer, recording waits on
+                                                 // the GPU for a submission of a recent frame and the CPU cannot get frames ahead. 36 wrapped on XC2 NS2's
+                                                 // heavy frames (texture streaming): slot.acquire waited 22 ms for the GPU in the middle of a replay
 constexpr uint32_t kGpMax = 1024;      // GPU pass profiler: timestamps per submission
-constexpr VkDeviceSize kUploadBytes = 8ull << 20;   // per slot; larger uploads get their own staging buffer
+constexpr VkDeviceSize kUploadBytes = 16ull << 20;  // per slot; larger uploads get their own staging buffer (made and freed per submission: the
+                                                    // replay-time snapshots of [nvn] mirror_cpu_snapshot / snapshot_instances need 10-25 MiB a frame)
 
 // Live-count gauges of this file (leak monitor, nxrt/gauge.h).
 nxrt::GaugeCounter g_gauge_deferred("nvn.deferred_destroy");     // closures waiting for their submission to finish (defer_destroy, Frame::defer)
