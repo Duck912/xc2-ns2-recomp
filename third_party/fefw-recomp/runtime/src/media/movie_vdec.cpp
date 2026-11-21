@@ -589,6 +589,17 @@ void vd_register_frames(::Ctx* c) {   // (self, VideoFrame** frames, int n)
             NXLOG_I(kTag, "one frame registered: added %zu frames of our own (%llu bytes each)", d->owned.size(),
                     static_cast<unsigned long long>(bytes));
     }
+    // A frame that has not been written yet must not look like anything. NV12 zeroes are Y=0, U=0, V=0, and the player's
+    // YUV->RGB turns that into a green field: the film's first frames on the AMD machine were green because the overlay was
+    // drawn before the decoder had delivered anything (2026-11-21, issue: opening film). Neutral limited-range black is
+    // Y=16, U=V=128, and our own frames come from malloc, so they have to be set either way.
+    for (uint64_t fr : d->frames) {
+        const uint64_t buf = rd64(fr + kVfBuf), cap = rd64(fr + kVfSize);
+        if (!buf || cap < 8) continue;
+        const size_t yb = static_cast<size_t>(cap) * 2 / 3;   // NV12: 2/3 luma, 1/3 interleaved chroma
+        std::memset(reinterpret_cast<void*>(buf), 16, yb);
+        std::memset(reinterpret_cast<uint8_t*>(reinterpret_cast<void*>(buf)) + yb, 128, static_cast<size_t>(cap) - yb);
+    }
     for (int i = static_cast<int>(d->frames.size()) - 1; i >= 0; --i) d->free_.push_back(d->frames[i]);
     deliver(*d);
     if (g_log) NXLOG_I(kTag, "VideoDecoder: %d frames registered", n);
