@@ -1346,7 +1346,10 @@ bool install_video_codec_hle() {
         // The XAudio2 sink queues 33-40 ms plus the device buffer, so a film that follows its own timestamps runs ahead of its
     // sound; this delays the picture instead of the audio. 110 ms was the value that lined the 4K CG up on the maintainer's
     // device at a 1440p window (2026-11-18/19: 50 too early, 120-180 the sound arrives first). Per-device, so it stays a key.
-    g_pts_shift_ns = config_get_int("media", "movie_pts_shift_ms", 110) * 1000000;
+    // 0 by default since 2026-11-21: the film's audio track is a placeholder (one byte a packet, the sound comes from the game's
+    // own stream), so compensating an XAudio2 queue that never carries it only tells the player every picture is 110 ms late -
+    // and at the start of the Torna opening film that lost the race often enough to freeze the picture or leave the overlay empty.
+    g_pts_shift_ns = config_get_int("media", "movie_pts_shift_ms", 0) * 1000000;
         g_pts_wallclock = config_get_bool("media", "movie_pts_wallclock", false);
         install_player_trace();   // [media] player_trace: the player's message queue and timer, logged as they are called
         for (const Import& im : kImports) {
