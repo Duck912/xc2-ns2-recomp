@@ -181,3 +181,13 @@ git log --oneline 6f1d964..HEAD -- third_party/fefw-recomp
   keeps every submitted packet, bounded at 8192 for memory, and eight is only the watermark of the submission-ready event).
   The rest is diagnostic: a per-second film-audio heartbeat, a stall dump that names the fence the client is armed on and the
   decoder's queues, a counter of GPU writes to the film's picture texture, and a texture registry that reports rewrites of it.
+
+- **runtime/src/media/video_codec.cpp, movie_adec.cpp (2026-11-21, film-model-10..12)** - the opening cutscene stalled 3-5 s and
+  then jumped into its middle. Three causes, all on the same axis - the client is starved while the game loads: the decoder
+  worker ran at below-normal priority from its first frame, so the first picture arrived 1089 ms after the client asked (it now
+  runs at normal priority until one picture exists, then drops back); the film's audio track, which is only the player's clock,
+  kept being handed out while the picture stood still, so the player skipped the picture forward to catch up with its own clock
+  (delivery now stops at the last picture's time plus half a second); and the worker held only four decoded pictures, so a
+  client returning from the loading screen could read one picture per ~40 ms decode and could never catch up (it now holds 24 for
+  the first ten seconds of a film, then drops back to four). Measured after: 23 pictures deep during the window, 3 after it,
+  no stall, one read 60 ms after its acquire.

@@ -92,6 +92,10 @@ constexpr uint32_t kResultBusy = 0x6f | (3603u << 9);
 constexpr uint64_t kSyncMarker = 0x4e58435600000000ull;   // "NXCV" in the high half of a fence handle's first word
 constexpr uint32_t kManualClear = 0;                      // nn::os::EventClearMode_ManualClear
 constexpr size_t kAhead = 4;        // pictures the worker may keep decoded ahead of the player (4 x 12 MB)
+constexpr size_t kAheadStartup = 24;   // ... until the client has read its first picture. The film starts while the game loads and
+                                       // the player's thread is starved for seconds; when it comes back it must be able to read a
+                                       // burst, not one picture per 40 ms decode - it can never catch up that way and skips
+                                       // forward instead (2026-11-21). 24 x 12 MB of NV12, only for that first window.
 constexpr size_t kPendingMax = 8192;   // packets queued undecoded (~500 MB of AV1 for a film, well past the 2810 of this one). Submits
                                       // only copy; the worker decodes ahead. The queue was 8 for a while and every submit then decoded
                                       // one packet inline (23 ms) on the player's thread, which starved it (frames 60-90 ms late).
@@ -325,6 +329,7 @@ struct Decoder {
     bool want_submit_signal = false;
     bool started = false;                                 // between Start*Decoder and Stop*Decoder: only then is input "ready"
     bool eos_pending = false;                             // end of stream seen, but the pictures before it have not all gone
+
     std::vector<uint8_t> last;                            // last decoded picture (NV12) for the end-of-stream buffer
     uint16_t last_w = 0, last_h = 0;
     uint64_t pictures = 0;
@@ -478,9 +483,14 @@ Picture to_nv12(const vpx_image_t* img, int64_t pts) {
 
 // Copies `p` into the pool's image. The picture decides the pool's size: the preference the library computed is not needed for
 // the copy, and the frame properties reported to it come from the same picture, so a stale or rounded preference cannot crop it.
+// The time of the last picture actually handed to the client. The film's audio track is only its rhythm source, so it is not
+// allowed to run ahead of this: during the loading screen the picture thread is starved for seconds, and an audio clock that
+// kept going made the player skip the picture forward to catch up with it (measured 2026-11-21).
+std::atomic<int64_t> g_film_video_pts{0};
 void place(Pool& pool, uint32_t index, const Picture& p) {
     pool.w = p.w;
     pool.h = p.h;
+    if (p.pts > g_film_video_pts.load(std::memory_order_relaxed)) g_film_video_pts.store(p.pts, std::memory_order_relaxed);
     const size_t pw = pool.w, ph = pool.h;
     std::vector<uint8_t>& image = pool.img(index);
     image.assign(pw * ph + pw * ph / 2, 0);
@@ -594,6 +604,7 @@ void after_change(::Ctx* c, Decoder& d, bool fences) {
 // See the note above g_film_ranges: true when [addr, addr+size) overlaps a buffer a film frame was read into. Outside the
 // anonymous namespace so the NVN copy path can ask (api_cmd_work.cpp).
 bool media_film_active() { return g_film_active.load(std::memory_order_relaxed); }
+int64_t media_film_video_pts() { return g_film_video_pts.load(std::memory_order_relaxed); }
 
 // Diagnostic for the player trace's stall watchdog (no locks held by the caller): what the decoder holds, and what the client
 // is still armed on. "REACHED" means the picture is in the buffer and our signal never got out; "not reached" means no picture
@@ -614,7 +625,9 @@ void media_dump_state(const char* why) {
             fifo = d->fifo.size();
             for (auto& s : d->slot) if (s.filled) ++filled;
         }
-        NXLOG_W("vcodec", "%s: decoder %u pending %zu ready %zu pend %zu fifo %zu filled %zu", why, d->id, pending, ready, pend, fifo, filled);
+        NXLOG_W("vcodec", "%s: decoder %u pending %zu ready %zu pend %zu fifo %zu filled %zu | placed %llu read %llu pictures %llu",
+                why, d->id, pending, ready, pend, fifo, filled, (unsigned long long)s_delivered.load(),
+                (unsigned long long)s_read.load(), (unsigned long long)d->pictures);
     }
     std::lock_guard<std::mutex> lk(g_evt_mu);
     if (g_armed.empty()) NXLOG_W("vcodec", "%s: the client is not armed on any decoder fence", why);
@@ -946,6 +959,7 @@ void read_nv12(::Ctx* c) {
     }
     const uint32_t image_index = static_cast<uint32_t>(A(1) & 0xffff);
     if (!p || p->imgs.empty() || image_index >= p->count() || p->imgs[image_index].empty() || !ydst) { RET(0); return; }
+
     const std::vector<uint8_t>& nv12 = p->imgs[image_index];
     film_range_note(reinterpret_cast<uint64_t>(ydst), static_cast<uint64_t>(h) * ystride * 3 / 2);
     // NXRT_FILM_HASH=1: a numeric fingerprint of every read, sampled over the luma plane. Numbers in the log answer "does the
@@ -1276,13 +1290,24 @@ void decode_one(Decoder& d) {
 void worker_loop(Decoder& d) {
     t_on_worker = true;
     // The film starts while the game is still loading, and the player's own thread is what loses the CPU then (frames every
-    // 2-8 s for the first ~20 s). Keep the decoders off its way.
-    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+    // 2-8 s for the first ~20 s). Keeping the decoders off its way is right for the steady state - but not for the FIRST
+    // picture: below normal during loading, the frame arrived 1089 ms after the acquire, the player counted it as late and
+    // jumped the film forward (measured 2026-11-21). So: normal priority until a picture exists, below normal after.
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL);
+    bool lowered = false;
     std::unique_lock<std::mutex> lk(d.mu);
+    const auto born = std::chrono::steady_clock::now();
     for (;;) {
         // Heartbeat: a worker that stops popping while packets are queued is what a stalled film looks like from outside
         // (2026-11-21), and a counter says whether it is asleep in its wait or stuck inside a decode.
-        d.cv.wait(lk, [&] { return d.stop || (!d.pending.empty() && d.ready.size() < kAhead); });
+        d.cv.wait(lk, [&] {
+            // Wider window for the first ten seconds of a film: it starts while the game loads and the player's thread is
+            // starved for seconds; when it comes back it must be able to read a burst rather than one picture per 40 ms
+            // decode, which it can never catch up with (2026-11-21).
+            const bool fresh = std::chrono::steady_clock::now() - born < std::chrono::seconds(10);
+            const size_t ahead = fresh ? kAheadStartup : kAhead;
+            return d.stop || (!d.pending.empty() && d.ready.size() < ahead);
+        });
         if (d.stop) return;
         {
             static std::atomic<uint32_t> n{0};
@@ -1294,6 +1319,10 @@ void worker_loop(Decoder& d) {
         lk.unlock();
         decode_one(d);
         lk.lock();
+        if (!lowered && !d.ready.empty()) {
+            lowered = true;   // the first picture exists: from here on the worker stays out of the player's way
+            SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+        }
         // Pictures go into the buffers waiting in "pend" at once: the client polls those sync handles, so a picture that
         // only moved on the next guest call would look like a stalled film.
         assign(d);

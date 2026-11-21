@@ -32,6 +32,9 @@
 #endif
 
 namespace nxrt::media {
+
+int64_t media_film_video_pts();   // video_codec.cpp: the time of the last picture handed to the client
+
 namespace {
 
 #define A(i) (c->x[i])
@@ -401,8 +404,13 @@ void adec_flush(::Ctx* c) {
 // output-ready event. A chunk larger than the frame's buffer is cut, which the player hears as a click but never as a stall.
 void deliver_sound(AudioDecoder& d) {
     bool any = false;
-    const auto now = std::chrono::steady_clock::now();
+    // The film's audio track is a placeholder the player uses as a clock, not sound anyone hears (the game plays its own).
+    // It must not run ahead of the picture: while the loading screen starves the picture thread for seconds, an audio clock
+    // that kept going made the player skip the picture forward to catch up with it - "stalls 3-5 s, then jumps into the
+    // middle" (measured 2026-11-21).
+    const int64_t video_pts = media_film_video_pts();
     while (!d.sound.empty() && !d.free_.empty()) {
+        if (d.sound.front().time > video_pts + 500'000'000ll) break;   // more than half a second ahead of the picture
         const uint64_t f = d.free_.back();
         d.free_.pop_back();
         Sound& s = d.sound.front();
