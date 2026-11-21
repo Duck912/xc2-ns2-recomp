@@ -175,6 +175,11 @@ const OsFns& os() {
     return f;
 }
 
+// Bytes one NV12 image of w x h needs (w and h even).
+uint64_t nv12_storage(uint32_t w, uint32_t h) {
+    return static_cast<uint64_t>(w) * h + static_cast<uint64_t>(w) * h / 2;
+}
+
 // ---- image pools --------------------------------------------------------------------------------------------------------------------
 struct Pool {
     uint16_t w = 0, h = 0;      // the image size the pool was made for (even)
@@ -559,8 +564,17 @@ void make_pref(::Ctx* c) {   // MakeDecodeImagePreference(w, h, format, mode) ->
     RET(out);
 }
 void calc_pool(::Ctx* c) {   // CalculateDecoderImagePoolBuffer(size*, align*, pref*, count): the pictures live on the host
+    // The size has to be what one 4K NV12 picture really needs per image: 0x1000 a picture told the library a pool this big
+    // holds one image, and it then asked for count 1 and armed fences nothing could complete (2026-11-21).
     const uint32_t n = std::max<uint32_t>(1, static_cast<uint32_t>(A(3)));
-    if (A(0)) wr64(A(0), 0x1000ull * n);
+    uint32_t w = 0, h = 0;
+    const uint64_t pref = A(2);
+    if (pref && rd64(pref + 16) == kPrefMarker) {
+        std::memcpy(&w, reinterpret_cast<const void*>(pref), 2);
+        std::memcpy(&h, reinterpret_cast<const void*>(pref + 2), 2);
+    }
+    const uint64_t per = (w && h) ? nv12_storage(w, h) : 0x1000ull;
+    if (A(0)) wr64(A(0), per * n);
     if (A(1)) wr64(A(1), 0x1000);
     RET(0);
 }
@@ -589,10 +603,14 @@ void init_pool(::Ctx* c) {   // InitializeDecoderImagePool(pool, mem, size, pref
             std::memset(im.data(), 16, n);
         }
     }
-    if (g_log)
-        NXLOG_I("vcodec", "InitializeDecoderImagePool %llx: %ux%u format %u (image %zu bytes, uv0 %u)", (unsigned long long)g, p->w, p->h,
-                p->format, p->imgs.empty() ? size_t(0) : p->imgs[0].size(),
+    {
+        static std::atomic<uint32_t> n{0};
+        if (n.fetch_add(1, std::memory_order_relaxed) < 6)
+        NXLOG_I("vcodec", "InitializeDecoderImagePool %llx: %ux%u format %u count %u (image %zu bytes, uv0 %u)", (unsigned long long)g, p->w, p->h,
+                p->format, p->count(),
+                p->imgs.empty() ? size_t(0) : p->imgs[0].size(),
                 (!p->imgs.empty() && p->imgs[0].size() > static_cast<size_t>(p->w) * p->h) ? p->imgs[0][static_cast<size_t>(p->w) * p->h] : 999u);
+    }
     RET(0);
 }
 void fini_pool(::Ctx* c) {
@@ -993,18 +1011,14 @@ void acquire_output(::Ctx* c) {   // (u32* index, NativeSyncHandle* fence, dec)
             // can ever complete. Fences are only completed on guest calls, and a player waiting in that fence makes no call,
             // so the film stayed on its empty texture - a green picture with zero reads, one run in three (2026-11-21). It
             // reads the pool's neutral image instead and comes back once packets exist.
-            if (d->ready.empty() && d->pending.empty()) {
-                d->done_seq.store(seq);
-                fences = true;
-                ++d->completed_early;
-            } else {
-                d->waiting.emplace_back(index, seq);
-            }
-            // Usually the worker already has the picture. If it does not within a moment, decode here: the library arms its fence
-            // right after this call and waits for it, so handing out an incomplete fence and hoping a later submit completes it
-            // stalls the player for as long as that wait takes (3-16 s frames at the film's start, 2026-11-18).
-            if (d->ready.empty() && !d->pending.empty() &&
-                !d->cv.wait_for(lk, std::chrono::milliseconds(2), [&] { return !d->ready.empty() || d->stop; })) {
+            d->waiting.emplace_back(index, seq);
+            // Acquire is a blocking call in nn::codec: the output buffer is handed over once a picture is in it. Returning at
+            // once with a fence nothing can complete made the player spin - 11 acquisitions in 0.3 ms, all index 0, free 0,
+            // and the film stayed on the pool's neutral image (2026-11-21). Wait for the picture here; the player is blocked
+            // on this call in its own design.
+            if (d->ready.empty())
+                d->cv.wait_for(lk, std::chrono::milliseconds(500), [&] { return !d->ready.empty() || d->stop; });
+            if (d->ready.empty() && !d->pending.empty()) {
                 lk.unlock();
                 decode_one(*d);
                 lk.lock();
@@ -1018,11 +1032,13 @@ void acquire_output(::Ctx* c) {   // (u32* index, NativeSyncHandle* fence, dec)
         wr64(A(1), d && seq ? (kSyncMarker | d->id) : 0);
         wr64(A(1) + 8, seq);
     }
-    if (g_log && d) {
+    if (d) {
+        // Always, first 16: the film's first second decides whether it plays, and this is what says why (2026-11-21).
         static std::atomic<uint32_t> n{0};
-        if (n.fetch_add(1, std::memory_order_relaxed) < 12)
-            NXLOG_I("vcodec", "decoder %u: acquire -> index %u, fence %llu (ready %zu, free %zu)", d->id, index, (unsigned long long)seq,
-                    d->ready.size(), d->free.size());
+        if (n.fetch_add(1, std::memory_order_relaxed) < 16)
+            NXLOG_I("vcodec", "decoder %u: acquire -> index %u, fence %llu (ready %zu, pending %zu, waiting %zu, free %zu, early %u, pool %u)",
+                    d->id, index, (unsigned long long)seq, d->ready.size(), d->pending.size(), d->waiting.size(), d->free.size(),
+                    d->completed_early.load(), [&] { auto it = d->pools.find(index); Pool* p = it == d->pools.end() ? nullptr : pool_of(it->second); return p ? p->count() : 0u; }());
     }
     if (d) after_change(c, *d, fences);
     RET(0);
