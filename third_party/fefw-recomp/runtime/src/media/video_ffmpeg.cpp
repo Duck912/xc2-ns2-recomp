@@ -35,6 +35,7 @@ AVCodecID codec_id(int codec) {
 AVHWDeviceType hw_device_type() {
     static const AVHWDeviceType t = [] {
         std::string b = config_get_str("media", "hwdec_backend", "auto");
+        NXLOG_I(kTag, "hwdec_backend = '%s'", b.c_str());
         for (char& c : b)
             if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
         if (b == "d3d11va" || b == "d3d11") return AV_HWDEVICE_TYPE_D3D11VA;
