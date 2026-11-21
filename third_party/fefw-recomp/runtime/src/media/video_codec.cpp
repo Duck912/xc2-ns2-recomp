@@ -232,7 +232,6 @@ struct Decoder {
     long long first_picture_ms = -1;
     std::mutex dec_mu;                                    // the codec context and last picture: the worker decodes, the guest may fall back
     std::thread worker;                                   // decodes pending packets ahead of the player, off its thread
-    std::atomic<uint32_t> waited_for_picture{0};          // submissions that waited for the worker instead of returning an unpaired buffer
     std::condition_variable cv;
     bool stop = false;
     bool worker_started = false;
@@ -939,14 +938,6 @@ void submit_packet(::Ctx* c, uint64_t dec, const uint8_t* data, size_t size, int
         // service the player (the acquire-to-read gap was 48-69 ms with the copies at 1.1-1.7 ms, 2026-11-18). The worker decodes
         // ahead instead; this only wakes it.
         d->cv.notify_all();
-        // A buffer acquired before the first packet has nothing to pair with yet, and assign() only runs on guest calls: if
-        // the worker then decodes the first picture while the player sits in its fence wait, nothing pairs it and the film
-        // stays on the player's empty texture (green picture, zero reads; the other two runs out of three worked, 2026-11-21).
-        // Wait here for the worker's picture, which keeps the pairing and the fence on the guest thread as before.
-        if (!d->waiting.empty() && d->ready.empty() && !d->pending.empty()) {
-            if (d->cv.wait_for(lk, std::chrono::milliseconds(50), [&] { return !d->ready.empty() || d->stop; }))
-                ++d->waited_for_picture;
-        }
         fences = assign(*d);
         d->want_submit_signal = true;
     }
