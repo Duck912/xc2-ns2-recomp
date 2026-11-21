@@ -2374,6 +2374,16 @@ VkDescriptorSet build_set(const ProgLayout& pl, uint32_t set) {
                         const GState::Bind& bind = S.ssbo[d.nvn_stage][slot];
                         BufRef br = resolve_buffer(bind.addr, bind.size);
                         bi = {br.buffer, br.offset, std::min<VkDeviceSize>(bind.size ? bind.size : br.avail, br.avail)};
+                        if (br.ok && mirror_capture_on()) {   // [nvn] mirror_capture: reads and writes go through the pool's copy
+                            static const bool ro_cap = nxrt::config_get_bool("nvn", "gfx_ssbo_readonly", true);
+                            const bool wr = !(ro_cap && d.nvn_stage != kCompute && !b.written);
+                            const BufRef cr = mirror_capture_bind(bind.addr, bi.range, wr);
+                            if (cr.ok && cr.buffer != br.buffer) {
+                                bi.buffer = cr.buffer;
+                                bi.offset = cr.offset;
+                                break;
+                            }
+                        }
                         if (!g_shadowing && br.ok && out_lazy() && out_overlaps(bind.addr, bi.range)) {   // a draw over a held compute result: the copy
                             const BufRef hb = held_or_pool(bind.addr, bi.range, kOutStorageXfb, false);
                             if (hb.buffer != br.buffer) {
@@ -5524,6 +5534,7 @@ void do_write_memory(uint64_t gpu_addr, const void* data, uint32_t size) {
     if (!b.ok) return;
     gpu_wrote(gpu_addr, size, kWriteUpdate);
     vkCmdUpdateBuffer(F->cb, b.buffer, b.offset, size, data);
+    mirror_capture_update(F->cb, gpu_addr, data, size);   // [nvn] mirror_capture: the same bytes into the copy
     memory_barrier(F->cb);
     gstamp("write memory");
 }
@@ -6422,6 +6433,7 @@ void replay_end_submit(Frame& f) {
         out_end_submit(F->cb, F->serial);
     }
     end_pass();
+    if (mirror_capture_on()) mirror_capture_end(F->cb);   // GPU writes in the copies back to the pools before the serial signals
     mirror_end_submit();
     if ((f.serial & 127) == 0 && !g_fb_clone.empty()) fb_sweep(f.serial);
     if ((f.serial & 127) == 0 && !g_vol3d.empty()) {   // 3D copies of 2D textures no submission used for kFbIdleSubmits are released

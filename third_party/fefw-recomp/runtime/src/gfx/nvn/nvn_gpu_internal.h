@@ -8,6 +8,7 @@
 //   nvn_present.cpp      window texture -> swapchain
 // Everything declared here must be called on the render thread (gpu::on_render_thread()) unless it says otherwise.
 #pragma once
+#include <memory>
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -160,6 +161,14 @@ bool note_gpu_write(uint64_t gpu_address, uint64_t size, int use);
 void mirror_begin_submit(Frame& f, bool on);
 void mirror_end_submit();   // [nvn] mirror_cpu_snapshot: no submission is recorded any more (snapshots need one)
 void mirror_destroy(PoolGpu* p);
+// [nvn] mirror_capture (nvn_gpu_pool.cpp): every GPU access to a mirrored pool goes through its copy, filled from submit-time captures
+bool mirror_capture_on();
+BufRef mirror_capture_bind(uint64_t gpu_address, uint64_t size, bool write);
+void mirror_capture_update(VkCommandBuffer cb, uint64_t gpu_address, const void* data, uint32_t size);
+void mirror_capture_begin(Frame& f);
+std::shared_ptr<void> mirror_capture_take();          // game thread, in the submit call (null: no submit-time capture)
+void mirror_capture_set(std::shared_ptr<void> cap);   // render thread: the capture of the submission about to start
+void mirror_capture_end(VkCommandBuffer cb);
 
 // ---- compute results held in the pool copy (nvn_gpu_pool.cpp, "compute out") ----------------------------------------------------
 // A dispatch that binds the pool copy directly (nvn_replay.cpp, compute shadows) writes its result there: the range is "out" until the

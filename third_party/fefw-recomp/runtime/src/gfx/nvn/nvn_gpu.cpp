@@ -971,7 +971,14 @@ bool async_submit() {
 uint64_t submit(const std::vector<Ref<CmdList>>& lists) {
     if (!g) return ++g_idle_serial;
     NXFT("submit");
-    return queue_submit([lists](Frame& f) {
+    // [nvn] mirror_capture: the CPU's writes since the last submit are copied now, before the game can write its next frame; capture and
+    // queueing under one lock, so captures stay in queue order
+    static std::mutex cap_order;
+    std::unique_lock<std::mutex> cap_lk(cap_order, std::defer_lock);
+    std::shared_ptr<void> cap;
+    if (mirror_capture_on()) { cap_lk.lock(); cap = mirror_capture_take(); }
+    return queue_submit([lists, cap](Frame& f) {
+        mirror_capture_set(cap);
         replay_begin_submit(f);
         replay_lists(f, lists);
         replay_end_submit(f);
