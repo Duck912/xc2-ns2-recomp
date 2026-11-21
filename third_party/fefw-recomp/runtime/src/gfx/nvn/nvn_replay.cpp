@@ -6312,6 +6312,7 @@ void replay_end_submit(Frame& f) {
         out_end_submit(F->cb, F->serial);
     }
     end_pass();
+    mirror_end_submit();
     if ((f.serial & 127) == 0 && !g_fb_clone.empty()) fb_sweep(f.serial);
     if ((f.serial & 127) == 0 && !g_vol3d.empty()) {   // 3D copies of 2D textures no submission used for kFbIdleSubmits are released
         g_vol3d_use.clear();

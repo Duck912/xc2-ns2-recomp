@@ -155,6 +155,7 @@ void mirror_span_written(uint64_t gpu_address, uint64_t size);
 bool mirror_fill(VkCommandBuffer cb, uint64_t gpu_address, uint64_t size, uint64_t* bytes);
 bool note_gpu_write(uint64_t gpu_address, uint64_t size, int use);
 void mirror_begin_submit(Frame& f, bool on);
+void mirror_end_submit();   // [nvn] mirror_cpu_snapshot: no submission is recorded any more (snapshots need one)
 void mirror_destroy(PoolGpu* p);
 
 // ---- compute results held in the pool copy (nvn_gpu_pool.cpp, "compute out") ----------------------------------------------------

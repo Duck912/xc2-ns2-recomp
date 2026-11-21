@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
+#include <cstring>
 #include <deque>
 #include <mutex>
 #include <memory>
@@ -14,6 +15,7 @@
 #include <thread>
 #include <vector>
 #include <new>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "nxrt/config.h"
@@ -502,6 +504,8 @@ struct Mirror {
     // compute out (below): pages where a compute result in the copy is newer than the pool, and pages the CPU has read compute results
     // from (any thread sets them; atomics)
     std::unique_ptr<std::atomic<uint64_t>[]> gpu_new, cpu_read;
+    std::vector<uint32_t> cpu_wr_at;    // present count when a CPU write to the page was last seen (0: never): dynamic data, snapshot it
+    std::vector<uint64_t> gpu_wr;       // serial of the submission that last wrote the page on the GPU (0: never): CPU snapshots wait for it
 };
 
 namespace {
@@ -514,6 +518,31 @@ constexpr uint8_t kHotHits = 2;                                      // two copi
 constexpr uint32_t kHotHold = 600;                                   // ... and is not copied for 600 presents, twice that the next time, ...
 constexpr uint8_t kHotMaxShift = 4;                                  // ... up to 16 times
 constexpr uint32_t kHotWindow = 4;                                   // a write this many presents or fewer after the copy counts even when draws read it
+
+// [nvn] mirror_cpu_snapshot (default on): copies into the mirror, and reads that stay in the pool (up to kSnapMax bytes), take the CPU's
+// bytes at replay time (memcpy into this submission's upload memory) instead of having the GPU read the pool when the copy runs. A GPU
+// copy from the pool reads what the CPU wrote after the draw was recorded: XC2 NS2 rewrites its per-frame data (double-buffered, one
+// frame later) while the GPU still runs the frame that reads it, which made draws read the next frame's bytes (garbage indices, device
+// lost). Pages a GPU submission wrote that has not completed yet keep the GPU copy (their bytes are not in memory yet).
+constexpr uint64_t kSnapMax = 512ull << 10;
+constexpr uint64_t kSnapBudget = 96ull << 20;                         // CPU-snapshot bytes per submission at most (the rest reads the pool)
+bool cpu_snapshot_on() {
+    static const bool on = config_get_bool("nvn", "mirror_cpu_snapshot", true);
+    return on;
+}
+Frame* g_cur_frame = nullptr;           // the submission being recorded (mirror_begin_submit)
+uint64_t g_snap_used = 0;               // its CPU-snapshot bytes so far
+std::unordered_map<uint64_t, BufRef> g_snap_cache;   // (address ^ size << 40) -> the snapshot made this submission
+std::unordered_map<uint64_t, BufRef> g_snap_blk;     // host address of a 1 MiB pool block -> its snapshot this submission (ok false: none)
+int64_t g_st_snap_fill = 0, g_st_snap_bind = 0, g_st_snap_gpuwr = 0, g_st_snap_over = 0, g_st_snap_static = 0, g_st_snap_blocks = 0;
+constexpr uint32_t kSnapRecent = 16;                   // presents: a page the CPU wrote this recently is dynamic
+constexpr uint64_t kSnapBlock = 1ull << 20;            // ring memory is snapshotted in blocks of this size
+bool gpu_wr_done(const Mirror& m, uint64_t first, uint64_t last) {   // no page of [first, last] has a GPU write still in flight
+    const uint64_t done = completed_serial();
+    for (uint64_t p = first; p <= last; ++p)
+        if (m.gpu_wr[static_cast<size_t>(p)] > done) return false;
+    return true;
+}
 
 // [nvn] mirror_hot_used (default on): a page the CPU rewrites within kHotWindow presents of its copy, kHotHits times in a row, goes hot even
 // when draws read it (per-frame vertices, uniforms and texels). Each such rewrite was a write fault on the game's thread (a vectored exception
@@ -651,6 +680,8 @@ Mirror* mirror_for(PoolGpu* pg, MemoryPool* mp) {
     m->backoff.assign(static_cast<size_t>(m->npages), 0);
     m->hot_until.assign(static_cast<size_t>(m->npages), 0);
     m->pool_bytes = pg->size;
+    m->gpu_wr.assign(static_cast<size_t>(m->npages), 0);
+    m->cpu_wr_at.assign(static_cast<size_t>(m->npages), 0);
     m->gpu_new.reset(new std::atomic<uint64_t>[words]);
     m->cpu_read.reset(new std::atomic<uint64_t>[words]);
     for (size_t i = 0; i < words; ++i) { m->gpu_new[i].store(0, std::memory_order_relaxed); m->cpu_read[i].store(0, std::memory_order_relaxed); }
@@ -671,6 +702,7 @@ void absorb_writes(Mirror& m, uint32_t now) {
     m.st_written += static_cast<int64_t>(g_written_tmp.size());
     for (uint64_t p : g_written_tmp) {
         const size_t i = static_cast<size_t>(p);
+        m.cpu_wr_at[i] = now ? now : 1;
         bit_put(m.want, p, false);
         if (m.copied_at[i] == 0) continue;                     // never copied: nothing was wasted
         const bool soon = hot_used_on() && now - m.copied_at[i] <= kHotWindow;   // rewritten right after its copy: per-frame data
@@ -821,6 +853,55 @@ BufRef resolve_read(uint64_t gpu_address, uint64_t size, int use) {
     for (uint64_t p = first; p <= last; ++p) bit_put(m->want, p, true);
     m->any_want = true;
     g_st_host_binds.fetch_add(1, std::memory_order_relaxed);
+    if (cpu_snapshot_on() && g_cur_frame && size <= kSnapMax) {   // the CPU's bytes now, not when the GPU gets to the draw
+        const uint64_t key = gpu_address ^ (size << 40);
+        auto it = g_snap_cache.find(key);
+        if (it != g_snap_cache.end()) { g_st_snap_bind++; return it->second; }
+        bool dynamic = false;   // only data the CPU rewrites can race; static data (not copied yet) is read in place
+        const uint32_t now = presents_now();
+        for (uint64_t p = first; p <= last && !dynamic; ++p)
+            dynamic = m->hot_until[static_cast<size_t>(p)] > now || (m->cpu_wr_at[static_cast<size_t>(p)] && now - m->cpu_wr_at[static_cast<size_t>(p)] <= kSnapRecent);
+        if (!dynamic) { g_st_snap_static++; return out; }
+        // the 1 MiB block of the pool around the range, copied once per submission: ring buffers bind a new slice per draw
+        {
+            const uint64_t blk = poff & ~(kSnapBlock - 1);
+            if (poff + size <= blk + kSnapBlock) {
+                const uint64_t bkey = reinterpret_cast<uint64_t>(m->pg->base) + blk;
+                auto bt = g_snap_blk.find(bkey);
+                if (bt == g_snap_blk.end()) {
+                    const uint64_t blen = std::min<uint64_t>(kSnapBlock, m->pg->size - blk);
+                    const uint64_t bf = blk / kPageBytes, bl = std::min<uint64_t>((blk + blen - 1) / kPageBytes, m->npages - 1);
+                    BufRef bref;
+                    if (gpu_wr_done(*m, bf, bl) && g_snap_used + blen <= kSnapBudget) {
+                        NXFT_MIN("snap.block", 1000000);
+                        UploadAlloc u = g_cur_frame->upload(blen, 256);
+                        if (u) {
+                            std::memcpy(u.ptr, m->pg->base + blk, static_cast<size_t>(blen));
+                            g_snap_used += blen;
+                            g_st_snap_blocks++;
+                            bref = BufRef{u.buffer, u.offset, blen, true};
+                        }
+                    }
+                    bt = g_snap_blk.emplace(bkey, bref).first;   // a failed block (GPU writes in flight, budget) is not tried again this submission
+                }
+                if (bt->second.ok) {
+                    g_st_snap_bind++;
+                    const uint64_t d = poff - blk;
+                    return BufRef{bt->second.buffer, bt->second.offset + d, bt->second.avail - d, true};
+                }
+            }
+        }
+        if (!gpu_wr_done(*m, first, last)) { g_st_snap_gpuwr++; return out; }
+        if (g_snap_used + size > kSnapBudget) { g_st_snap_over++; return out; }
+        UploadAlloc u = g_cur_frame->upload(size, 256);
+        if (!u) return out;
+        std::memcpy(u.ptr, m->pg->base + poff, static_cast<size_t>(size));
+        g_snap_used += size;
+        g_st_snap_bind++;
+        BufRef sb{u.buffer, u.offset, size, true};
+        g_snap_cache.emplace(key, sb);
+        return sb;
+    }
     return out;
 }
 
@@ -901,7 +982,18 @@ bool mirror_fill(VkCommandBuffer cb, uint64_t gpu_address, uint64_t size, uint64
                 bit_put(m.used, i, true);
                 bit_put(m.want, i, false);
             }
-            copies.push_back(VkBufferCopy{p * kPageBytes - src_base, p * kPageBytes - base, (q - p) * kPageBytes});
+            const uint64_t len = (q - p) * kPageBytes;
+            UploadAlloc su;
+            if (cpu_snapshot_on() && g_cur_frame && gpu_wr_done(m, p, q - 1) && g_snap_used + len <= kSnapBudget) su = g_cur_frame->upload(len, 256);
+            if (su) {   // [nvn] mirror_cpu_snapshot: the CPU's bytes now (armed above, so a later write invalidates the page)
+                std::memcpy(su.ptr, m.pg->base + p * kPageBytes, static_cast<size_t>(len));
+                g_snap_used += len;
+                g_st_snap_fill++;
+                const VkBufferCopy c{su.offset, p * kPageBytes - base, len};
+                vkCmdCopyBuffer(cb, su.buffer, chunk, 1, &c);
+            } else {
+                copies.push_back(VkBufferCopy{p * kPageBytes - src_base, p * kPageBytes - base, (q - p) * kPageBytes});
+            }
             m.st_copied += static_cast<int64_t>(q - p);
             g_st_copied.fetch_add(static_cast<int64_t>((q - p) * kPageBytes), std::memory_order_relaxed);
             if (bytes) *bytes += (q - p) * kPageBytes;
@@ -928,6 +1020,10 @@ bool note_gpu_write(uint64_t gpu_address, uint64_t size, int use) {
     // word by word (page by page this was ~3.5 % of the render thread: draws note their storage buffers, MiBs each; notes/rt.md)
     const bool stale = mem::ww::any_valid(m.ww, first, last - first + 1);
     mem::ww::invalidate(m.ww, first, last - first + 1);
+    {
+        const uint64_t ser = current_serial();
+        for (uint64_t p = first; p <= last; ++p) m.gpu_wr[static_cast<size_t>(p)] = ser;
+    }
     for (uint64_t p = first; p <= last;) {
         const uint64_t lo = p & 63, hi = std::min<uint64_t>(64, lo + (last + 1 - p));
         const uint64_t mask = (hi - lo == 64) ? ~uint64_t{0} : (((uint64_t{1} << (hi - lo)) - 1) << lo);
@@ -937,7 +1033,11 @@ bool note_gpu_write(uint64_t gpu_address, uint64_t size, int use) {
     return stale;
 }
 
+void mirror_end_submit() { g_cur_frame = nullptr; g_snap_cache.clear(); g_snap_blk.clear(); }
+
 void mirror_begin_submit(Frame& f, bool on) {
+    NXFT_MIN("mirror.begin", 2000000);   // [prof] trace: only the submissions where the copies and the write-watch poll took 2 ms or more
+    g_cur_frame = nullptr;
     g_mirror_on = on && mirror_mode() != MirrorMode::Off;
     out_retire();
     out_log();
@@ -947,8 +1047,23 @@ void mirror_begin_submit(Frame& f, bool on) {
     }
     const uint32_t now = presents_now();
     log_summary(now);
+    g_cur_frame = &f;
+    g_snap_used = 0;
+    g_snap_cache.clear();
+    g_snap_blk.clear();
+    {
+        static uint32_t last = 0;
+        if (now - last >= 1200 && cpu_snapshot_on()) {
+            last = now;
+            NXLOG_I(kTag, "mirror_cpu_snapshot: blocks %lld, fills %lld runs, binds %lld, static (read in place) %lld, kept on the GPU (GPU write in flight) %lld, over the budget %lld",
+                    (long long)g_st_snap_blocks, (long long)g_st_snap_fill, (long long)g_st_snap_bind, (long long)g_st_snap_static, (long long)g_st_snap_gpuwr, (long long)g_st_snap_over);
+        }
+    }
     uint64_t budget = kCopyBudget;
     bool barrier_done = false;
+    struct Staged { VkBuffer src; VkDeviceSize soff; VkBuffer dst; VkDeviceSize doff, len; };
+    static std::vector<Staged> staged;
+    staged.clear();
     g_arm_spent_ns = 0;          // the arming budget is per submission (mirror_fill and mirror_span_written during recording count too)
     for (Mirror* mp : g_mirrors) {
         Mirror& m = *mp;
@@ -977,7 +1092,19 @@ void mirror_begin_submit(Frame& f, bool on) {
                 m.copied_at[static_cast<size_t>(i)] = now ? now : 1;
                 bit_put(m.used, i, false);
             }
-            if (armed) {
+            const uint64_t len = (q - p) * kPageBytes;
+            UploadAlloc su;
+            if (armed && cpu_snapshot_on() && gpu_wr_done(m, p, q - 1) && g_snap_used + len <= kSnapBudget) su = f.upload(len, 256);
+            if (armed && su) {   // armed first, then read: a CPU write after the arm faults and invalidates the page again
+                std::memcpy(su.ptr, m.pg->base + p * kPageBytes, static_cast<size_t>(len));
+                g_snap_used += len;
+                g_st_snap_fill++;
+                const uint64_t base = (p / chunk_pages) * granule_bytes();
+                staged.push_back(Staged{su.buffer, su.offset, m.chunks[static_cast<size_t>(p / chunk_pages)].buffer, p * kPageBytes - base, len});
+                budget -= len;
+                m.st_copied += static_cast<int64_t>(q - p);
+                g_st_copied.fetch_add(static_cast<int64_t>(len), std::memory_order_relaxed);
+            } else if (armed) {
                 const uint64_t base = (p / chunk_pages) * granule_bytes();
                 g_copy_tmp.push_back(VkBufferCopy{p * kPageBytes, p * kPageBytes - base, (q - p) * kPageBytes});
                 budget -= (q - p) * kPageBytes;
@@ -1002,6 +1129,16 @@ void mirror_begin_submit(Frame& f, bool on) {
             for (size_t k = i; k < j; ++k) g_copy_tmp[k].srcOffset -= src_base;
             if (src) vkCmdCopyBuffer(f.cb, src, m.chunks[ci].buffer, static_cast<uint32_t>(j - i), g_copy_tmp.data() + i);
             i = j;
+        }
+    }
+    if (!staged.empty()) {   // [nvn] mirror_cpu_snapshot: the runs read at replay
+        if (!barrier_done) {
+            memory_barrier(f.cb);
+            barrier_done = true;
+        }
+        for (const Staged& st : staged) {
+            const VkBufferCopy c{st.soff, st.doff, st.len};
+            vkCmdCopyBuffer(f.cb, st.src, st.dst, 1, &c);
         }
     }
     if (barrier_done) {
