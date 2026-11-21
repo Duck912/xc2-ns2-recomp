@@ -606,13 +606,13 @@ static nxrt::FrameLimiter *g_frame_limiter = nullptr;   // the play-mode limiter
 
 static void arm_frame_rate(uint64_t main_base) {
     const int64_t fps = nxrt::config_get_int("xc2", "fps", 0);
-    // [nvn] present_ahead (HANDOVER 61): the guest gets ahead of the replay and rewrites render targets the GPU is still reading,
-    // which shows as torn / scrambled parts of the picture. It happens at 30 Hz as well - play.cmd -PresentHz 30 leaves
-    // [xc2] fps = 0, so the old "only when the frame rate is raised" default never applied there, and the guest still queues its
-    // present and renders the next frame while the render thread is replaying. Default it to 0 whenever the player has not chosen:
-    // at 30 Hz a frame of replay is 11 ms of a 33 ms budget so the strict back pressure costs nothing, at 60 Hz it costs the
-    // frames HANDOVER 61 measured. [nvn] present_ahead still wins if the player set it.
-    if (!nxrt::config_has("nvn", "present_ahead")) nxrt::config_set("nvn", "present_ahead", "0");
+    // [nvn] present_ahead (HANDOVER 61): the guest used to be kept from leading the replay because it rewrote data the GPU was
+    // still reading (torn / scrambled parts of the picture). [nvn] mirror_capture gives every submission the buffer bytes of its own
+    // submit call and the GPU no longer reads guest memory live, so the guest may lead by one frame: replay and game overlap, which
+    // is what holds 60 fps. [nvn] mirror_capture makes A7's per-draw instance snapshots unnecessary. Settings the player made win.
+    if (!nxrt::config_has("nvn", "mirror_capture")) nxrt::config_set("nvn", "mirror_capture", "1");
+    if (!nxrt::config_has("nvn", "snapshot_instances")) nxrt::config_set("nvn", "snapshot_instances", "0");
+    if (!nxrt::config_has("nvn", "present_ahead")) nxrt::config_set("nvn", "present_ahead", "1");
     NXLOG_I("xc2", "present_ahead = %lld (0 = the guest never leads the replay; [nvn] present_ahead overrides this default)",
             static_cast<long long>(nxrt::config_get_int("nvn", "present_ahead", 1)));
     if (fps <= 0) return;
