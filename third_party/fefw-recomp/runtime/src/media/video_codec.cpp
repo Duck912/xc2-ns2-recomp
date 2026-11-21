@@ -599,6 +599,11 @@ void read_nv12(::Ctx* c) {
     const size_t uvstride = rd64(sp + 16), uvsize = rd64(sp + 24);
     s_read++;
     stats_tick();
+    // Every 150 reads a summary of the whole path: on the AMD machine the film sits on its first picture while the decoder
+    // has long finished, and this says whether the player keeps reading (2026-11-21).
+    if (g_log && (s_read % 150) == 0)
+        NXLOG_I("vcodec", "read tick: %llu reads so far, pool image %zux%zu, y0 %u h %u, ystride %zu ysize %zu, uvsize %zu",
+                static_cast<unsigned long long>(s_read.load()), p ? p->w : 0, p ? p->h : 0, y0, h, ystride, ysize, uvsize);
     if (g_log) {
         static std::atomic<uint32_t> n{0};
         if (n.fetch_add(1, std::memory_order_relaxed) < 6)
@@ -607,7 +612,7 @@ void read_nv12(::Ctx* c) {
     }
     if (g_log) {
         static std::atomic<uint32_t> uv_n{0};
-        if (uv_n.fetch_add(1, std::memory_order_relaxed) < 10) {
+        if (uv_n.fetch_add(1, std::memory_order_relaxed) < 300) {
             const size_t pn = p && !p->nv12.empty() ? p->w * p->h : 0;
             NXLOG_I("vcodec", "read #%u: uvdst=0x%llx uvstride=%zu uvsize=%zu uv0=%u | pool 0x%llx %zux%zu image %zu uv0 %u",
                     uv_n.load(), (unsigned long long)uvdst, uvstride, uvsize, uvdst && uvsize > 2 ? static_cast<unsigned>(uvdst[0]) : 999u,
