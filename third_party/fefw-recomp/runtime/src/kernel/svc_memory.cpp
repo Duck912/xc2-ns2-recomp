@@ -171,7 +171,7 @@ GaugeHook gauge_alias_reservations("mem.alias_reservations", [] {   // host rese
 // UnmapPhysicalMemory of a whole pool releases one host reservation per 64 KiB granule: XC2 NS2 unmaps its 640 MiB mesh pools in one
 // call, 10241 VirtualFree(MEM_RELEASE) of ~6.3 us each (each one flushes the address translations of every core), 64.6 of the call's
 // 69.2 ms on the game's presenting thread (a ~70 ms frame, 2026-11-20). The bookkeeping (g_phys, the vm map, the write tracker) stays in
-// the call; the VirtualFree calls go to this thread. The guest does not touch pages it unmapped. Everything that reserves host memory in
+// the call; for an unmap of 4 MiB or more the VirtualFree calls go to this thread (a smaller one releases at once). The guest does not touch pages it unmapped. Everything that reserves host memory in
 // the alias region (map_physical_memory, alias_alloc) waits for the queue first, so a granule is never reserved again before it is free.
 std::mutex g_rel_mu;
 std::condition_variable g_rel_cv, g_rel_done_cv;
@@ -853,6 +853,10 @@ void unmap_physical_memory(::Ctx* c) {
                 return;
             }
     }
+    // Only a large unmap (a whole pool) hands its releases to the release thread: a small one releases at once, as before, so its pages
+    // fault right after the call like the console's. kDeferGranules: 4 MiB.
+    constexpr uint64_t kDeferGranules = 64;
+    const bool defer = ((end + kGranule - 1) / kGranule) - (addr / kGranule) >= kDeferGranules;
     for (uint64_t g = addr & ~(kGranule - 1); g < end; g += kGranule) {
         auto it = g_phys.find(g);
         if (it == g_phys.end()) continue;
@@ -862,7 +866,8 @@ void unmap_physical_memory(::Ctx* c) {
         it->second = static_cast<uint16_t>(it->second & ~drop);
         g_phys_pages -= static_cast<uint64_t>(std::popcount(drop));
         if (it->second == 0) {
-            release_later(g);   // the host reservation goes on the release thread
+            if (defer) release_later(g);   // the host reservation goes on the release thread
+            else VirtualFree(reinterpret_cast<void*>(g), 0, MEM_RELEASE);
             mem::vm_set(g, kGranule, mem::kMemFree, 0);   // the granule's other pages were free already
             g_phys.erase(it);
             continue;
