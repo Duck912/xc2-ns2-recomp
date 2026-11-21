@@ -179,7 +179,14 @@ const OsFns& os() {
 struct Pool {
     uint16_t w = 0, h = 0;      // the image size the pool was made for (even)
     uint32_t format = 0;        // nn::codec VideoDecoderOutputFormat (2 RGBA, 3/6 NV12 as the player reads it)
-    std::vector<uint8_t> nv12;  // the picture last placed in it, w*h luma + w*h/2 interleaved chroma
+    // CalculateDecoderImagePoolBuffer's count is how many images the pool holds, and the player acquires more than one at a
+    // time (16 acquisitions in 0.5 ms, all index 0, free 0, on 2026-11-21). One vector per image index.
+    std::vector<std::vector<uint8_t>> imgs;
+    std::vector<uint8_t>& img(uint32_t i) {
+        if (imgs.size() <= i) imgs.resize(i + 1);
+        return imgs[i];
+    }
+    uint32_t count() const { return static_cast<uint32_t>(imgs.size()); }
 };
 Pool* pool_of(uint64_t g) { return g && rd64(g + 8) == kPoolMarker ? reinterpret_cast<Pool*>(rd64(g)) : nullptr; }
 
@@ -349,17 +356,18 @@ Picture to_nv12(const vpx_image_t* img, int64_t pts) {
 
 // Copies `p` into the pool's image. The picture decides the pool's size: the preference the library computed is not needed for
 // the copy, and the frame properties reported to it come from the same picture, so a stale or rounded preference cannot crop it.
-void place(Pool& pool, const Picture& p) {
+void place(Pool& pool, uint32_t index, const Picture& p) {
     pool.w = p.w;
     pool.h = p.h;
     const size_t pw = pool.w, ph = pool.h;
-    pool.nv12.assign(pw * ph + pw * ph / 2, 0);
-    std::memset(pool.nv12.data(), 16, pw * ph);
-    std::memset(pool.nv12.data() + pw * ph, 128, pw * ph / 2);
+    std::vector<uint8_t>& image = pool.img(index);
+    image.assign(pw * ph + pw * ph / 2, 0);
+    std::memset(image.data(), 16, pw * ph);
+    std::memset(image.data() + pw * ph, 128, pw * ph / 2);
     if (p.nv12.empty()) return;
     const size_t cw = std::min<size_t>(pw, p.w), chh = std::min<size_t>(ph, p.h);
-    for (size_t y = 0; y < chh; y++) std::memcpy(&pool.nv12[y * pw], &p.nv12[y * p.w], cw);
-    for (size_t y = 0; y < chh / 2; y++) std::memcpy(&pool.nv12[pw * ph + y * pw], &p.nv12[size_t(p.w) * p.h + y * p.w], cw);
+    for (size_t y = 0; y < chh; y++) std::memcpy(&image[y * pw], &p.nv12[y * p.w], cw);
+    for (size_t y = 0; y < chh / 2; y++) std::memcpy(&image[pw * ph + y * pw], &p.nv12[size_t(p.w) * p.h + y * p.w], cw);
 }
 
 // Pairs decoded pictures with acquired buffers (both first in first out). Caller holds d.mu. Returns true when a fence completed.
@@ -371,7 +379,7 @@ bool assign(Decoder& d) {
         Picture p = std::move(d.ready.front());
         d.ready.pop_front();
         auto it = d.pools.find(index);
-        if (Pool* pool = it == d.pools.end() ? nullptr : pool_of(it->second)) place(*pool, p);
+        if (Pool* pool = it == d.pools.end() ? nullptr : pool_of(it->second)) place(*pool, index, p);
         else note_error("decoder %u: buffer %u has no image pool", d.id, index);
         d.info[index] = BufInfo{p.w, p.h, p.pts, p.eos};
         d.done_seq.store(seq);
@@ -572,13 +580,19 @@ void init_pool(::Ctx* c) {   // InitializeDecoderImagePool(pool, mem, size, pref
     // decoded). An all-zero image decodes as bright green, which flashed for the first seconds of the 4K CG (uv0=0 at read #1,
     // 127 from read #2). Start it as limited-range black instead.
     if (p->w && p->h) {
+        // count images, not one: the player holds more than one acquired buffer at a time (see Pool)
+        const uint32_t count = std::max<uint32_t>(1, static_cast<uint32_t>(A(4)));
         const size_t n = static_cast<size_t>(p->w) * p->h;
-        p->nv12.assign(n + n / 2, 128);
-        std::memset(p->nv12.data(), 16, n);
+        for (uint32_t i = 0; i < count; ++i) {
+            std::vector<uint8_t>& im = p->img(i);
+            im.assign(n + n / 2, 128);
+            std::memset(im.data(), 16, n);
+        }
     }
     if (g_log)
         NXLOG_I("vcodec", "InitializeDecoderImagePool %llx: %ux%u format %u (image %zu bytes, uv0 %u)", (unsigned long long)g, p->w, p->h,
-                p->format, p->nv12.size(), p->nv12.size() > static_cast<size_t>(p->w) * p->h ? p->nv12[static_cast<size_t>(p->w) * p->h] : 999u);
+                p->format, p->imgs.empty() ? size_t(0) : p->imgs[0].size(),
+                (!p->imgs.empty() && p->imgs[0].size() > static_cast<size_t>(p->w) * p->h) ? p->imgs[0][static_cast<size_t>(p->w) * p->h] : 999u);
     RET(0);
 }
 void fini_pool(::Ctx* c) {
@@ -614,33 +628,37 @@ void read_nv12(::Ctx* c) {
     if (g_log) {
         static std::atomic<uint32_t> uv_n{0};
         if (uv_n.fetch_add(1, std::memory_order_relaxed) < 300) {
-            const size_t pn = p && !p->nv12.empty() ? p->w * p->h : 0;
+            const bool have = p && !p->imgs.empty() && !p->imgs[0].empty();
+            const size_t pn = have ? static_cast<size_t>(p->w) * p->h : 0;
             NXLOG_I("vcodec", "read #%u: uvdst=0x%llx uvstride=%zu uvsize=%zu uv0=%u | pool 0x%llx %zux%zu image %zu uv0 %u",
-                    uv_n.load(), (unsigned long long)uvdst, uvstride, uvsize, uvdst && uvsize > 2 ? static_cast<unsigned>(uvdst[0]) : 999u,
-                    (unsigned long long)A(0), p ? p->w : 0, p ? p->h : 0, p ? p->nv12.size() : 0,
-                    pn && p->nv12.size() > pn ? p->nv12[pn] : 999u);
+                    uv_n.load(), (unsigned long long)uvdst, uvstride, uvsize,
+                    (uvdst && uvsize > 2) ? static_cast<unsigned>(uvdst[0]) : 999u,
+                    (unsigned long long)A(0), p ? p->w : 0, p ? p->h : 0, have ? p->imgs[0].size() : size_t(0),
+                    (have && p->imgs[0].size() > pn) ? p->imgs[0][pn] : 999u);
         }
     }
-    if (!p || p->nv12.empty() || !ydst) { RET(0); return; }
+    const uint32_t image_index = static_cast<uint32_t>(A(1) & 0xffff);
+    if (!p || p->imgs.empty() || image_index >= p->count() || p->imgs[image_index].empty() || !ydst) { RET(0); return; }
+    const std::vector<uint8_t>& nv12 = p->imgs[image_index];
     const size_t pw = p->w, ph = p->h;
     const size_t cw = x0 < pw ? std::min<size_t>(w, pw - x0) : 0;
     for (size_t y = 0; y < h && y0 + y < ph; y++) {
         if ((y + 1) * ystride > ysize && y * ystride + cw > ysize) break;
-        std::memcpy(ydst + y * ystride, &p->nv12[(y0 + y) * pw + x0], cw);
+        std::memcpy(ydst + y * ystride, &nv12[(y0 + y) * pw + x0], cw);
     }
     if (uvdst)
         for (size_t y = 0; y < h / 2 && y0 / 2 + y < ph / 2; y++) {
             if (y * uvstride + cw > uvsize) break;
-            std::memcpy(uvdst + y * uvstride, &p->nv12[pw * ph + (y0 / 2 + y) * pw + (x0 & ~1u)], cw);
+            std::memcpy(uvdst + y * uvstride, &nv12[pw * ph + (y0 / 2 + y) * pw + (x0 & ~1u)], cw);
         }
     if (g_log) {
         static std::atomic<uint32_t> stat_n{0};
-        if (stat_n.fetch_add(1, std::memory_order_relaxed) < 4 && p && !p->nv12.empty()) {
+        if (stat_n.fetch_add(1, std::memory_order_relaxed) < 4 && p && !p->imgs.empty() && !nv12.empty()) {
             const size_t pn = static_cast<size_t>(p->w) * p->h;
             uint64_t ysum = 0, uvsum = 0;
             size_t yn = 0, uvn = 0;
-            for (size_t k = 0; k < pn; k += 4096) { ysum += p->nv12[k]; yn++; }
-            for (size_t k = pn; k < p->nv12.size() && uvn < 4096; k += 4096) { uvsum += p->nv12[k]; uvn++; }
+            for (size_t k = 0; k < pn; k += 4096) { ysum += nv12[k]; yn++; }
+            for (size_t k = pn; k < nv12.size() && uvn < 4096; k += 4096) { uvsum += nv12[k]; uvn++; }
             NXLOG_I("vcodec", "pool image stats: Y avg %.1f (n=%zu), UV avg %.1f (n=%zu)", yn ? double(ysum) / yn : 0.0, yn,
                     uvn ? double(uvsum) / uvn : 0.0, uvn);
         }
@@ -659,13 +677,15 @@ void read_rgba(::Ctx* c) {   // BT.709 limited range
     uint8_t* dst = reinterpret_cast<uint8_t*>(A(6));
     const size_t stride = A(7), size = rd64(c->x[31]);
     s_read++;
-    if (!p || p->nv12.empty() || !dst) { RET(0); return; }
+    const uint32_t rgba_index = static_cast<uint32_t>(A(1) & 0xffff);
+    if (!p || p->imgs.empty() || rgba_index >= p->count() || p->imgs[rgba_index].empty() || !dst) { RET(0); return; }
+    const std::vector<uint8_t>& nv12 = p->imgs[rgba_index];
     const size_t pw = p->w, ph = p->h;
     for (size_t y = 0; y < h && y0 + y < ph; y++) {
         if ((y + 1) * stride > size) break;
         uint8_t* o = dst + y * stride;
-        const uint8_t* yr = &p->nv12[(y0 + y) * pw];
-        const uint8_t* uvr = &p->nv12[pw * ph + ((y0 + y) / 2) * pw];
+        const uint8_t* yr = &nv12[(y0 + y) * pw];
+        const uint8_t* uvr = &nv12[pw * ph + ((y0 + y) / 2) * pw];
         for (size_t x = 0; x < w && x0 + x < pw; x++) {
             const size_t sx = x0 + x;
             const int Y = (yr[sx] - 16) * 298, U = uvr[sx & ~size_t(1)] - 128, V = uvr[(sx & ~size_t(1)) + 1] - 128;
