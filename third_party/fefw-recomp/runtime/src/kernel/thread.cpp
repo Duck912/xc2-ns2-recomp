@@ -166,7 +166,14 @@ uint32_t thread_start(uint32_t handle) {
 void thread_exit() {
     KThread* t = t_self;
     if (t) {
-        NXLOG_D("thread", "%s exits (svcExitThread)", t->name.c_str());
+        // Always logged: a film's player threads tear themselves down, and "which thread exited, from where" is what tells a
+        // clean end apart from a thread bailing out of an error path (2026-11-22).
+        {
+            const ::Ctx* c = current_ctx();
+            NXLOG_I("thread", "%s exits (svcExitThread) at guest lr 0x%llx, entry 0x%llx", t->name.c_str(),
+                    static_cast<unsigned long long>(c ? c->x[30] : 0),
+                    static_cast<unsigned long long>(t->entry));
+        }
         finish_current(*t);
         t_keepalive.reset();     // the object may die here: t must not be touched again
     }

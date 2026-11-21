@@ -22,6 +22,10 @@
 #include "nxrt/svc.h"
 #include "kernel_internal.h"
 
+namespace nxrt::media {
+bool media_film_active();   // video_codec.cpp: a film's decoder is alive right now
+}
+
 namespace nxrt {
 namespace {
 
@@ -146,6 +150,13 @@ void svc_get_current_processor_number(::Ctx* c) { X(c, 0) = static_cast<uint32_t
 void svc_signal_event(::Ctx* c) {              // w0 event handle (writable)
     auto e = handle_as<KEvent>(static_cast<uint32_t>(X(c, 0)));
     if (!e) return svc_ret(c, kInvalidHandle);
+    // Name every event signal during a film, by handle and by the state object it flips: the player links specific events into
+    // its MultiWait, and this is the list that has to contain the one it is sleeping on (2026-11-22).
+    if (nxrt::media::media_film_active()) {
+        static std::atomic<uint32_t> n{0};
+        if (n.fetch_add(1, std::memory_order_relaxed) < 20000)
+            NXLOG_I("sched", "svc signal event: handle 0x%x state %p", static_cast<uint32_t>(X(c, 0)), static_cast<void*>(e->state.get()));
+    }
     e->state->signaled = true;
     notify_waitable_changed();
     svc_ret(c, kOk);

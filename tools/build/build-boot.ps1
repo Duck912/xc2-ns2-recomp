@@ -139,6 +139,10 @@ if (Test-Path -LiteralPath $ffCache) {
     }
 }
 $exe = Join-Path $bd 'xc2_boot.exe'
+# A linker map next to the exe: the runtime reads it (diag/symbols.cpp) and names the frames of every thread dump and crash
+# backtrace instead of printing bare offsets. Without it a dump says "xc2_boot+0x8383d" and nothing else - and the PDB of this
+# exe is 492 MB and only exists for the MSVC release build, never for this one (2026-11-22).
+$mapFile = Join-Path $bd 'xc2_boot.map'
 & clang-cl.exe /nologo /MT "/Fe:$exe" $obj $objOpus $objAudio `
     "$gfxDir\nxrt_gfx.lib" "$gfxDir\nxrt.lib" "$game\nxrt_game_xc2ns2_core.lib" "$game\nxrt_game_xc2ns2_data.lib" `
     $mainlib (Join-Path $libdir 'sdk.lib') `
@@ -146,7 +150,7 @@ $exe = Join-Path $bd 'xc2_boot.exe'
     "$gfxDir\nxrt_imgui.lib" "$gfxDir\nxrt_volk.lib" "$gfxDir\nxrt_tiling.lib" "$gfxDir\nxrt_astc2bc7.lib" "$gfxDir\nxrt_zstd.lib" `
     "$gfxDir\_deps\sdl3-build\SDL3-static.lib" "$gfxDir\third_party\dav1d\nxrt_dav1d.lib" `
     kernel32.lib user32.lib gdi32.lib winmm.lib imm32.lib ole32.lib oleaut32.lib version.lib uuid.lib advapi32.lib `
-    setupapi.lib shell32.lib dinput8.lib psapi.lib
+    setupapi.lib shell32.lib dinput8.lib psapi.lib /link "/MAP:$mapFile"
 if ($LASTEXITCODE -ne 0) { throw 'link failed' }
 Write-Host ("boot exe: {0} ({1:N1} MB)" -f $exe, ((Get-Item $exe).Length / 1MB))
 

@@ -410,7 +410,19 @@ void deliver_sound(AudioDecoder& d) {
     // middle" (measured 2026-11-21).
     const int64_t video_pts = media_film_video_pts();
     while (!d.sound.empty() && !d.free_.empty()) {
-        if (d.sound.front().time > video_pts + 500'000'000ll) break;   // more than half a second ahead of the picture
+        if (d.sound.front().time > video_pts + 500'000'000ll) {       // more than half a second ahead of the picture
+            // Say it out loud when the gate bites: it is the one place where the film's clock is deliberately held back, and a
+            // gate that stays closed stops the player from being handed sound at all - which stops it feeding the picture too
+            // (2026-11-22).
+            static std::atomic<int64_t> last_ms{0};
+            const int64_t ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::steady_clock::now().time_since_epoch()).count();
+            int64_t prev = last_ms.load(std::memory_order_relaxed);
+            if (ms - prev >= 1000 && last_ms.compare_exchange_strong(prev, ms))
+                NXLOG_W("movie", "audio gate: next sound at %.3f s, picture at %.3f s (%.3f s ahead), %zu sound(s) held",
+                        d.sound.front().time / 1e9, video_pts / 1e9, (d.sound.front().time - video_pts) / 1e9, d.sound.size());
+            break;
+        }
         const uint64_t f = d.free_.back();
         d.free_.pop_back();
         Sound& s = d.sound.front();

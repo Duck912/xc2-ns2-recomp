@@ -1949,6 +1949,36 @@ void tex_mark_gpu_written(Texture* t) {
     // Is the film's own picture texture being written by the GPU? Its storage is never written by the CPU (measured: zero
     // rewrites over a whole run, 2026-11-21), so if anything produces its content it is a draw or a copy on the GPU - and
     // this counter says whether that still happens when the picture freezes.
+    // Whatever the film's target turns out to be, this names it: every 4K texture the GPU writes, once a second each, for the
+    // first 24 ids. The film-specific watch above kept pointing at the wrong texture, so the honest question is "which 4K
+    // targets are being drawn at all, and when do they stop" (2026-11-21).
+    if (t->b.width >= 1920) {
+        static std::mutex mu;
+        static std::map<uint32_t, std::pair<uint64_t, int64_t>> seen;
+        static int ids = 0;
+        bool log_it = false;
+        uint64_t n = 0;
+        {
+            std::lock_guard<std::mutex> lk(mu);
+            const int64_t ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::steady_clock::now().time_since_epoch()).count();
+            auto it = seen.find(t->id);
+            if (it == seen.end()) {
+                if (ids >= 24) { seen[t->id] = {0, 0}; it = seen.find(t->id); }
+                else { ++ids; it = seen.emplace(t->id, std::make_pair<uint64_t, int64_t>(0, 0)).first; }
+            }
+            if (it != seen.end() && (ms - it->second.second) >= 1000) {
+                it->second.second = ms;
+                n = ++it->second.first;
+                log_it = true;
+            } else if (it != seen.end()) {
+                ++it->second.first;
+            }
+        }
+        if (log_it)
+            NXLOG_I("nvn.tex", "4k target %u (%dx%d): written %llu time(s)", t->id, t->b.width, t->b.height,
+                    static_cast<unsigned long long>(n));
+    }
     if (film_texture_is(t->id)) {
         static std::atomic<uint64_t> n{0};
         static std::atomic<int64_t> last{0};

@@ -22,6 +22,10 @@
 #include "fs_romfs.h"
 #include "nxrt/nup.h"
 #include "fs_volume.h"
+
+namespace nxrt::media {
+bool media_film_active();   // video_codec.cpp: a film's decoder is alive right now
+}
 #include "nxrt/config.h"
 #include "nxrt/diag.h"
 #include "nxrt/gauge.h"
@@ -343,6 +347,11 @@ std::shared_ptr<Service> make_filesystem(std::shared_ptr<Volume> v, std::string 
             std::shared_ptr<fs::VFile> f;
             const uint32_t r = v->open_file(p, req.arg<uint32_t>(0), &f);
             diag_note_file("open", (label + p).c_str());
+            // Name every movie file the game opens. Which cutscene is playing was the one fact the film logs could not supply, and
+            // the file name carries the family (`mv` feature film, `bf`, `of` short insert, `qst`) that decides how the player is
+            // driven (2026-11-22).
+            if (p.find("stream/movie") != std::string::npos)
+                NXLOG_I("fs", "movie open: %s%s -> 0x%x", label.c_str(), p.c_str(), r);
             if (r) {
                 NXLOG_D("fs", "OpenFile %s%s (mode %u) -> 0x%x", label.c_str(), p.c_str(), req.arg<uint32_t>(0), r);
                 return r;
@@ -470,6 +479,14 @@ void trace_guest_stack(const char* name) {
 }
 
 void trace_read(const fs::RomfsImage* img, int64_t off, int64_t size) {
+    // While a film's decoder is alive, every read is logged regardless of the [fs] trace's line budget: the loading screen
+    // spends that budget long before a cutscene plays, and "the demuxer read 540 KB and stopped" needs the reads of the film's
+    // own file (2026-11-22).
+    if (nxrt::media::media_film_active()) {
+        static std::atomic<uint32_t> fn{0};
+        if (fn.fetch_add(1, std::memory_order_relaxed) < 20000)
+            NXLOG_I("fs", "film read off=%lld size=%lld", static_cast<long long>(off), static_cast<long long>(size));
+    }
     static const bool on = config_get_bool("fs", "trace_reads", false);
     static const bool stack_on = !config_get_str("fs", "trace_stack_file", "").empty();
     static const bool tag_on = config_get_bool("fs", "tag_textures", false);

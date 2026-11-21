@@ -360,12 +360,18 @@ NVNboolean nvnTextureInitialize(NVNtexture* texture, const NVNtextureBuilder* bu
     }
     // Every texture that appears while a film decoder exists, with its storage address: the film's picture has to land on one
     // of these, and comparing the addresses with the buffer ReadDecoderOutputImage writes into says which (2026-11-21).
+    // The film's picture texture is noted whether or not a decoder exists at this instant: the second film's render target is
+    // built before its decoder is created, and with the note tied to "a decoder is alive" it was never registered, so the
+    // counter said nothing about it (2026-11-21). 4K is what a film's target and its source planes are; scene textures that
+    // size are rare and the budget is eight.
+    if (info.width >= 1920 && info.height >= 1080) nxrt::nvn::be::film_texture_recent(t->id);
     if (nxrt::media::media_film_active()) {
+        if (info.width >= 1920 && info.height >= 1080) nxrt::nvn::be::film_texture_note(t->id);
         // The film's own picture texture: a large one built while the decoder is alive. The registry counts its rewrites, which
         // is the same question as "is the game still consuming frames" (2026-11-21).
-        if (info.width >= 1920) nxrt::nvn::be::film_texture_note(t->id);
-        static std::atomic<uint32_t> n{0};
-        const uint32_t k = n.fetch_add(1, std::memory_order_relaxed);
+        // Each film gets its own 64 lines: the first film's burst of small textures used the whole budget, so nothing was left
+        // to say whether the second film ever built a render target for its picture (2026-11-22).
+        const uint32_t k = nxrt::nvn::be::film_texture_log_next();
         if (k < 64)
             NXLOG_I("nvn.tex", "film texture #%u: id %u storage %llx (%llu KB) %ux%u fmt %d%s", k, t->id,
                     static_cast<unsigned long long>(reinterpret_cast<uint64_t>(t->mem)),

@@ -32,9 +32,18 @@
 #include "nxrt/module.h"
 
 namespace nxrt::media {
+
+bool media_film_active();   // video_codec.cpp: a film's decoder is alive right now
+
 namespace {
 
 #define A(i) (c->x[i])
+
+// A small portable thread id for the log lines: the Windows thread id is not included here and the value only has to tell
+// threads apart within one run.
+inline unsigned long tid16() {
+    return static_cast<unsigned long>(std::hash<std::thread::id>{}(std::this_thread::get_id()) & 0xffffu);
+}
 
 constexpr const char* kTag = "player";
 
@@ -42,10 +51,12 @@ constexpr const char* kSend = "_ZN2nn2os16SendMessageQueueEPNS0_16MessageQueueTy
 constexpr const char* kRecv = "_ZN2nn2os19ReceiveMessageQueueEPmPNS0_16MessageQueueTypeE";
 constexpr const char* kStartTimer = "_ZN2nn2os23StartPeriodicTimerEventEPNS0_14TimerEventTypeENS_8TimeSpanES3_";
 constexpr const char* kStopTimer = "_ZN2nn2os14StopTimerEventEPNS0_14TimerEventTypeE";
+constexpr const char* kStartOnce = "_ZN2nn2os22StartOneShotTimerEventEPNS0_14TimerEventTypeENS_8TimeSpanE";
 constexpr const char* kWaitTimer = "_ZN2nn2os14WaitTimerEventEPNS0_14TimerEventTypeE";
 constexpr const char* kClearTimer = "_ZN2nn2os15ClearTimerEventEPNS0_14TimerEventTypeE";
 constexpr const char* kWaitAny = "_ZN2nn2os7WaitAnyEPNS0_13MultiWaitTypeE";
 constexpr const char* kHolderTimer = "_ZN2nn2os25InitializeMultiWaitHolderEPNS0_19MultiWaitHolderTypeEPNS0_14TimerEventTypeE";
+constexpr const char* kHolderEvent = "_ZN2nn2os25InitializeMultiWaitHolderEPNS0_19MultiWaitHolderTypeEPNS0_9EventTypeE";
 constexpr const char* kLink = "_ZN2nn2os19LinkMultiWaitHolderEPNS0_13MultiWaitTypeEPNS0_19MultiWaitHolderTypeE";
 constexpr const char* kGetTs = "_ZN5movie10VideoFrame12GetTimeStampEPN2nn8TimeSpanE";
 constexpr const char* kGetBuf = "_ZN5movie10VideoFrame9GetBufferEPPvPm";
@@ -117,6 +128,14 @@ void send_msg(::Ctx* c) {   // (nn::os::MessageQueueType*, u64 value) -> nn::Res
     const uint64_t r = call_original(c, fn);
     if (g_on && seen(g_send_seen, (q << 8) ^ (v & 0xff), 40))
         NXLOG_I(kTag, "msg send: queue 0x%llx <- %llu, lr 0x%llx, -> 0x%llx", q, v, lr, r);
+    // During a film every message is logged, unsampled: the sampled lines above kept 40 (queue, value) pairs and hid who
+    // stopped talking. The cutscene's player threads wait on each other through these queues, and the last message before the
+    // picture stops is the whole question (2026-11-22).
+    if (nxrt::media::media_film_active()) {
+        static std::atomic<uint32_t> n{0};
+        if (n.fetch_add(1, std::memory_order_relaxed) < 20000)
+            NXLOG_I(kTag, "film msg send: t%lu queue 0x%llx <- %llu, lr 0x%llx", tid16(), q, v, lr);
+    }
     A(0) = r;
 }
 void recv_msg(::Ctx* c) {   // (u64* out, nn::os::MessageQueueType*) -> nn::Result (blocks)
@@ -129,6 +148,11 @@ void recv_msg(::Ctx* c) {   // (u64* out, nn::os::MessageQueueType*) -> nn::Resu
         if (out && mem::is_mapped(out, 8)) std::memcpy(&v, reinterpret_cast<const void*>(out), 8);
         if (seen(g_recv_seen, (q << 8) ^ (v & 0xff), 40))
             NXLOG_I(kTag, "msg recv: queue 0x%llx -> %llu, lr 0x%llx, result 0x%llx", q, v, lr, r);
+        if (nxrt::media::media_film_active()) {
+            static std::atomic<uint32_t> n{0};
+            if (n.fetch_add(1, std::memory_order_relaxed) < 20000)
+                NXLOG_I(kTag, "film msg recv: t%lu queue 0x%llx -> %llu, lr 0x%llx", tid16(), q, v, lr);
+        }
     }
     A(0) = r;
 }
@@ -141,6 +165,7 @@ void recv_msg(::Ctx* c) {   // (u64* out, nn::os::MessageQueueType*) -> nn::Resu
 struct PokedTimer {
     uint64_t timer;
     int64_t period_ns;
+    bool once = false;         // a one-shot timer fires once and leaves the list
     std::chrono::steady_clock::time_point next;
     std::chrono::steady_clock::time_point idle_since;
 };
@@ -162,6 +187,7 @@ void poke_ticker() {
                     it->idle_since = {};
                     if (now >= it->next) {
                         wr8(it->timer + 18, 1);
+                        if (it->once) { it = g_poked.erase(it); continue; }   // fired: a one-shot is done
                         it->next = now + std::chrono::nanoseconds(it->period_ns);
                     }
                 }
@@ -172,13 +198,13 @@ void poke_ticker() {
     }
 }
 
-void poke_add(uint64_t timer, int64_t period_ns) {
+void poke_add(uint64_t timer, int64_t period_ns, bool once = false) {
     std::call_once(g_poke_once, [] { std::thread(poke_ticker).detach(); });
     std::lock_guard<std::mutex> lk(g_poke_mu);
     for (auto& e : g_poked) {
-        if (e.timer == timer) { e.period_ns = period_ns; e.idle_since = {}; return; }
+        if (e.timer == timer) { e.period_ns = period_ns; e.once = once; e.idle_since = {}; return; }
     }
-    g_poked.push_back(PokedTimer{timer, period_ns, std::chrono::steady_clock::now(), {}});
+    g_poked.push_back(PokedTimer{timer, period_ns, once, std::chrono::steady_clock::now(), {}});
 }
 
 void poke_remove(uint64_t timer) {
@@ -188,6 +214,17 @@ void poke_remove(uint64_t timer) {
     }
 }
 
+// nn::os::StartOneShotTimerEvent was neither wrapped nor poked: only the periodic one was. A player that uses a one-shot delay
+// for the per-frame step (the short inserts may well be driven that way) then waits on a timer that nothing ever marks due, and
+// its state machine sleeps after the first frames - the picture freezes with every decoder counter healthy (2026-11-22).
+void start_timer_once(::Ctx* c) {   // (TimerEventType*, TimeSpan delay)
+    const uint64_t t = A(0), delay = A(1), lr = c->x[30];
+    static const uint64_t f = module_find_symbol(kStartOnce);
+    const uint64_t r = f ? call_original(c, f) : 0;
+    NXLOG_I(kTag, "timer start one-shot: 0x%llx, after %lld ns, lr 0x%llx, -> 0x%llx", t, (long long)delay, lr, r);
+    if (g_poke && heap_address(t) && delay > 0 && delay <= 1000000000) poke_add(t, delay, true);
+    A(0) = r;
+}
 void start_timer(::Ctx* c) {   // (TimerEventType*, TimeSpan first, TimeSpan period)
     const uint64_t t = A(0), i1 = A(1), i2 = A(2), lr = c->x[30];
     const uint64_t fn = fn_start();
@@ -276,6 +313,15 @@ void sleep_thread(::Ctx* c) {   // (TimeSpan ns): how long the player's pacing s
         NXLOG_I(kTag, "SleepThread(%lld ns) at lr 0x%llx", (long long)ns, (unsigned long long)lr);
     if (fn) call_original(c, fn);
 }
+// Which EVENT the player links into its MultiWait: that is the one whose signal must arrive for the film's state machine to
+// wake. Without this the log said "a timer holder was linked" and nothing about the events (2026-11-22).
+void holder_event(::Ctx* c) {   // (MultiWaitHolderType*, EventType*)
+    const uint64_t h = A(0), ev = A(1), lr = c->x[30];
+    static const uint64_t fp = module_find_symbol(kHolderEvent);
+    const uint64_t r = fp ? call_original(c, fp) : 0;
+    NXLOG_I(kTag, "MultiWaitHolder(event): holder 0x%llx <- event 0x%llx, lr 0x%llx", h, ev, lr);
+    A(0) = r;
+}
 void link_holder(::Ctx* c) {   // (MultiWaitType*, MultiWaitHolderType*): which multi a holder lands in
     const uint64_t m = A(0), h = A(1), lr = c->x[30];
     const uint64_t fn = fn_link();
@@ -303,6 +349,7 @@ const Entry kEntries[] = {
     {kSend, send_msg},        {kRecv, recv_msg},           {kStartTimer, start_timer},   {kStopTimer, stop_timer},
     {kWaitTimer, wait_timer}, {kClearTimer, clear_timer},  {kWaitAny, wait_any},         {kHolderTimer, holder_timer},
     {kLink, link_holder},     {kGetTs, frame_timestamp},   {kGetBuf, frame_buffer},   {kSleep, sleep_thread},
+    {kHolderEvent, holder_event}, {kStartOnce, start_timer_once},
     {kReleaseFrame, release_frame},
 };
 
@@ -314,14 +361,24 @@ void media_dump_state(const char* why);
 // Called from install_video_codec_hle before the modules are linked: every import of these names then lands here.
 // The film starts while the game is still loading; the player then takes one frame every 2-8 s for up to half a minute before it
 // jumps ahead. Dump the guest threads once a stall is clear, so the stack says what the player is waiting on.
+// A new film starts: give it its own budget of stall dumps. The first film's start-up stall used to spend all of them, so the
+// film that actually broke left nothing in the log (2026-11-21).
+void player_trace_new_film() {
+    g_stall_dumps.store(0, std::memory_order_relaxed);
+}
+
 void stall_watch() {
     for (;;) {
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
         const int64_t last = g_last_movie_frame_ns.load(std::memory_order_relaxed);
-        if (!last || g_stall_dumps.load(std::memory_order_relaxed) >= 3) continue;
+        // 12, not 3: a session can play several films and the first three dumps were used up by the start-up stall of the
+        // first one, leaving nothing for the film that actually broke (2026-11-21).
+        if (!last || g_stall_dumps.load(std::memory_order_relaxed) >= 12) continue;
         const int64_t now = now_ns();
-        if (now - last < 300'000'000ll) continue;   // the start-up stalls are under a second now; catch them all
-        if (g_stall_dumps.fetch_add(1, std::memory_order_relaxed) >= 3) continue;
+        // One dump a second, not four: a 1.5 s start-up stall used to write six dumps and the film that broke later found the
+        // budget spent. A second apart still brackets every stall, and 12 of them cover a lot of stalling (2026-11-21).
+        if (now - last < 1'000'000'000ll) continue;
+        if (g_stall_dumps.fetch_add(1, std::memory_order_relaxed) > 12) continue;
         media_dump_state("stall");
         const std::string dump = nxrt::diag_thread_dump();
         const std::string path = "stall_" + std::to_string(g_stall_dumps.load()) + ".txt";

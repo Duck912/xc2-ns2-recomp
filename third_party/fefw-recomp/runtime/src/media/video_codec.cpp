@@ -61,6 +61,11 @@
 // announced there, or the texture the game samples over that memory never uploads again (see read_nv12).
 namespace nxrt::nvn::be {
 void textures_cpu_wrote(const void* lo, uint64_t size);
+void film_texture_begin_film();
+}
+
+namespace nxrt::media {
+void player_trace_new_film();   // movie_trace.cpp: reset this film's stall-dump budget
 }
 
 #if NXRT_HAVE_LIBVPX
@@ -329,6 +334,7 @@ struct Decoder {
     bool want_submit_signal = false;
     bool started = false;                                 // between Start*Decoder and Stop*Decoder: only then is input "ready"
     bool eos_pending = false;                             // end of stream seen, but the pictures before it have not all gone
+    bool eos_queued = false;                              // the end-of-stream marker is already queued: the client resubmits it endlessly
 
     std::vector<uint8_t> last;                            // last decoded picture (NV12) for the end-of-stream buffer
     uint16_t last_w = 0, last_h = 0;
@@ -550,7 +556,9 @@ bool assign(Decoder& d) {
     }
     // End of stream, and nothing left to hand out: fill one free buffer with the last picture marked eos, once. The client
     // reads it, learns the film ended, and stops on its own (the reference library's drain does the same).
-    if (d.eos_pending && d.ready.empty() && !d.pend.empty()) {
+    // ...and only when no packet is left to decode: a marker that turned up while the stream was still being decoded said
+    // "the film has ended" mid-film, and the client stopped drawing right there (2026-11-22).
+    if (d.eos_pending && d.pending.empty() && d.ready.empty() && !d.pend.empty()) {
         const uint32_t index = d.pend.front();
         d.pend.pop_front();
         uint16_t lw = 0, lh = 0;
@@ -591,7 +599,11 @@ void after_change(::Ctx* c, Decoder& d, bool fences) {
     bool signal = false;
     {
         std::lock_guard<std::mutex> lk(d.mu);
-        if (d.submit_event_made && d.started && d.ready.size() < kBacklog && d.pending.size() < kRefuseAt) {
+        // Submission readiness depends on the INPUT queue only. It used to require ready.size() < kBacklog as well, i.e. no
+        // decoded picture waiting for a buffer - and a client whose pool has ONE image then never saw the event again: it
+        // stopped submitting after 135 packets, the film ended at 4 s and the picture froze, with the decoder idle and every
+        // fence already completed (measured 2026-11-22). Eight queued packets is the watermark the reference keeps.
+        if (d.submit_event_made && d.started && d.pending.size() < kRefuseAt) {
             signal = d.want_submit_signal;
             d.want_submit_signal = false;
         }
@@ -676,7 +688,7 @@ void media_drain_signals(::Ctx* c) {
             std::lock_guard<std::mutex> lk(d->mu);
             // Only when a packet would actually be accepted now: a manual-clear event that stays signalled makes the
             // client resubmit the same packet in a tight loop (200 us apart, 2026-11-21).
-            if (d->submit_event_made && d->started && d->want_submit_signal && d->ready.size() < kBacklog && d->pending.size() < kRefuseAt) {
+            if (d->submit_event_made && d->started && d->want_submit_signal && d->pending.size() < kRefuseAt) {
                 signal = true;
                 d->want_submit_signal = false;
             }
@@ -1056,6 +1068,8 @@ void calc_work(::Ctx* c) {   // Calculate*DecoderWorkBuffer(size*, align*, ...)
 void create_decoder(::Ctx* c, int codec, uint32_t w, uint32_t h) {
     const uint64_t g = A(0);
     g_film_active.store(true, std::memory_order_relaxed);
+    player_trace_new_film();   // each film gets its own budget of stall dumps (movie_trace.cpp)
+    nxrt::nvn::be::film_texture_begin_film();   // and its own set of 4K textures to watch (nvn_texture_registry.cpp)
     auto d = std::make_shared<Decoder>();
     d->codec = codec;
     {
@@ -1272,7 +1286,24 @@ void decode_one(Decoder& d) {
             hitch_note_film_end();   // the hitch summaries say how long ago this was, so a slow stretch after a cutscene is visible
         }
     }
-    if (out.empty()) return;
+    if (out.empty()) {
+        // The end-of-stream marker produced no picture, and every picture before it is already decoded and waiting in ready.
+        // The reference library marks the LAST HELD PICTURE (held_eos[nheld-1] = 1), not a buffer of its own: the client reads
+        // through the pictures it has and the final one tells it the stream ended. Ours waited for ready to become empty and
+        // then handed out a separate eos buffer - but the decoder runs ahead by the preload, so ready never emptied, the marker
+        // was never delivered, and the player sat on the last frame with its sound still playing, exactly like a pause
+        // (measured 2026-11-22: a five-second insert that read 124 of its 148 pictures and then waited forever).
+        if (p.eos) {
+            std::lock_guard<std::mutex> lk(d.mu);
+            if (!d.ready.empty()) {
+                d.ready.back().eos = true;
+                d.eos_pending = false;
+                NXLOG_I("vcodec", "decoder %u: end of stream marked on the last picture in hand (%zu waiting, %zu queued)", d.id,
+                        d.ready.size(), d.pending.size());
+            }
+        }
+        return;
+    }
     {
         std::lock_guard<std::mutex> lk(d.mu);
         if (d.first_picture_ms < 0 && d.t_first_packet.time_since_epoch().count() != 0) {
@@ -1306,7 +1337,13 @@ void worker_loop(Decoder& d) {
             // decode, which it can never catch up with (2026-11-21).
             const bool fresh = std::chrono::steady_clock::now() - born < std::chrono::seconds(10);
             const size_t ahead = fresh ? kAheadStartup : kAhead;
-            return d.stop || (!d.pending.empty() && d.ready.size() < ahead);
+            if (d.stop || d.pending.empty()) return d.stop;
+            // The end-of-stream marker is metadata, not a picture: decoding it marks the last picture already waiting. Holding it
+            // behind the preload deadlocked the film - the client waited for the mark before reading, and the decoder waited for
+            // the client to read before reaching the mark (measured 2026-11-22: the marker only appeared at teardown). So a
+            // marker at the head of the queue is always decoded.
+            if (d.pending.front().eos) return true;
+            return d.ready.size() < ahead;
         });
         if (d.stop) return;
         {
@@ -1373,6 +1410,18 @@ void submit_packet(::Ctx* c, uint64_t dec, const uint8_t* data, size_t size, int
             RET(kResultBusy);
             return;
         }
+        // One end-of-stream marker, however often the client resubmits it. It resubmits until the call is accepted, and with
+        // Accept taking everything the queue gained 1,121,948 copies in one session - 32,000 a second - which buried the real
+        // packets, filled memory and left the worker nothing to do but process markers while the picture stood still
+        // (measured 2026-11-22). Accept the call, queue nothing more.
+        if (eos && d->eos_queued) {
+            d->want_submit_signal = true;
+            g_signals_owed.fetch_add(1, std::memory_order_relaxed);
+            lk.unlock();
+            RET(0);
+            return;
+        }
+        if (eos) d->eos_queued = true;
         d->pending.push_back(std::move(p));
         // Never decode here: the adapter thread submits the whole movie ahead, and a decode per submit (23 ms) left it no time to
         // service the player (the acquire-to-read gap was 48-69 ms with the copies at 1.1-1.7 ms, 2026-11-18). The worker decodes

@@ -236,6 +236,9 @@ size_t texture_registry_size();
 // as "the game stopped consuming frames" (2026-11-21).
 void film_texture_note(uint32_t id);
 bool film_texture_is(uint32_t id);
+void film_texture_recent(uint32_t id);   // every 4K texture, in creation order (the film's target is built around its decoder)
+uint32_t film_texture_log_next();        // 0..63: this film's share of the texture-creation log (each film gets its own)
+void film_texture_begin_film();          // a new film: watch the 4K textures built around its decoder, not the game's UI targets
 // Frame-trace mark with the texture id as its argument (a no-op unless [prof] trace is on): tx.init, tx.write, tx.flush, tx.reg, tx.use.
 void tx_mark(const char* what, const Texture* t);
 // Sparse textures: registered by the virtual pool they live in. A remap of tiles (nvnMemoryPoolMapVirtual) or a write to the physical

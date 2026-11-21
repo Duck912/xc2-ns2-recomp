@@ -13,6 +13,12 @@
 
 #include <windows.h>
 
+#include <chrono>
+
+namespace nxrt::media {
+bool media_film_active();   // video_codec.cpp: a film's decoder is alive right now
+}
+
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -300,6 +306,7 @@ bool cond_wait_impl(uint64_t cond_addr, uint64_t mutex_addr, const Deadline& d) 
 
 bool event_wait_impl(uint64_t addr, const Deadline& d) {
     Event* e = get<Event>(addr);
+    const auto t0 = std::chrono::steady_clock::now();
     AcquireSRWLockExclusive(&e->lk);
     bool ok = true;
     while (!e->signaled) {
@@ -309,7 +316,15 @@ bool event_wait_impl(uint64_t addr, const Deadline& d) {
         }
     }
     if (ok && e->auto_clear) e->signaled = false;
+    const bool was_signaled = e->signaled;
     ReleaseSRWLockExclusive(&e->lk);
+    // A guest that waits most of a second on one event is the shape of the cutscene freeze: the picture stops while every
+    // decoder counter looks idle, because the wait is on the guest side. Name the event so it can be matched against the ones
+    // the film's decoder hands out (2026-11-22).
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    if (ms > 400.0)
+        NXLOG_W("sched", "event_wait 0x%llx blocked %.0f ms (auto_clear %d, ok %d, signalled %d)", addr, ms,
+                e->auto_clear ? 1 : 0, ok ? 1 : 0, was_signaled ? 1 : 0);
     return ok;
 }
 
@@ -473,6 +488,12 @@ void event_init(uint64_t addr, bool signaled, bool auto_clear) {
 
 void event_signal(uint64_t addr) {
     Event* e = get<Event>(addr);
+    // While a film is playing, name every event signal with its address: the player links specific events into its MultiWait,
+    // and "which of them never fires" is the question that decides where the picture stops (2026-11-22).
+    if (nxrt::media::media_film_active()) {
+        static std::atomic<uint32_t> n{0};
+        if (n.fetch_add(1, std::memory_order_relaxed) < 40000) NXLOG_I("sched", "event signal 0x%llx", addr);
+    }
     AcquireSRWLockExclusive(&e->lk);
     e->signaled = true;
     if (e->auto_clear)

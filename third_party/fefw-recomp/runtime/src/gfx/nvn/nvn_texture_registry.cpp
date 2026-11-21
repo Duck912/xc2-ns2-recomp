@@ -206,6 +206,8 @@ namespace {
 std::mutex g_film_mu;
 std::set<uint32_t> g_film_tex;
 std::atomic<uint64_t> g_film_writes{0};
+std::atomic<uint32_t> g_film_tex_log{0};
+std::vector<uint32_t> g_recent_4k;
 int64_t g_film_last_log_ms{0};
 }  // namespace
 
@@ -213,6 +215,28 @@ void film_texture_note(uint32_t id) {
     std::lock_guard<std::mutex> lk(g_film_mu);
     if (g_film_tex.size() < 8) g_film_tex.insert(id);
 }
+
+// The last few 4K textures built, whatever their purpose. The game's own HUD/render targets are also 4K and are built at
+// start-up, so "watch every 4K texture" watched those and left no room for the film's (measured 2026-11-21). A film's target
+// is built within a frame or two of its decoder, which is what begin_film takes from this list.
+void film_texture_recent(uint32_t id) {
+    std::lock_guard<std::mutex> lk(g_film_mu);
+    g_recent_4k.push_back(id);
+    while (g_recent_4k.size() > 8) g_recent_4k.erase(g_recent_4k.begin());
+}
+
+void film_texture_begin_film() {
+    std::lock_guard<std::mutex> lk(g_film_mu);
+    // Add, never clear: a texture noted during an earlier film is often the one a later film draws into as well (the game
+    // reuses its movie target), and clearing dropped it - the second cutscene then had nothing watched, which looked exactly
+    // like "the overlay stopped being drawn" (measured 2026-11-21). The set only ever holds textures noted while a film was
+    // alive, so the game's own UI targets cannot be in it.
+    for (uint32_t id : g_recent_4k) g_film_tex.insert(id);
+    g_film_writes.store(0, std::memory_order_relaxed);
+    g_film_tex_log.store(0, std::memory_order_relaxed);   // and its own share of the creation log
+}
+
+uint32_t film_texture_log_next() { return g_film_tex_log.fetch_add(1, std::memory_order_relaxed); }
 
 bool film_texture_is(uint32_t id) {
     std::lock_guard<std::mutex> lk(g_film_mu);
