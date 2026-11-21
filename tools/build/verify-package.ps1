@@ -10,7 +10,8 @@ param(
     [Parameter(Mandatory = $true)][string]$Path,
     [ValidateSet('auto', 'package', 'installed')][string]$Mode = 'auto',
     [int]$ExpectedSpirv = 0,
-    [string]$ExpectCommit = ''
+    [string]$ExpectCommit = '',
+    [switch]$AllowNoFFmpeg    # make-package's own switch: a package built without the film decoders on purpose
 )
 $ErrorActionPreference = 'Stop'
 $fails = New-Object System.Collections.ArrayList
@@ -36,6 +37,19 @@ Need 'RELEASE-NOTES.md'
 Need 'licenses'
 Need 'xc2-launcher.exe'
 Need (Join-Path 'runtime' 'xc2_rt.dll')
+# The film's hardware decoders. The runtime loads them from its own directory and the setup copies every runtime DLL
+# beside the exe; a package that lost them still runs, but every 4K opening drops to the CPU decoders (§237, issue #2).
+$ffDlls = @('avcodec-63.dll', 'avformat-63.dll', 'avutil-61.dll', 'swresample-7.dll', 'swscale-10.dll')
+function MaybeNeed([string]$rel) {
+    if ($AllowNoFFmpeg) { Write-Host ("  skip  " + $rel + " (no FFmpeg, on purpose)") } else { Need $rel }
+}
+if ($Mode -eq 'package') {
+    foreach ($n in $ffDlls) { MaybeNeed (Join-Path 'runtime' $n) }
+} elseif (Test-Path -LiteralPath (Join-Path $Path 'runtime\avcodec-63.dll')) {
+    # An install made from a package that carries them must have them beside the exe: that is where Windows looks,
+    # and an in-place upgrade used to leave them behind (0xC0000135, issue #2).
+    foreach ($n in $ffDlls) { MaybeNeed $n }
+}
 Need (Join-Path 'engine' 'xc2_setup.py')
 
 # ---- what must never be in either ----------------------------------------------------------------------------------

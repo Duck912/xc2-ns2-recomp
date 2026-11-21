@@ -11,7 +11,8 @@ param(
     [string]$Launcher = '',   # default: <checkout>\launcher
     [string]$Zig = 'E:\Tools\dev\zig',
     [switch]$SkipHarness,
-    [switch]$SkipPython
+    [switch]$SkipPython,
+    [switch]$AllowNoFFmpeg    # build a package whose 4K openings fall back to the CPU decoders, on purpose
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)   # the checkout
@@ -91,6 +92,12 @@ if ($ffmpeg) {
     if (Test-Path (Join-Path $ffmpeg 'LICENSE.txt')) { Copy-Item (Join-Path $ffmpeg 'LICENSE.txt') (Join-Path $lic 'FFMPEG-LICENSE.txt') -Force }
     Say ("ffmpeg        {0:N1} MB  (GPL-3.0 shared build, the film's hardware decoders)" -f ($ffBytes / 1MB))
 } else {
+    # The first 0.1.4 package went out like this and nobody noticed until a player's log said "built without FFmpeg"
+    # (handover 64, §237): a warning is not enough for the one thing that decides whether 4K openings play.
+    if (-not $AllowNoFFmpeg) {
+        throw ('FFmpeg not found: point NXRT_FFMPEG_DIR at a GPL shared build (bin\avcodec-63.dll), or pass ' +
+               '-AllowNoFFmpeg to ship a package that decodes 4K openings on the CPU')
+    }
     Write-Warning 'FFmpeg not found: the package ships no hardware film decoder, so 4K openings run on the CPU'
 }
 
@@ -212,6 +219,6 @@ Say ("TOTAL         {0:N1} MB" -f (Size $Out))
 
 # --- 6. the tree just written, held to the same rules as a shipped one ---------------------------------------------------
 # In a child process: verify-package.ps1 exits with a status, which would otherwise end this script mid-way.
-& pwsh -NoProfile -File (Join-Path $PSScriptRoot 'verify-package.ps1') -Path $Out
+& pwsh -NoProfile -File (Join-Path $PSScriptRoot 'verify-package.ps1') -Path $Out -AllowNoFFmpeg:$AllowNoFFmpeg
 if ($LASTEXITCODE -ne 0) { throw "the package failed verify-package.ps1: $Out" }
 Write-Host "package ready: $Out"

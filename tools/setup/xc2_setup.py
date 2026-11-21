@@ -443,10 +443,26 @@ def step_lift_package(r, repo, install, py, jobs):
     return r.end_step("lift", started, True)
 
 
+def copy_runtime_dlls(r, runtime_dir, install):
+    """Every DLL the package put in runtime/ goes beside the exe: xc2_rt.dll, and the FFmpeg shared libraries the film's
+    hardware decoders load. Nothing in the copy depends on the exe having just been built, so an install that keeps its
+    exe still gets them - an in-place upgrade used to skip this copy and then fail to start with 0xC0000135
+    (avutil-61.dll / avcodec-63.dll missing, issue #2). A runtime folder without FFmpeg is not an error: the runtime
+    then says "built without FFmpeg" and decodes films on the CPU."""
+    n = 0
+    for dll in sorted(Path(runtime_dir).glob("*.dll")):
+        shutil.copy2(str(dll), str(Path(install) / dll.name))
+        n += 1
+    r.log("  runtime DLLs: %d beside the exe" % n)
+    return n
+
+
 def step_link_package(r, repo, install, zig, rtlib, jobs):
     started = r.step("link")
     exe = install / "xc2_boot.exe"
     if exe.is_file():
+        # The exe is kept across an upgrade; the DLLs still have to land next to it (issue #2).
+        copy_runtime_dlls(r, rtlib.parent, install)
         return r.end_step("link", started, True, "the boot exe is already there")
     lift = install / "build" / "lift"
     obj = install / "build" / "obj-zig"
@@ -501,11 +517,7 @@ def step_link_package(r, repo, install, zig, rtlib, jobs):
              str(rtlib), "-o", str(exe)])
     if r.run(argv) != 0:
         return r.end_step("link", started, False, "the exe did not link")
-    # Every DLL in runtime goes beside the exe: xc2_rt.dll itself, and the FFmpeg shared libraries it loads for the film's
-    # hardware decoders (avcodec-63.dll and friends). Missing ones are not an error - the runtime then says "built without
-    # FFmpeg" and decodes films on the CPU.
-    for dll in sorted(rtlib.parent.glob("*.dll")):
-        shutil.copy2(str(dll), str(install / dll.name))
+    copy_runtime_dlls(r, rtlib.parent, install)
     return r.end_step("link", started, True)
 
 def junction(link, target, r):
