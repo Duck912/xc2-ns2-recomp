@@ -219,6 +219,20 @@ void adec_register_frames(::Ctx* c) {
     RET(0);
 }
 
+// NXRT_FILM_TRACE=1: the first 120 movie::AudioDecoder calls in order, the same trace the video side has. The film's audio
+// track is a one-byte-a-packet placeholder and its sound comes from the game's own stream, but the player still paces itself on
+// this decoder's frames, so where its handshake stops is worth seeing (2026-11-21).
+static bool atrace_on() {
+    static const bool on = std::getenv("NXRT_FILM_TRACE") != nullptr;
+    return on;
+}
+static void atrace(const char* what, unsigned long long a = 0, unsigned long long b = 0) {
+    if (!atrace_on()) return;
+    static std::atomic<uint32_t> n{0};
+    const uint32_t k = n.fetch_add(1, std::memory_order_relaxed);
+    if (k < 120) NXLOG_I("movie", "acall %u: %s(%llu, %llu)", k, what, a, b);
+}
+
 void adec_input_event(::Ctx* c) {
     AudioDecoder* d = adec_of(A(0));
     if (A(1)) wr64(A(1), d ? reinterpret_cast<uint64_t>(d->in_ev) : 0);
@@ -342,6 +356,7 @@ bool open_vorbis(AudioDecoder& d) {
 #endif
 
 void adec_start(::Ctx* c) {
+    atrace("start");
     AudioDecoder* d = adec_of(A(0));
     if (d) {
 #if NXRT_HAVE_VORBIS
@@ -394,6 +409,7 @@ void deliver_sound(AudioDecoder& d) {
 }
 
 void adec_decode_async(::Ctx* c) {
+    atrace("decode", A(1) ? 1 : 0, 0);
     AudioDecoder* d = adec_of(A(0));
     const uint64_t buf = A(1);
     if (!d || !buf) { RET(0); return; }
@@ -489,6 +505,7 @@ void adec_decode_async(::Ctx* c) {
 }
 
 void adec_acquire(::Ctx* c) {
+    atrace("acquire");
     AudioDecoder* d = adec_of(A(0));
     if (A(1)) wr64(A(1), 0);
     if (A(2)) wr32(A(2), 0xffffffffu);
@@ -511,6 +528,7 @@ void adec_acquire(::Ctx* c) {
 }
 
 void adec_release(::Ctx* c) {
+    atrace("release");
     AudioDecoder* d = adec_of(A(0));
     const uint64_t f = A(1);
     if (d && f) {

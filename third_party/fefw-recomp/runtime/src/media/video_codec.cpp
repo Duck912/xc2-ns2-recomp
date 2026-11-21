@@ -186,6 +186,22 @@ uint64_t nv12_storage(uint32_t w, uint32_t h) {
     return static_cast<uint64_t>(w) * h + static_cast<uint64_t>(w) * h / 2;
 }
 
+// NXRT_FILM_TRACE=1: the first 200 nn::codec calls in the order the client makes them, with the arguments that matter. The SDK
+// library's own protocol (dm/host/hle_codec_video.c in the NX profile) is the reference for SDK 20/22; this game's movie module
+// is SDK 3.0.1 and its client may ask differently, so the sequence is what we have to match (2026-11-21).
+bool film_trace_on() {
+    static const bool on = std::getenv("NXRT_FILM_TRACE") != nullptr;
+    return on;
+}
+std::atomic<int> g_signals_owed{0};   // signals the decoder workers owe; svc.cpp drains them on any guest call
+void film_state_tick();   // defined after the decoder registry
+void film_trace(const char* what, unsigned long long a = 0, unsigned long long b = 0, unsigned long long c = 0) {
+    if (!film_trace_on()) return;
+    static std::atomic<uint32_t> n{0};
+    const uint32_t k = n.fetch_add(1, std::memory_order_relaxed);
+    if (k < 1200) NXLOG_I("vcodec", "call %u: %s(%llu, %llu, %llu)", k, what, a, b, c);
+}
+
 // ---- image pools --------------------------------------------------------------------------------------------------------------------
 struct Pool {
     uint16_t w = 0, h = 0;      // the image size the pool was made for (even)
@@ -294,6 +310,34 @@ std::shared_ptr<Decoder> dec_of(uint64_t g) {
 }
 // A decoder fence handle is {kSyncMarker | decoder id, (generation << 32) | buffer index}, as the SDK's own library makes
 // them: it is reached once that buffer holds a picture written at or after that generation (dm/host/hle_codec_video.c).
+// Once a second, whenever a decoder call happens: the queues and the counters, so a stall shows which one stopped moving
+// (2026-11-21).
+void film_state_tick() {
+    std::vector<std::shared_ptr<Decoder>> decs;
+    {
+        std::lock_guard<std::mutex> lk(g_reg_mu);
+        for (auto& e : g_decoders) decs.push_back(e.second);
+    }
+    const int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    for (auto& d : decs) {
+        static std::atomic<int64_t> last{0};
+        if (now - last.load(std::memory_order_relaxed) < 1000) return;
+        last.store(now, std::memory_order_relaxed);
+        size_t pend = 0, fifo = 0, ready = 0, pkt = 0, filled = 0;
+        {
+            std::lock_guard<std::mutex> lk(d->mu);
+            pend = d->pend.size();
+            fifo = d->fifo.size();
+            ready = d->ready.size();
+            pkt = d->pending.size();
+            for (auto& s : d->slot) if (s.filled) ++filled;
+        }
+        NXLOG_I("vcodec", "state: packets %zu pending %zu held %zu pend %zu fifo %zu filled %zu | placed %llu read %llu owed %d",
+                pkt, pkt, ready, pend, fifo, filled, (unsigned long long)s_delivered.load(),
+                (unsigned long long)s_read.load(), g_signals_owed.load());
+    }
+}
+
 bool fence_done(uint64_t w0, uint64_t seq) {
     {
         static std::atomic<uint32_t> n{0};
@@ -349,7 +393,7 @@ bool av1_open(Decoder& d) {
 // Signals owed to armed events. nn::codec's client arms an os event on a sync handle and waits on it, so the signal has to be
 // executed as guest code, which needs a guest thread: the decoder worker has none. Any guest call drains them instead (svc.cpp
 // calls media_drain_signals), and the game makes thousands of them a second (2026-11-21).
-std::atomic<int> g_signals_owed{0};
+
 
 // ---- sync point events ----------------------------------------------------------------------------------------------------------
 struct Armed {
@@ -440,6 +484,20 @@ bool assign(Decoder& d) {
         g_signals_owed.fetch_add(1, std::memory_order_relaxed);   // an armed event may now be reachable
         {
             static std::atomic<uint32_t> n{0};
+            const uint32_t k = n.fetch_add(1, std::memory_order_relaxed);
+            if (k < 40) {
+                auto it2 = d.pools.find(index);
+                if (Pool* pool = it2 == d.pools.end() ? nullptr : pool_of(it2->second)) {
+                    const std::vector<uint8_t>& im = pool->img(index);
+                    uint64_t h = 1469598103934665603ull;
+                    for (size_t i = 0; i + 64 < im.size(); i += 4096) h = (h ^ im[i]) * 1099511628211ull;
+                    if (k < 40) NXLOG_I("vcodec", "fill %u: buffer %u gen %llu h %016llx", k, index, static_cast<unsigned long long>(d.slot[index].gen),
+                                        static_cast<unsigned long long>(h));
+                }
+            }
+        }
+        {
+            static std::atomic<uint32_t> n{0};
             if (n.fetch_add(1, std::memory_order_relaxed) < 8)
                 NXLOG_I("vcodec", "decoder %u: picture %ux%u into buffer %u, gen %llu (delivered %llu)", d.id, p.w, p.h, index,
                         static_cast<unsigned long long>(d.slot[index].gen), static_cast<unsigned long long>(s_delivered.load()));
@@ -451,12 +509,13 @@ bool assign(Decoder& d) {
 // Signals what a decoder state change made due: reached fences, and "submission ready" when the backlog went down. No locks held.
 void after_change(::Ctx* c, Decoder& d, bool fences) {
     stats_tick();
+    film_state_tick();   // no decoder lock is held here, so it cannot deadlock against fence_done
     if (fences)
         for (uint64_t evt : take_reached(d.id, d.done_seq.load())) gcall(c, os().signal_event, evt);
     bool signal = false;
     {
         std::lock_guard<std::mutex> lk(d.mu);
-        if (d.submit_event_made && d.started && d.ready.size() < kBacklog) {
+        if (d.submit_event_made && d.started && d.ready.size() < kBacklog && d.pending.size() < 8) {
             signal = d.want_submit_signal;
             d.want_submit_signal = false;
         }
@@ -479,6 +538,10 @@ void media_drain_signals(::Ctx* c) {
     for (auto& d : decs) {
         for (uint64_t evt : take_reached(d->id, 0)) {
             gcall(c, os().signal_event, evt);
+            {
+                static std::atomic<uint32_t> n{0};
+                if (n.fetch_add(1, std::memory_order_relaxed) < 20) NXLOG_I("vcodec", "signal event %llx (decoder %u)", (unsigned long long)evt, d->id);
+            }
             any = true;
         }
         // The submission-ready event too: the client stops feeding packets when the decoder holds too many pictures and
@@ -487,7 +550,9 @@ void media_drain_signals(::Ctx* c) {
         bool signal = false;
         {
             std::lock_guard<std::mutex> lk(d->mu);
-            if (d->submit_event_made && d->started && d->want_submit_signal && d->ready.size() < kBacklog) {
+            // Only when a packet would actually be accepted now: a manual-clear event that stays signalled makes the
+            // client resubmit the same packet in a tight loop (200 us apart, 2026-11-21).
+            if (d->submit_event_made && d->started && d->want_submit_signal && d->ready.size() < kBacklog && d->pending.size() < 8) {
                 signal = true;
                 d->want_submit_signal = false;
             }
@@ -749,6 +814,9 @@ void read_nv12(::Ctx* c) {
     const uint32_t image_index = static_cast<uint32_t>(A(1) & 0xffff);
     if (!p || p->imgs.empty() || image_index >= p->count() || p->imgs[image_index].empty() || !ydst) { RET(0); return; }
     const std::vector<uint8_t>& nv12 = p->imgs[image_index];
+    // NXRT_FILM_HASH=1: a numeric fingerprint of every read, sampled over the luma plane. Numbers in the log answer "does the
+    // picture the player reads change" without comparing images: same hash twice means the same picture came out (2026-11-21).
+    static const bool read_hash = std::getenv("NXRT_FILM_HASH") != nullptr;
     const size_t pw = p->w, ph = p->h;
     const size_t cw = x0 < pw ? std::min<size_t>(w, pw - x0) : 0;
     for (size_t y = 0; y < h && y0 + y < ph; y++) {
@@ -883,6 +951,7 @@ void finalize_decoder(::Ctx* c) {
     RET(0);
 }
 void register_buffer(::Ctx* c) {   // (dec, index, pool, u32)
+    film_trace("register_buffer", A(1), A(2), A(3));
     auto d = dec_of(A(0));
     if (d) {
         std::lock_guard<std::mutex> lk(d->mu);
@@ -1046,8 +1115,17 @@ void worker_loop(Decoder& d) {
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
     std::unique_lock<std::mutex> lk(d.mu);
     for (;;) {
+        // Heartbeat: a worker that stops popping while packets are queued is what a stalled film looks like from outside
+        // (2026-11-21), and a counter says whether it is asleep in its wait or stuck inside a decode.
         d.cv.wait(lk, [&] { return d.stop || (!d.pending.empty() && d.ready.size() < kAhead); });
         if (d.stop) return;
+        {
+            static std::atomic<uint32_t> n{0};
+            const uint32_t k = n.fetch_add(1, std::memory_order_relaxed);
+            if (k < 400 && (k < 8 || (k % 50) == 0))
+                NXLOG_I("vcodec", "worker %u: popped, pending %zu held %zu pend %zu fifo %zu", k, d.pending.size(), d.ready.size(),
+                        d.pend.size(), d.fifo.size());
+        }
         lk.unlock();
         decode_one(d);
         lk.lock();
@@ -1069,6 +1147,7 @@ Decoder::~Decoder() {
 // The body shared by the two Submit*DecoderInputBuffer shapes: SDK 3.0.1's AV1 one has no size_t* out parameter, the VP8 / VP9 one
 // has it first.
 void submit_packet(::Ctx* c, uint64_t dec, const uint8_t* data, size_t size, int64_t pts, bool eos) {
+    film_trace("submit", size, static_cast<unsigned long long>(pts), eos ? 1 : 0);
     auto d = dec_of(dec);
     if (!d) { RET(0); return; }
     if (d->t_first_packet.time_since_epoch().count() == 0) d->t_first_packet = std::chrono::steady_clock::now();
@@ -1084,7 +1163,15 @@ void submit_packet(::Ctx* c, uint64_t dec, const uint8_t* data, size_t size, int
         p.eos = eos;
         // 12 pictures waiting for a released buffer is the SDK library's ceiling; past it Submit answers 3603 and the client
         // waits for the submission-ready event (dm/host/hle_codec_video.c, CV_HOLD).
-        if (d->ready.size() >= 12) {
+        // Also refuse while the queue of undecoded packets is full: the client submits the whole film in one burst, and
+        // accepting every packet piles up tens of thousands of them, so the end-of-stream packet arrives long after the
+        // client sent it and the picture stops a few seconds in (2026-11-21). The SDK library refuses, and the client
+        // resubmits the same packet after the submission-ready event.
+        if (d->ready.size() >= 12 || d->pending.size() >= 8) {
+            // Refused: the client now waits for the submission-ready event, so one is owed (the drain raises it from the
+            // next guest call). Without this the client waited for ever and the film sat on one frame (2026-11-21).
+            d->want_submit_signal = true;
+            g_signals_owed.fetch_add(1, std::memory_order_relaxed);
             lk.unlock();
             RET(kResultBusy);
             return;
@@ -1113,6 +1200,7 @@ void submit_av1(::Ctx* c) {   // (dec, data, size, pts, eos): SDK 3.0.1
     submit_packet(c, A(0), reinterpret_cast<const uint8_t*>(A(1)), A(2), static_cast<int64_t>(A(3)), (A(4) & 1) != 0);
 }
 void acquire_output(::Ctx* c) {   // (u32* index, NativeSyncHandle* fence, dec)
+    film_trace("acquire", 0, 0, 0);
     auto d = dec_of(A(2));
     uint32_t index = 0;
     uint64_t seq = 0;
@@ -1155,6 +1243,7 @@ void acquire_output(::Ctx* c) {   // (u32* index, NativeSyncHandle* fence, dec)
     RET(0);
 }
 void release_output(::Ctx* c) {   // (dec, index, pre-fence)
+    film_trace("release", A(1), 0, 0);
     if (auto d = dec_of(A(0))) {
         {
             std::lock_guard<std::mutex> lk(d->mu);
@@ -1213,6 +1302,7 @@ bool props_of(uint64_t dec, uint32_t index, BufInfo* out) {
     return true;
 }
 void props(::Ctx* c) {   // (u16*, u16*, u16*, u16*, TimeSpan*, bool*, dec, index)
+    film_trace("props", A(7), 0, 0);
     BufInfo b;
     if (!props_of(A(6), static_cast<uint32_t>(A(7)), &b)) { RET(kResultNoBuffer); return; }
     props_write(A(0), A(1), A(2), A(3), A(4), A(5), b);
@@ -1273,6 +1363,12 @@ void sp_request(::Ctx* c) {   // (evt, const SyncPointHandle&)
         reached = fence_done(w0, seq);
         if (!reached) g_armed[evt] = Armed{static_cast<uint32_t>(w0), seq};
         else g_armed.erase(evt);
+        {
+            static std::atomic<uint32_t> n{0};
+            if (n.fetch_add(1, std::memory_order_relaxed) < 20)
+                NXLOG_I("vcodec", "sp_request: evt %llx waits on %llx/%llx (%s)", (unsigned long long)evt, (unsigned long long)w0,
+                        (unsigned long long)seq, reached ? "already reached" : "armed");
+        }
     }
     if (reached) gcall(c, os().signal_event, evt);
     RET(0);
