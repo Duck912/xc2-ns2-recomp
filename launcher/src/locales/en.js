@@ -49,6 +49,10 @@ export const en = {
     'play.noExitCode': 'no exit code',
     'play.codeWithHex': 'code {code} ({hex})',
     'play.reportClean': 'Last run',
+    'play.recordReport': 'Record a report',
+    'play.recordHint':
+      'Want us to look at this? Record a report: the game starts once more with the diagnostics on, and closing it packs the log, your settings and the frame times into a zip you can attach to an issue.',
+    'play.recordStarted': 'The game is starting. Play until it happens again, then close it - the zip lands in work\\reports.',
     'play.reportCrashed': 'The game did not end cleanly',
     'play.fileNew': ' (new)',
     'play.problemRepo': 'The repository was not found. Set its folder in Settings.',
@@ -365,6 +369,12 @@ export const en = {
     'about.credits': 'Credits',
     'about.creditsText': 'See README.md: nxrecomp, the fefw-recomp runtime, Ryujinx\'s shader translator and the other projects this builds on.',
     'about.noGameFiles': 'No game files included.',
+    'about.reportTitle': 'Something went wrong?',
+    'about.reportHint':
+      'This starts the game once with the diagnostics on. Play until the problem shows, then close the window: a zip with the log, your settings and the frame times lands in work\\reports, ready to attach to an issue.',
+    'about.reportStart': 'Record a report',
+    'about.reportOpen': 'Open the reports folder',
+    'about.reportStarted': 'The game is starting. Play until the problem shows, then close it - the zip appears in work\\reports.',
     'about.legal': 'You need your own legally dumped copy of the game. This project contains no game code or data and is not affiliated with or endorsed by Nintendo or Monolith Soft. Xenoblade Chronicles, Xenoblade Chronicles 2, Nintendo and Nintendo Switch 2 are trademarks of Nintendo; they are used here only to say which game this works with.',
   'setup.tool.visualStudio': 'Visual Studio C++ tools',
   'setup.tool.visualStudio.hint': 'Visual Studio 2022 Build Tools or newer with the C++ workload.',

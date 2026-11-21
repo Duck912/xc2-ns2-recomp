@@ -10,7 +10,9 @@ extern "C" {
 #include <libavutil/imgutils.h>
 }
 
+#include <chrono>
 #include <cstring>
+#include <mutex>
 
 #include "nxrt/log.h"
 
@@ -26,6 +28,25 @@ AVCodecID codec_id(int codec) {
         default: return AV_CODEC_ID_AV1;
     }
 }
+// One D3D11VA device for the whole process. Creating it is the expensive part of the first frame: on 0.1.4 the
+// presenting thread sat 183 ms inside a 213 ms frame at the start of a film, waiting for the first picture while the
+// worker created the device under the decode. ffdec_prewarm() builds it during the loading screen instead, and every
+// stream takes a reference to the same one; an unused device is one COM object and no GPU work.
+std::mutex g_dev_mu;
+AVBufferRef* g_dev = nullptr;
+
+AVBufferRef* shared_device() {
+    std::lock_guard<std::mutex> lk(g_dev_mu);
+    if (g_dev) return g_dev;
+    AVBufferRef* hw = nullptr;
+    const auto t0 = std::chrono::steady_clock::now();
+    if (av_hwdevice_ctx_create(&hw, AV_HWDEVICE_TYPE_D3D11VA, nullptr, nullptr, 0) < 0) return nullptr;
+    g_dev = hw;   // process lifetime: each decoder holds its own reference to it
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+    NXLOG_I(kTag, "D3D11VA device in %lld ms (shared by every stream)", static_cast<long long>(ms));
+    return g_dev;
+}
+
 enum AVPixelFormat pick_fmt(AVCodecContext*, const enum AVPixelFormat* fmts) {
     for (const enum AVPixelFormat* p = fmts; *p != AV_PIX_FMT_NONE; ++p)
         if (*p == AV_PIX_FMT_D3D11 || *p == AV_PIX_FMT_VULKAN || *p == AV_PIX_FMT_CUDA) return *p;
@@ -44,10 +65,7 @@ struct FfDec {
 
 bool ffdec_available(std::string* why) {
     if (!avcodec_find_decoder(AV_CODEC_ID_AV1)) { if (why) *why = "avcodec has no AV1 decoder"; return false; }
-    AVBufferRef* hw = nullptr;
-    const int r = av_hwdevice_ctx_create(&hw, AV_HWDEVICE_TYPE_D3D11VA, nullptr, nullptr, 0);
-    if (r < 0) { if (why) *why = "no D3D11VA device"; return false; }
-    av_buffer_unref(&hw);
+    if (!shared_device()) { if (why) *why = "no D3D11VA device"; return false; }
     return true;
 }
 
@@ -61,12 +79,14 @@ FfDec* ffdec_create(int codec, std::string* why) {
     auto* d = new FfDec();
     d->ctx = avcodec_alloc_context3(c);
     if (!d->ctx) { delete d; return nullptr; }
-    if (av_hwdevice_ctx_create(&d->hw, AV_HWDEVICE_TYPE_D3D11VA, nullptr, nullptr, 0) < 0) {
+    AVBufferRef* shared = shared_device();
+    if (!shared) {
         avcodec_free_context(&d->ctx);
         delete d;
         if (why) *why = "D3D11VA device creation failed";
         return nullptr;
     }
+    d->hw = av_buffer_ref(shared);
     d->ctx->hw_device_ctx = av_buffer_ref(d->hw);
     d->ctx->get_format = pick_fmt;
     d->ctx->thread_count = 0;
@@ -86,6 +106,8 @@ FfDec* ffdec_create(int codec, std::string* why) {
     NXLOG_I(kTag, "libavcodec %s on D3D11VA", c->name);
     return d;
 }
+
+bool ffdec_prewarm() { return shared_device() != nullptr; }
 
 bool ffdec_decode(FfDec* d, const uint8_t* data, size_t size, int64_t pts, std::vector<FfDecPicture>* out) {
     if (!d || d->failed || !out) return false;
@@ -153,6 +175,7 @@ void ffdec_destroy(FfDec* d) {
 }  // namespace nxrt::media
 #else
 namespace nxrt::media {
+bool ffdec_prewarm() { return false; }
 bool ffdec_available(std::string* why) { if (why) *why = "built without FFmpeg"; return false; }
 FfDec* ffdec_create(int, std::string* why) { if (why) *why = "built without FFmpeg"; return nullptr; }
 bool ffdec_decode(FfDec*, const uint8_t*, size_t, int64_t, std::vector<FfDecPicture>*) { return false; }

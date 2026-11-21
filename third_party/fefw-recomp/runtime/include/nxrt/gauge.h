@@ -56,6 +56,9 @@ void soak_note_frame();
 // 0 = off) is logged with what the registered context sources saw change during it; at most one such line per second (the worst of the second,
 // with the count of the others), then the phase times below (ms of the frame). Sources are read on the presenting thread once per frame:
 // they must be lock-free (an atomic load).
+// A film ended (the decoder saw end of stream). For the next two minutes the hitch summaries say how long ago it was, so a log
+// says by itself whether a slow stretch follows a cutscene - the report a player cannot be asked to time by hand. One store.
+void hitch_note_film_end();
 void hitch_add_counter(const char* label, uint64_t (*fn)());   // cumulative count / bytes: the hitch line shows the growth during the frame
 void hitch_add_level(const char* label, int64_t (*fn)());      // a level (jobs in flight): shown when non-zero at the end of the frame
 void hitch_start();

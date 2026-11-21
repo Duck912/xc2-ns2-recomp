@@ -28,6 +28,8 @@ function reportHtml(s) {
       ${files.length ? `<div class="row wrap" style="margin-top: var(--space-4)">${files
         .map((f) => `<button class="btn" data-open="${esc(f.name)}">${icon('file-text')}${esc(f.name)}${f.fresh && f.name !== 'fefw.log' ? esc(t('play.fileNew')) : ''}</button>`)
         .join('')}</div>` : ''}
+      ${s.crashed ? `<p class="dim" style="margin-top: var(--space-4)">${esc(t('play.recordHint'))}</p>
+      <div class="row wrap"><button class="btn primary" id="record">${icon('file-text')}${esc(t('play.recordReport'))}</button></div>` : ''}
     </div>`;
 }
 
@@ -93,6 +95,14 @@ export async function render(el, ctx) {
       </div>`;
     refreshIcons();
     el.querySelector('#play')?.addEventListener('click', () => api('play').catch((e) => toast(errText(e), 'error')));
+    el.querySelector('#record')?.addEventListener('click', async () => {
+      try {
+        await api('start_report');
+        toast(t('play.recordStarted'));
+      } catch (e) {
+        toast(errText(e), 'error');
+      }
+    });
     el.querySelector('#to-setup')?.addEventListener('click', () => ctx.go('setup'));
     el.querySelector('#open-dir')?.addEventListener('click', () => api('open_game_dir').catch((e) => toast(errText(e), 'error')));
     el.querySelector('#open-mods')?.addEventListener('click', () => api('open_mods_dir').catch((e) => toast(errText(e), 'error')));

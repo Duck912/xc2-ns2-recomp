@@ -48,6 +48,10 @@ export const zh = {
     'play.noExitCode': '无退出码',
     'play.codeWithHex': '退出码 {code}（{hex}）',
     'play.reportClean': '上次运行',
+    'play.recordReport': '录一份报告',
+    'play.recordHint':
+      '想让我们查？点这里录一份报告：会用诊断模式再启动一次游戏，关掉窗口后把日志、设置和帧时间打包成 zip，可以直接附到 issue 里。',
+    'play.recordStarted': '游戏已启动。再复现一次后关掉窗口，zip 会出现在 work\\reports。',
     'play.reportCrashed': '游戏未正常结束',
     'play.fileNew': '（新）',
     'play.problemRepo': '未找到仓库。请在设置里指定它的文件夹。',
@@ -342,6 +346,12 @@ export const zh = {
     'about.credits': '致谢',
     'about.creditsText': '见 README.md：nxrecomp、fefw-recomp 运行时、Ryujinx 的着色器翻译器，以及其它本项目所基于的项目。',
     'about.noGameFiles': '不含任何游戏文件。',
+    'about.reportTitle': '遇到问题了？',
+    'about.reportHint':
+      '点一下会用诊断模式启动游戏。玩到问题出现后关掉窗口，日志、设置和帧时间会打包到 work\\reports，可以直接附到 issue 里。',
+    'about.reportStart': '录制一份报告',
+    'about.reportOpen': '打开报告文件夹',
+    'about.reportStarted': '游戏已启动。玩到问题出现后关掉窗口，zip 会出现在 work\\reports。',
     'about.legal': '你需要自己合法 dump 的游戏副本。本项目不含游戏代码或数据，与 Nintendo 或 Monolith Soft 无隶属或背书关系。Xenoblade Chronicles、异度之刃、Nintendo 与 Nintendo Switch 2 是 Nintendo 的商标；此处仅用于说明本程序适用于哪个游戏。',
   'settings.files.checking': '正在检查文件……',
   'settings.files.dlss': 'DLSS',

@@ -48,6 +48,7 @@
 #include "nxrt/config.h"
 #include "nxrt/dispatch.h"
 #include "nxrt/game.h"
+#include "nxrt/gauge.h"
 #include "nxrt/log.h"
 #include "nxrt/module.h"
 #include "nxrt/video_codec.h"
@@ -225,6 +226,10 @@ struct Decoder {
     std::deque<std::pair<uint32_t, uint64_t>> waiting;    // acquired buffers without a picture yet (index, fence sequence)
     std::deque<Picture> ready;                            // decoded pictures without a buffer yet
     std::deque<Pending> pending;                          // submitted packets not decoded yet (input order)
+    // What the first frame of a film costs, in the log: the moment the first packet arrived and the moment a picture
+    // came out. The gap is what used to show up as a 213 ms frame at the start of a cutscene (0.1.4, RTX 5080).
+    std::chrono::steady_clock::time_point t_first_packet{};
+    long long first_picture_ms = -1;
     std::mutex dec_mu;                                    // the codec context and last picture: the worker decodes, the guest may fall back
     std::thread worker;                                   // decodes pending packets ahead of the player, off its thread
     std::condition_variable cv;
@@ -864,11 +869,17 @@ void decode_one(Decoder& d) {
             pic.eos = true;
             out.push_back(std::move(pic));
             NXLOG_I("vcodec", "decoder %u: end of stream after %llu pictures", d.id, (unsigned long long)d.pictures);
+            hitch_note_film_end();   // the hitch summaries say how long ago this was, so a slow stretch after a cutscene is visible
         }
     }
     if (out.empty()) return;
     {
         std::lock_guard<std::mutex> lk(d.mu);
+        if (d.first_picture_ms < 0 && d.t_first_packet.time_since_epoch().count() != 0) {
+            d.first_picture_ms = static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - d.t_first_packet).count());
+            NXLOG_I("vcodec", "decoder %u: first picture %lld ms after its first packet", d.id, d.first_picture_ms);
+        }
         for (auto& pic : out) d.ready.push_back(std::move(pic));
     }
     d.cv.notify_all();
@@ -905,6 +916,7 @@ Decoder::~Decoder() {
 void submit_packet(::Ctx* c, uint64_t dec, const uint8_t* data, size_t size, int64_t pts, bool eos) {
     auto d = dec_of(dec);
     if (!d) { RET(0); return; }
+    if (d->t_first_packet.time_since_epoch().count() == 0) d->t_first_packet = std::chrono::steady_clock::now();
     s_packets++;
     bool fences = false;
     {
@@ -1315,6 +1327,11 @@ bool install_video_codec_hle() {
     const int64_t def_threads = std::min<int64_t>(8, std::max<int64_t>(4, static_cast<int64_t>(std::thread::hardware_concurrency()) / 2));
     g_threads = static_cast<int>(std::clamp<int64_t>(config_get_int("media", "video_decoder_threads", def_threads), 1, 16));
     g_hwdec = config_get_bool("media", "hwdec", true);
+    if (g_hwdec) {
+        // The first film frame used to wait for the D3D11 device to come up (183 ms inside a 213 ms frame on 0.1.4).
+        // Build it now, off the game's threads, so that cost lands in the loading screen instead of in the film.
+        std::thread([] { ffdec_prewarm(); }).detach();
+    }
         // Diagnostic: the player drops a frame whose timestamp is more than a frame or so behind its own movie clock, and a software 4K
         // AV1 decode plus the pool->VideoFrame copies put every frame ~85 ms behind, so it dropped all but the first. Reporting the
         // timestamps this much later makes them look on time (at the cost of that much A/V offset).
