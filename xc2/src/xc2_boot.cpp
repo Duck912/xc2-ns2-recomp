@@ -693,6 +693,9 @@ static void arm_frame_rate(uint64_t main_base) {
     // is what holds 60 fps. The capture needs whole-pool copies in video memory, so all three are "auto": the runtime turns the
     // capture on when the copies' budget can hold them (a 16 GB card, not a 12 GB one, an APU or a Steam Deck), and then leads by one
     // frame without A7's per-draw instance snapshots; otherwise all stays as it was (no lead, snapshots on). Settings the player made win.
+    // A stamp the log can be checked against: with two ways to build the runtime (this exe or the package's xc2_rt.dll),
+    // "which binary ran" decided several tests on 2026-11-21. Bump it whenever the film/decode model changes.
+    NXLOG_I("xc2", "build stamp: film-model-8 (decoder pool per the SDK library, Vulkan Video decode)");
     if (!nxrt::config_has("nvn", "mirror_capture")) nxrt::config_set("nvn", "mirror_capture", "auto");
     if (!nxrt::config_has("nvn", "snapshot_instances")) nxrt::config_set("nvn", "snapshot_instances", "auto");
     if (!nxrt::config_has("nvn", "present_ahead")) nxrt::config_set("nvn", "present_ahead", "auto");

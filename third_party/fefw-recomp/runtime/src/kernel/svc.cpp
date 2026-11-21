@@ -198,8 +198,15 @@ static void note_fail(::Ctx* c, uint32_t number, uint64_t pc) {
     if (seen[(number >> 6) & 3].fetch_or(bit) & bit) return;
     NXLOG_W("svc", "%s (%u) -> 0x%X at %s", svc_name(number), number, r, module_describe(pc).c_str());
 }
+// Defined with the movie decoder (src/media/video_codec.cpp): the decoder workers cannot execute guest code, so the events they
+// owe are signalled from the next guest call - every SVC is a chance, and the game makes thousands a second.
+namespace media {
+void media_drain_signals(::Ctx* c);
+}
+
 void svc_dispatch(::Ctx* c, uint32_t number, uint64_t pc) {
     GameSvcTimer game_timer(number);
+    nxrt::media::media_drain_signals(c);
     if (kernel::KThread* self = kernel::current_thread()) self->last_proc.store(static_cast<int>(GetCurrentProcessorNumber()), std::memory_order_relaxed);   // the starvation line
     if (auto fn = g_busy_hook.load(std::memory_order_relaxed)) fn();
     if (tt::detail::svc_every.load(std::memory_order_relaxed)) tt::detail::on_svc(c);      // test tooling: frame_source = svc:N
