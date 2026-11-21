@@ -97,6 +97,15 @@ uint64_t granule_bytes() {
 // in chunks of that many MiB plus a quarter of it overlapping the next chunk, each on the render thread the first time a draw, copy or texture
 // touches it. vkAllocateMemory of an import pins every page of it (about a quarter of a millisecond per MiB) and a vkQueueSubmit2 running beside
 // it waits: Pokopia's 3500 MiB graphics heap took ~0.9 s as one import, while draws read only a few MiB of it.
+// [nvn] pool_chunk_unviewed (default off): pools imported at their own address (not in the heap's primary view: XC2 NS2's MapPhysicalMemory
+// pools of 500 MiB - 2.5 GiB) are imported in chunks too. Overlapping chunks import the same host pages twice, which AMD's driver refused
+// (VK_ERROR_INVALID_EXTERNAL_HANDLE on an RX 9060 XT with [memory] heap_section = 0); NVIDIA's accepts it. Whole, each such pool pinned all its
+// pages in one vkAllocateMemory under the driver lock the render thread's submits and presents wait for (80-390 ms load-in stalls).
+bool chunk_unviewed() {
+    static const bool on = config_get_bool("nvn", "pool_chunk_unviewed", false);
+    return on;
+}
+
 uint64_t import_stride() {
     static const uint64_t s = [] {
         const int64_t mb = std::max<int64_t>(0, config_get_int("nvn", "pool_import_chunk_mb", 64));
@@ -228,7 +237,7 @@ PoolGpu* import_pool(MemoryPool* p) {
     const uint64_t stride = import_stride();
     // Chunks overlap, and without private views two of them would import the same host pages: the driver refuses the second
     // (VK_ERROR_INVALID_EXTERNAL_HANDLE, seen on the RX 9060 XT with [memory] heap_section = 0). Unviewed pools are imported whole.
-    const bool chunked = viewed && stride && size > stride + import_overlap();
+    const bool chunked = (viewed || chunk_unviewed()) && stride && size > stride + import_overlap();
     if (!chunked && size > dev.limits_ext().max_buffer_size && dev.limits_ext().max_buffer_size) {
         NXLOG_W(kTag, "pool of 0x%llx bytes is larger than maxBufferSize 0x%llx: the tail is not reachable by the GPU",
                 static_cast<unsigned long long>(size), static_cast<unsigned long long>(dev.limits_ext().max_buffer_size));
@@ -346,8 +355,15 @@ void make_dummy() {
 void prefetch_pool(MemoryPool* p) {
     static const bool enabled = config_get_bool("nvn", "pool_prefetch", true);   // [nvn] pool_prefetch = false: import on first use only
     if (!enabled || !p || p->is_virtual || !p->base || !p->size || !active()) return;
-    // a pool larger than one chunk is imported chunk by chunk as the render thread touches it (pool_chunk), never whole
-    if (import_stride() && p->size > import_stride() + import_overlap()) return;
+    // A pool larger than one chunk is imported chunk by chunk as the render thread touches it (pool_chunk), never whole - but only a pool in
+    // the heap's primary view is chunked (import_pool: unviewed pools are imported whole). XC2 NS2's 500 MiB - 2.5 GiB pools are MapPhysicalMemory
+    // pages at their own address: skipped here, each was imported whole on the render thread at its first draw (65-390 ms load-in stalls).
+    {
+        static const bool use_view = config_get_bool("nvn", "pool_view", true);
+        const uint64_t b = reinterpret_cast<uint64_t>(p->base);
+        const bool viewed = use_view && mem::heap_has_section() && b >= mem::kHeapBase && b + p->size <= mem::kHeapBase + mem::heap_reserved();
+        if ((viewed || chunk_unviewed()) && import_stride() && p->size > import_stride() + import_overlap()) return;
+    }
     std::lock_guard<std::mutex> lk(g_pf_mu);
     if (g_pf_stop) return;
     int expect = 0;

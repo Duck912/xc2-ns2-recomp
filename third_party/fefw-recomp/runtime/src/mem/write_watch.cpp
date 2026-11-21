@@ -32,6 +32,7 @@
 #include <vector>
 
 #include "nxrt/config.h"
+#include "nxrt/ftrace.h"
 #include "nxrt/gauge.h"
 #include "nxrt/log.h"
 #include "nxrt/memory.h"
@@ -386,6 +387,7 @@ constexpr uint64_t kGranuleBytes = 64ull << 10;
 // armed page (GetWriteWatch with reset). They lose their armed and valid bits and count as written, like a write fault elsewhere. Owner.
 std::atomic<uint64_t> g_ww_polls{0}, g_ww_poll_us{0}, g_ww_poll_hits{0};
 void poll_write_watch(Region* r) {
+    NXFT_MIN("ww.poll", 1000000);
     const auto t0 = std::chrono::steady_clock::now();
     static thread_local std::vector<PVOID> addrs(16);
     ExclusiveLock lk(r);
