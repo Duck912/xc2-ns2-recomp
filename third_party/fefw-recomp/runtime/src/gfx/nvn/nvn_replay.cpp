@@ -487,6 +487,7 @@ bool g_trigger_read = false, g_trigger_seen = false, g_trigger_done = false;
 int64_t g_trigger_present = -1;
 int g_trace_n = 0;
 std::atomic<bool> g_trace_req{false};   // backend_trace_next_frame(): trace the first whole frame after this flag is seen
+std::atomic<int64_t> g_trace_span{0};    // backend_trace_frames(n): trace this many consecutive frames (no RT dumps unless asked)
 #define TRACE(...) do { if (g_trace) NXLOG_I("nvn.trace", __VA_ARGS__); } while (0)
 
 // [nvn] trace_compact = 0|1|2 (NXRT_NVN_TRACE_COMPACT, default 0 = auto): what a traced draw prints.
@@ -605,6 +606,7 @@ bool barrier_keeps_pass() {
 // one log line (nvn.rstats) gives the averages per frame and per draw, with the counts behind them. Render thread only.
 enum RsZone : int { kRsHead, kRsPrep, kRsFb, kRsPass, kRsPipe, kRsDyn, kRsSets, kRsVb, kRsCall, kRsOut, kRsDispatch, kRsAll, kRsAlloc,
                    kRsKey, kRsLookup, kRsBind,   // the three parts of the pipe zone (nested timers, they do not disturb the marks)
+                   kRsPrepAttach, kRsPrepTex, kRsPrepUpscale,   // the three parts of the prep zone: attachments, textures, upscale
                    kRsN };
 struct RStats {
     uint64_t cyc[kRsN] = {};
@@ -683,6 +685,9 @@ void rs_report() {
     NXLOG_I("nvn.rstats", "set 0 pushes/frame: full %.0f delta %.0f none %.0f, writes %.0f (lean_draws %s, push_uniforms %s, ubo_only_rebind %s)",
             static_cast<double>(g_lean_push_full) * pf, static_cast<double>(g_lean_push_delta) * pf, static_cast<double>(g_lean_push_none) * pf,
             static_cast<double>(g_lean_push_writes) * pf, lean_on() ? "on" : "off", push_uniforms_on() ? "on" : "off", ubo_only_rebind_on() ? "on" : "off");
+    // What the prep zone is made of: the attachment/stencil decisions, prepare_textures, and the upscale hookup.
+    NXLOG_I("nvn.rstats", "prep split: attach %.2f, textures %.2f, upscale %.2f us/draw (prep zone %.2f)",
+            dus(kRsPrepAttach), dus(kRsPrepTex), dus(kRsPrepUpscale), dus(kRsPrep));
     // [nvn] replay_stats (round 45): what the pipe zone is made of - the key build, the pipeline lookup and the bind.
     NXLOG_I("nvn.rstats", "pipe split: key %.2f lookup %.2f bind %.2f us/draw (pipe zone %.2f; %.0f keys/frame)",
             dus(kRsKey), dus(kRsLookup), dus(kRsBind), dus(kRsPipe), s.keys * pf);
@@ -1379,7 +1384,10 @@ bool g_fb_seen = false;                                    // the last check fou
 //   [nvn] fb_memo: 0 = off, 1 = on, 2 = check (recompute on a hit, report a mismatch; xc2-recomp calls this XC2_TEX_MEMO=2)
 uint64_t g_bind_gen = 1;
 int fb_memo_mode() {
-    static const int mode = static_cast<int>(std::clamp<int64_t>(nxrt::config_get_int("nvn", "fb_memo", 0), 0, 2));
+    // Default 1 since 2026-11-21: the scan costs 7.4 us per draw in the DLC's rainforest (11 ms a frame at 1543 draws) and
+    // the memo cuts it to 4.2; mode 1 recomputes the first 20,000 hits and then one in 256, so a wrong answer shows up in
+    // the log instead of silently binding the wrong copy.
+    static const int mode = static_cast<int>(std::clamp<int64_t>(nxrt::config_get_int("nvn", "fb_memo", 1), 0, 2));
     return mode;
 }
 struct FbMemoKey {
@@ -3125,6 +3133,18 @@ const int ff_mode = std::clamp(hot_int("front_face", ff_cfg), 0, 3);   // live: 
         VkFrontFace ff = vk_front_face(S.poly.front_face);
         const bool vp_flipped = S.window_origin != NVN_WINDOW_ORIGIN_MODE_LOWER_LEFT;
         const bool flip_ff = ff_mode == 3 || (ff_mode == 1 && vp_flipped) || (ff_mode == 0 && !vp_flipped);
+        // Which way front face is being decided, once per change: a culling disagreement shows up as a part of a model
+        // vanishing for a frame, and this line is what tells that apart from a texture or shader problem.
+        {
+            static int last_mode = -1, last_org = -1;
+            const int org = static_cast<int>(S.window_origin);
+            if (ff_mode != last_mode || org != last_org) {
+                last_mode = ff_mode;
+                last_org = org;
+                NXLOG_I(kTag, "front face: window origin %s, [nvn] front_face_mode %d -> flip %d",
+                        S.window_origin == NVN_WINDOW_ORIGIN_MODE_LOWER_LEFT ? "lower-left" : "upper-left", ff_mode, flip_ff ? 1 : 0);
+            }
+        }
         if (flip_ff) ff = ff == VK_FRONT_FACE_CLOCKWISE ? VK_FRONT_FACE_COUNTER_CLOCKWISE : VK_FRONT_FACE_CLOCKWISE;
         vkCmdSetFrontFace(cb, ff);
         vkCmdSetRasterizerDiscardEnable(cb, S.rasterizer_discard);
@@ -3796,6 +3816,7 @@ bool begin_draw(int mode, bool indexed, int index_type, VkPrimitiveTopology* top
         // sampled and stencil-written in the same pass: the attachment has to be GENERAL, or the sampler's layout and the
         // attachment's disagree (VUID-vkCmdDrawIndexed-imageLayout-00344). The stencil write itself is unaffected.
         g_depth_general = samples_depth && stencil_writes;
+        rs_mark(kRsPrepAttach);
         prepare_textures(*pl);
         // A colour attachment that this draw also writes through a storage image (image load/store to a render
         // target) cannot stay in the colour-attachment layout: the descriptor is GENERAL, so the attachment has to be
@@ -3804,6 +3825,7 @@ bool begin_draw(int mode, bool indexed, int index_type, VkPrimitiveTopology* top
         for (uint32_t i = 0; i < S.ncolor; ++i)
             for (Texture* st : g_storage_bound)
                 if (S.color_tex[i].get() == st) g_color_general |= 1u << i;
+        rs_mark(kRsPrepTex);
         // [nvn] fs_debug: a fragment output whose numeric type disagrees with the colour attachment it lands in, or
         // lands in nothing. Both are Undefined-Value warnings in Vulkan; the console stores the register bits
         // unchanged, so the fix is a shader variant - but which shader is not visible from the VUID, only from here.
@@ -3857,6 +3879,7 @@ bool begin_draw(int mode, bool indexed, int index_type, VkPrimitiveTopology* top
             }
         }
         scene_upscale_for_draw(*pl);
+        rs_mark(kRsPrepUpscale);
     }
     rs_mark(kRsPrep);
     if (S.ncolor && fg_hudless_candidate(S.color_tex[0].get(), (S.color.blend_enable_mask & 1u) != 0)) {   // frame generation: the scene before the UI
@@ -6104,6 +6127,12 @@ void replay_begin_submit(Frame& f) {
     }
     if (g_trace_req.exchange(false)) g_trace_frame = static_cast<int64_t>(counters().presents.load()) + 1;   // armed from a script (@shot nvntrace_*)
     g_trace = g_trace_frame >= 0 && static_cast<int64_t>(counters().presents.load()) == g_trace_frame;
+    // A span from one key press: the frames a flicker alternates over cannot be hit by hand, and with trace_targets set to a
+    // target that is never drawn the cost is the draw list only.
+    if (const int64_t span = g_trace_span.load(std::memory_order_relaxed); span > 0) {
+        g_trace_span.store(span - 1, std::memory_order_relaxed);
+        g_trace = true;
+    }
     for (int64_t e : g_trace_extra) g_trace |= static_cast<int64_t>(counters().presents.load()) == e;
     if (g_trace) {
         g_trace_n = 0;
@@ -6198,6 +6227,7 @@ void replay_lists(Frame& f, const std::vector<Ref<CmdList>>& lists) {
 }
 
 void replay_request_trace() { g_trace_req.store(true); }
+void replay_request_trace_span(int count) { g_trace_span.store(count > 0 ? count : 1); }
 
 // [nvn] trace: the end-of-frame answer to "which blended draws ignore the scene's depth" (HANDOVER 42.3). One line per group of
 // (target, fragment shader, blend, effective depth state), with the draw numbers, sorted by how many draws the group has: a card
