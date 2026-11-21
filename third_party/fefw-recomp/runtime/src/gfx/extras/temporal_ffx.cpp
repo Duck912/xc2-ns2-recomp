@@ -4,10 +4,12 @@
 // one explicitly, otherwise upscalers\fsr3\ (the release package) or the executable's folder is searched. The upscaler version is the newest the DLL offers for this GPU (FSR 3.1.x; FSR 4 where AMD supports it).
 #include <windows.h>
 
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -26,6 +28,19 @@ namespace nxrt::extras {
 namespace {
 
 constexpr const char* kTag = "fsr3";
+
+std::mutex g_ver_mu;
+std::string g_live_want_version;
+std::string g_active_version;
+std::atomic<uint32_t> g_ffx_gen{0};
+
+std::string effective_want_version() {
+    {
+        std::lock_guard<std::mutex> lk(g_ver_mu);
+        if (!g_live_want_version.empty()) return g_live_want_version;
+    }
+    return nxrt::config_get_str("upscale", "fsr_version", "");
+}
 
 std::wstring exe_dir() {
     wchar_t buf[MAX_PATH];
@@ -354,15 +369,23 @@ public:
         // HANDOVER 95.14: pin the game's dynamic resolution before the upscaler runs (no-op unless [upscale] pin_render_scale)
         nxrt::extras::pin_render_scale_tick();
         nxrt::extras::pin_render_size_tick();
+        const uint32_t gen = g_ffx_gen.load(std::memory_order_acquire);
+        if (gen != seen_gen_) {
+            seen_gen_ = gen;
+            failed_ = false;
+            reset_contexts();
+        }
         if (failed_) return false;
         // HANDOVER 95.19: the game's dynamic resolution changes the input size every few dozen frames, and FSR 4.1.2 on
         // amdvlk dies on the barrier it records a few milliseconds after such a change (docs/handover/41 95.10). The NS1
         // recomp never sees that because it tears the FidelityFX context down whenever the size changes; [upscale]
-        // fsr_follow_size does the same here. It costs one context creation per size step.
-        // HANDOVER 95.19: one FidelityFX context per (render, output) size, kept and reused. Rebuilding a context for every
-        // dynamic-resolution step did stop the crashes but cost a ~140 ms hitch per step; keeping the contexts removes that
-        // while still never handing a live context a resource set of a different size.
-        static const bool follow_size = nxrt::config_get_bool("upscale", "fsr_follow_size", false);
+        // fsr_follow_size does the same here. Always enable per-size isolation for FSR 4.x to protect amdvlk.
+        const std::string want_v = effective_want_version();
+        const bool follow_size = nxrt::config_get_bool("upscale", "fsr_follow_size", false) || (!want_v.empty() && want_v[0] == '4');
+        if (follow_size != follow_size_active_) {
+            reset_contexts();
+            follow_size_active_ = follow_size;
+        }
         if (follow_size && !slot_for(f.render, f.out)) {
             failed_ = true;
             return false;
@@ -434,7 +457,7 @@ private:
         // ffxQuery(GET_VERSIONS) + ffxOverrideVersion chained into the create desc.
         // read per context, not once per process: switching [dlss] upscaler away from fsr3 and back re-reads it, so the
         // ini can change without a restart (the version list itself is only logged when it changes)
-        const std::string want_version = nxrt::config_get_str("upscale", "fsr_version", "");
+        const std::string want_version = effective_want_version();
         ffxOverrideVersion ov = {};
         bool override_ready = false;
         if (!want_version.empty()) {
@@ -510,6 +533,10 @@ private:
         ffxQueryGetProviderVersion pv = {};
         pv.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
         if (query_(&ctx_, &pv.header) == FFX_API_RETURN_OK && pv.versionName) version_ = std::string("FSR ") + pv.versionName;
+        {
+            std::lock_guard<std::mutex> lk(g_ver_mu);
+            g_active_version = version_.empty() ? "FSR 3" : version_;
+        }
         NXLOG_I(kTag, "context made: %s, %ux%u -> %ux%u, inverted depth, hdr %d, auto exposure %d", name(), render.width, render.height,
                 out.width, out.height, (cd.flags & FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE) ? 1 : 0,
                 (cd.flags & FFX_UPSCALE_ENABLE_AUTO_EXPOSURE) ? 1 : 0);
@@ -568,7 +595,26 @@ private:
         NXLOG_I(kTag, "contexts alive: %zu (one per size, FSR follows the game's dynamic resolution)", slots_.size());
         return active_slot_;
     }
+    void reset_contexts() {
+        if (!ctx_ && slots_.empty()) return;
+        if (dev_) dev_->wait_idle();
+        if (ctx_) {
+            destroy_(&ctx_, nullptr);
+            ctx_ = nullptr;
+        }
+        for (Slot& s : slots_) {
+            if (s.ctx) destroy_(&s.ctx, nullptr);
+        }
+        slots_.clear();
+        active_slot_ = nullptr;
+        active_ = nullptr;
+        max_render_ = {};
+        max_out_ = {};
+    }
+
     uint64_t slot_tick_ = 0;
+    uint32_t seen_gen_ = 0;
+    bool follow_size_active_ = false;
 
     ffxContext ctx_ = nullptr;
     VkExtent2D max_render_ = {}, max_out_ = {};
@@ -578,6 +624,21 @@ private:
 };
 
 }  // namespace
+
+void set_ffx_version_live(const char* version) {
+    const std::string next = version ? version : "";
+    if (effective_want_version() == next) return;
+    {
+        std::lock_guard<std::mutex> lk(g_ver_mu);
+        g_live_want_version = next;
+    }
+    g_ffx_gen.fetch_add(1, std::memory_order_release);
+}
+
+std::string temporal_ffx_active_version() {
+    std::lock_guard<std::mutex> lk(g_ver_mu);
+    return g_active_version;
+}
 
 bool temporal_ffx_available() { return !find_dll().empty(); }
 

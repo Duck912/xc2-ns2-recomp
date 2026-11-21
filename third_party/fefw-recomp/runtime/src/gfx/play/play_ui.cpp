@@ -24,6 +24,7 @@
 #include "nxrt/frame_limiter.h"
 #include "nxrt/input_source.h"
 #include "nxrt/lowlat.h"
+#include "nxrt/nvn_backend.h"
 #include "nxrt/overlay.h"
 #include "nxrt/platform.h"
 #include "play_game.h"
@@ -77,9 +78,6 @@ constexpr const char* kAstcZh[] = {"快速 (BC7)", "高质量 (后台重编码)"
 constexpr const char* kAstcEn[] = {"Fast (BC7)", "High (background)", "Uncompressed (RGBA8)"};
 constexpr int kAstcCount = static_cast<int>(sizeof kAstcValues / sizeof kAstcValues[0]);
 
-constexpr const char* kPromptZh[kPromptStyleCount] = {"Switch 原版", "Xbox", "PlayStation", "键盘与鼠标", "自动跟随设备"};
-constexpr const char* kPromptEn[kPromptStyleCount] = {"Switch", "Xbox", "PlayStation", "Keyboard & Mouse", "Auto"};
-
 constexpr const char* kCornerZh[] = {"左上角", "右上角", "左下角", "右下角"};
 constexpr const char* kCornerEn[] = {"Top left", "Top right", "Bottom left", "Bottom right"};
 constexpr int kCornerCount = 4;
@@ -97,18 +95,64 @@ constexpr const char* kHdrFmtEn[] = {"Auto", "HDR10", "scRGB"};
 constexpr const char* kLatencyZh[] = {"关闭", "自动", "开启", "增强 (Boost)"};
 constexpr const char* kLatencyEn[] = {"Off", "Auto", "On", "Boost"};
 
-constexpr const char* kUpscaleZh[] = {"关闭", "FSR 1 (空间锐化)", "FSR 3", "DLSS", "XeSS", "NIS (空间锐化)", "DLAA"};
-constexpr const char* kUpscaleEn[] = {"Off", "FSR 1 (spatial)", "FSR 3", "DLSS", "XeSS", "NIS (spatial)", "DLAA"};
-constexpr extras::UpscaleMode kUpscaleOrder[] = {
-    extras::UpscaleMode::Off,  extras::UpscaleMode::Fsr1, extras::UpscaleMode::Nis,
-    extras::UpscaleMode::Fsr3, extras::UpscaleMode::Dlss, extras::UpscaleMode::Dlaa,
+constexpr const char* kGameResZh[] = {
+    "4K 真原生 (3840x2160 -> 4K)",
+    "1440p 超分 (2560x1440 -> 4K)",
+    "1080p 超分 (1920x1080 -> 4K)",
+    "900p 超分 (1600x900 -> 4K)",
+    "主机原版动态 4K",
 };
-constexpr int kUpscaleOrderCount = static_cast<int>(sizeof kUpscaleOrder / sizeof kUpscaleOrder[0]);
+constexpr const char* kGameResEn[] = {
+    "4K Native (3840x2160 -> 4K)",
+    "1440p -> 4K Upscale",
+    "1080p -> 4K Upscale",
+    "900p -> 4K Upscale",
+    "Console Dynamic 4K",
+};
+constexpr int kGameResCount = static_cast<int>(sizeof kGameResZh / sizeof kGameResZh[0]);
 
-constexpr const char* kUpscaleQualZh[] = {"原生抗锯齿 (100%)", "质量 (67%)", "平衡 (59%)", "性能 (50%)", "超高性能 (33%)", "自定义场景缩放"};
-constexpr const char* kUpscaleQualEn[] = {"Native AA (100%)", "Quality (67%)", "Balanced (59%)", "Performance (50%)", "Ultra Perf (33%)", "Custom"};
+constexpr const char* kGame3dUpZh[] = {
+    "FSR 3.1.6 (推荐 60fps)",
+    "FSR 4.1.2 (ML 高画质)",
+    "FSR 2.3.4 (经典版)",
+    "TAAU (内置时序)",
+    "Bilinear (无抗锯齿)",
+};
+constexpr const char* kGame3dUpEn[] = {
+    "FSR 3.1.6 (Rec. 60fps)",
+    "FSR 4.1.2 (ML High)",
+    "FSR 2.3.4 (Classic)",
+    "TAAU (Built-in)",
+    "Bilinear (Off)",
+};
+constexpr int kGame3dUpCount = static_cast<int>(sizeof kGame3dUpZh / sizeof kGame3dUpZh[0]);
 
-constexpr Trig kTrigChoices[] = {Trig::Press, Trig::Tap, Trig::Hold, Trig::Toggle, Trig::DoubleTap};
+constexpr const char* kSpatialUpZh[] = {"关闭", "FSR 1 (空间锐化)", "NIS (空间锐化)"};
+constexpr const char* kSpatialUpEn[] = {"Off", "FSR 1 (spatial)", "NIS (spatial)"};
+constexpr extras::UpscaleMode kSpatialUpModes[] = {
+    extras::UpscaleMode::Off,
+    extras::UpscaleMode::Fsr1,
+    extras::UpscaleMode::Nis,
+};
+constexpr int kSpatialUpCount = static_cast<int>(sizeof kSpatialUpModes / sizeof kSpatialUpModes[0]);
+
+int game3d_up_index(const Game3dSettings& g) {
+    if (g.upscaler == "taau") return 3;
+    if (g.upscaler == "bilinear") return 4;
+    if (!g.fsr_version.empty() && g.fsr_version[0] == '4') return 1;
+    if (!g.fsr_version.empty() && g.fsr_version[0] == '2') return 2;
+    return 0;
+}
+
+void set_game3d_up_index(Game3dSettings& g, int idx) {
+    switch (idx) {
+        case 0: g.upscaler = "fsr3"; g.fsr_version = "3.1"; break;
+        case 1: g.upscaler = "fsr3"; g.fsr_version = "4.1"; break;
+        case 2: g.upscaler = "fsr3"; g.fsr_version = "2.3"; break;
+        case 3: g.upscaler = "taau"; break;
+        default: g.upscaler = "bilinear"; break;
+    }
+}
 
 struct SwitchButton {
     const char* name;
@@ -121,19 +165,6 @@ constexpr SwitchButton kSwitchButtons[] = {
     {"LEFT", hid::kBtnLeft},   {"RIGHT", hid::kBtnRight}, {"LSTICK", hid::kBtnStickL}, {"RSTICK", hid::kBtnStickR},
 };
 constexpr int kSwitchButtonCount = static_cast<int>(sizeof kSwitchButtons / sizeof kSwitchButtons[0]);
-
-constexpr const char* kPadSrcLabels[kPadSrcCount] = {
-    "A / Cross (下)", "B / Circle (右)", "X / Square (左)", "Y / Triangle (上)",
-    "LB / L1",        "RB / R1",         "LT / L2",         "RT / R2",
-    "Menu / Options", "View / Create",   "左摇杆按下 (L3)", "右摇杆按下 (R3)",
-    "十字键 上",       "十字键 下",        "十字键 左",        "十字键 右",
-};
-constexpr const char* kPadChoiceNames[] = {
-    "默认", "无",
-    "A", "B", "X", "Y", "L", "R", "ZL", "ZR", "Plus", "Minus",
-    "方向 上", "方向 下", "方向 左", "方向 右", "L3", "R3",
-};
-constexpr int kPadChoiceCount = static_cast<int>(sizeof kPadChoiceNames / sizeof kPadChoiceNames[0]);
 
 // ---- Working state ------------------------------------------------------------------------------------------------------------------
 struct Page {
@@ -161,26 +192,9 @@ const char* cstr(const char* s) { return s ? s : ""; }
 const char* act_label(Act a) { return a == Act::None ? tr("无 (禁用)", "none") : act_info(a).name; }
 float px(float v) { return v * ImGui::GetFontSize() / 18.0f; }
 
-bool upscale_available(extras::UpscaleMode m) {
-    switch (m) {
-        case extras::UpscaleMode::Off:
-        case extras::UpscaleMode::Fsr1:
-        case extras::UpscaleMode::Nis: return true;
-        case extras::UpscaleMode::Fsr3: return extras::temporal_ffx_available();
-        case extras::UpscaleMode::Dlss:
-        case extras::UpscaleMode::Dlaa: return extras::temporal_dlss_available();
-        default: return false;
-    }
-}
-
 void stop_rebind(UiHost& host, Page& p) {
     if (p.rebind >= 0 && host.capturing()) host.cancel_capture();
     p.rebind = -1;
-}
-
-void stop_fps_capture(UiHost& host, Page& p) {
-    if (p.fps_capture && host.capturing()) host.cancel_capture();
-    p.fps_capture = false;
 }
 
 std::vector<int> conflicts_of(const Page& p, int row) {
@@ -223,6 +237,8 @@ void sanitize(Settings& s) {
     s.extras.picture = extras::picture_clamped(s.extras.picture);
     s.audio.volume = std::clamp(s.audio.volume, 0.0, 1.0);
     s.display.monitor = std::clamp(s.display.monitor, 0, 32);
+    s.game3d.res_preset = std::clamp(s.game3d.res_preset, 0, kGameResCount - 1);
+    s.game3d.sharpness = std::clamp(s.game3d.sharpness, 0.0, 1.0);
     if (s.audio.device.empty()) s.audio.device = "default";
 }
 
@@ -327,18 +343,6 @@ int window_mode_index(const std::string& mode) {
     for (int i = 0; i < kWindowModeCount; ++i)
         if (mode == kWindowModeKeys[i]) return i;
     return 0;
-}
-
-uint64_t pad_choice_value(int c) {
-    if (c == 0) return kPadDefault;
-    if (c == 1) return 0;
-    return static_cast<uint64_t>(hid::btn(kSwitchButtons[c - 2].bit));
-}
-
-int pad_choice_of(uint64_t v) {
-    for (int c = 0; c < kPadChoiceCount; ++c)
-        if (pad_choice_value(c) == v) return c;
-    return -1;
 }
 
 void fps_label_text(int fps, char* buf, std::size_t n) {
@@ -467,6 +471,10 @@ void pane_end(const LiveStatus& live) {
         ImGui::Text("%s: %.1f Hz  |  %s", tr("显示器", "Display"), live.refresh_hz, cstr(live.present_mode));
         const extras::HdrState hs = extras::hdr_state();
         ImGui::Text("HDR: %s  (%s)", hs.scene_hdr ? tr("开", "On") : tr("关", "Off"), extras::output_kind_name(hs.output));
+        const nvn::DlssLiveInfo dli = nvn::dlss_live_info();
+        const char* up_txt = !dli.active_name.empty() ? dli.active_name.c_str()
+                           : (!dli.upscaler.empty() ? dli.upscaler.c_str() : "-");
+        ImGui::Text("%s: %s", tr("3D 超分", "3D Upscaler"), up_txt);
         const int backlog = gfx::shader_backlog();
         if (backlog > 0) ImGui::TextColored(kOrange, "%s: %d", tr("后台着色器编译剩余", "Shaders left"), backlog);
         else ImGui::TextColored(kDimText, "%s", tr("着色器缓存已就绪", "Shader cache ready"));
@@ -695,6 +703,13 @@ void tab_display(const LiveStatus& live, Page& p, float bottom_h) {
     pane_begin("tab_display", bottom_h);
 
     card_group("窗口与分辨率", "Window & Resolution");
+    if (card_choice("game_res", "游戏 3D 分辨率 / 输出", "Game 3D resolution",
+                    "切换游戏内部 3D 渲染分辨率与主机输出分辨率（写入 nxrt.ini，重启游戏生效）。「1440p -> 4K」与「1080p -> 4K」保留 4K 清晰 UI，搭配 FSR 3.1.6 稳 60fps、FSR 4.1.2 约 42fps。",
+                    "Sets XC2 internal 3D render and output resolution in nxrt.ini (takes effect after restart). 1440p/1080p -> 4K keeps crisp 4K HUD.",
+                    &p.edit.game3d.res_preset, kGameResZh, kGameResEn, kGameResCount, true)) {
+        mark(p);
+    }
+
     int wmode = window_mode_index(d.window_mode);
     if (card_choice("wmode", "显示模式", "Window mode",
                     "无边框全屏可瞬间切换且支持 F11 / Alt+Enter 快捷切换；独占全屏会直接接管显示器。",
@@ -722,9 +737,9 @@ void tab_display(const LiveStatus& live, Page& p, float bottom_h) {
     int preset = 3;   // default 2560x1440
     for (int i = 0; i < kSizePresetCount; ++i)
         if (kSizePresets[i][0] == d.width && kSizePresets[i][1] == d.height) preset = i;
-    if (card_choice("wsize", "窗口分辨率", "Window size",
-                    "窗口模式下的画面尺寸。在无边框全屏时，窗口会填满桌面，退出全屏后恢复此尺寸。",
-                    "Window size in windowed mode. Restored when leaving fullscreen.",
+    if (card_choice("wsize", "窗口尺寸 (仅窗口模式)", "Window size (windowed)",
+                    "仅控制窗口模式下的窗口边框大小（重启后会记住），不改变上方游戏 3D 分辨率。",
+                    "Windowed-mode client size (remembered on restart); does not change 3D render resolution above.",
                     &preset, kSizeLabels, kSizeLabels, kSizePresetCount)) {
         d.width = kSizePresets[preset][0];
         d.height = kSizePresets[preset][1];
@@ -735,7 +750,7 @@ void tab_display(const LiveStatus& live, Page& p, float bottom_h) {
         char cur_sz[48];
         std::snprintf(cur_sz, sizeof cur_sz, "%d x %d", live.width, live.height);
         if (card_button("use_cur_sz", "使用当前窗口尺寸", "Use current window size",
-                        "把当前实际窗口宽高直接填入上面的窗口分辨率设置。",
+                        "把当前实际窗口宽高直接填入上面的窗口尺寸设置。",
                         "Copy the current window dimensions into the setting above.", cur_sz)) {
             d.width = live.width;
             d.height = live.height;
@@ -744,8 +759,8 @@ void tab_display(const LiveStatus& live, Page& p, float bottom_h) {
     }
 
     if (card_toggle("keep_ar", "保持 16:9 画面比例", "Keep 16:9 aspect ratio",
-                    "在非 16:9 屏幕上两侧/上下留黑边，避免人物画面被拉伸变形。",
-                    "Letterbox / pillarbox on non-16:9 displays instead of stretching.", &d.keep_aspect)) {
+                    "在非 16:9 屏幕上两侧/上下留黑边，避免画面拉伸变形。点击应用后实时生效。",
+                    "Letterbox / pillarbox on non-16:9 displays instead of stretching. Applies live.", &d.keep_aspect)) {
         mark(p);
     }
 
@@ -769,8 +784,8 @@ void tab_display(const LiveStatus& live, Page& p, float bottom_h) {
             flabels.emplace_back(b);
         }
         if (card_choice_vec("fps_cap", "帧率上限", "Frame limit",
-                            "限制游戏运行帧率。60 fps 配合垂直同步最稳定；使用 VRR (FreeSync/G-Sync) 可点下方按钮一键设为略低于刷新率。",
-                            "Caps the frame rate. 60 fps with VSync is smoothest; VRR users can cap just below refresh rate.",
+                            "限制游戏运行帧率。注：在 60Hz 启动下最高封顶 60 fps（保证游戏速度正常），向下限帧（如 30 fps）实时生效。",
+                            "Caps frame rate. Note: capped at launch rate (60 fps) to preserve real-time game speed; lower caps apply live.",
                             &fidx, flabels)) {
             d.fps_cap = kFpsChoices[fidx];
             mark(p);
@@ -811,11 +826,30 @@ void tab_display(const LiveStatus& live, Page& p, float bottom_h) {
 // ---- Tab 1: Graphics ----------------------------------------------------------------------------------------------------------------
 void tab_graphics(const LiveStatus& live, Page& p, float bottom_h) {
     DisplaySettings& d = p.edit.display;
+    Game3dSettings& g3d = p.edit.game3d;
     extras::PictureSettings& pic = p.edit.extras.picture;
     extras::HdrSettings& hdr = p.edit.extras.hdr;
     extras::UpscaleSettings& up = p.edit.extras.upscale;
 
     pane_begin("tab_graphics", bottom_h);
+
+    card_group("3D 超分与抗锯齿 (点击应用实时热切换)", "3D Upscaler & AA (Live Hot-Switch)");
+    {
+        int gidx = game3d_up_index(g3d);
+        if (card_choice("dlss_up", "3D 超分器 / FSR 版本", "3D Upscaler / FSR version",
+                        "直接切换 XC2 游戏内 3D 超分引擎，点「应用并保存」后无需重启立即热切换并写入 nxrt.ini。RX 6700 XT 上 4K 原生 FSR 3.1.6 稳 60fps；FSR 4.1.2 已自动开启防崩保护（4K 原生约 35fps，配 1440p->4K 更流畅）。",
+                        "Live hot-switch for XC2's 3D upscaler/AA (saves to nxrt.ini). FSR 3.1.6 runs 60fps at 4K on RX 6700 XT; FSR 4.1.2 auto-enables crash protection.",
+                        &gidx, kGame3dUpZh, kGame3dUpEn, kGame3dUpCount, false, true)) {
+            set_game3d_up_index(g3d, gidx);
+            mark(p);
+        }
+        if (card_slider_f("dlss_sharp", "3D 超分锐度 (FSR RCAS)", "3D Upscaler sharpness",
+                          "控制 FSR 3.1.6 / 4.1.2 / 2.3.4 内置锐化强度（0.00 关闭，1.00 最强，推荐 0.40 ~ 0.60），点应用后实时生效且不卡顿。",
+                          "FSR RCAS sharpening strength (0.00 off, 1.00 max, 0.40-0.60 recommended). Applies live.",
+                          &g3d.sharpness, 0.0, 1.0, 0.05, "%.2f", false, true)) {
+            mark(p);
+        }
+    }
 
     card_group("画面色调 (拖动实时生效)", "Colour Grading (Live)");
     if (card_button("pic_neutral", "恢复原版色调", "Preset: Neutral",
@@ -876,8 +910,8 @@ void tab_graphics(const LiveStatus& live, Page& p, float bottom_h) {
         mark(p);
     }
     if (card_slider_f("lod_bias", "贴图 LOD 偏移", "Texture LOD bias",
-                      "负值（如 -0.50）会优先选用更清晰的贴图细节，正值更柔和。原生 1440p 下 0.00 ~ -0.50 最佳。",
-                      "Negative values select sharper mip levels; 0.00 to -0.50 is ideal at 1440p.",
+                      "负值（如 -0.50）会优先选用更清晰的贴图细节，正值更柔和。原生 1440p / 4K 下 0.00 ~ -0.50 最佳。",
+                      "Negative values select sharper mip levels; 0.00 to -0.50 is ideal at 1440p / 4K.",
                       &d.lod_bias, -2.0, 2.0, 0.25, "%+.2f")) {
         mark(p);
     }
@@ -889,11 +923,6 @@ void tab_graphics(const LiveStatus& live, Page& p, float bottom_h) {
                     "Converts Switch ASTC textures to BC7. High re-encodes cleanly in background and caches to disk.",
                     &astc, kAstcZh, kAstcEn, kAstcCount, true)) {
         d.astc_quality = kAstcValues[astc];
-        mark(p);
-    }
-    if (card_toggle("dynres", "游戏动态分辨率", "Dynamic resolution",
-                    "关闭（推荐）：保持当前真原生 2560x1440 清晰度不降分辨率。开启后由游戏根据负载缩放。",
-                    "Off keeps fixed native 2560x1440 sharpness without downscaling.", &d.dynamic_resolution)) {
         mark(p);
     }
     if (card_toggle("prewarm", "后台着色器预热", "Shader pipeline prewarm",
@@ -909,50 +938,32 @@ void tab_graphics(const LiveStatus& live, Page& p, float bottom_h) {
         mark(p);
     }
     if (card_toggle("barriers", "精简管线屏障", "Fewer GPU waits",
-                    "AMD 显卡建议保持关闭（使用完整屏障防花屏）。注意：当前 nxrt.ini 已固定开启完整屏障以保证稳定性。",
-                    "Recommended off on AMD GPUs for stability. Note: nxrt.ini pass_barriers overrides this.",
+                    "减少冗余渲染屏障以略微提升性能；如遇老驱动花屏可关闭（使用完整屏障）。",
+                    "Reduces redundant barriers for slightly higher speed; turn off if driver artifacts appear.",
                     &d.fewer_gpu_waits, true)) {
         mark(p);
     }
 
-    card_group("超分与锐化", "Upscaling & Sharpening");
+    card_group("后处理窗口缩放锐化 (可选)", "Post-Present Spatial Upscale (Optional)");
     {
-        int uidx = 0;
-        for (int i = 0; i < kUpscaleOrderCount; ++i)
-            if (kUpscaleOrder[i] == up.mode) uidx = i;
-        std::vector<std::string> unames;
-        unames.reserve(kUpscaleOrderCount);
-        for (int i = 0; i < kUpscaleOrderCount; ++i) {
-            const int m = static_cast<int>(kUpscaleOrder[i]);
-            std::string s = g_zh ? kUpscaleZh[m] : kUpscaleEn[m];
-            if (!upscale_available(kUpscaleOrder[i])) s += tr(" (不可用)", " (N/A)");
-            unames.push_back(std::move(s));
-        }
-        if (card_choice_vec("up_mode", "输出超分/锐化器", "Output upscaler",
-                            "用于将渲染画面缩放至窗口尺寸（FSR 1 / NIS 为空间锐化；游戏内 3D 通道当前通过 nxrt.ini 以原生 1440p 1:1 直出）。",
-                            "Upscales or sharpens the output image. Note: 3D native 1440p is controlled via nxrt.ini.",
-                            &uidx, unames)) {
-            if (upscale_available(kUpscaleOrder[uidx])) {
-                up.mode = kUpscaleOrder[uidx];
-                mark(p);
-            }
-        }
-    }
-    if (up.mode == extras::UpscaleMode::Fsr3 || up.mode == extras::UpscaleMode::Dlss) {
-        int q = static_cast<int>(up.quality);
-        if (card_choice("up_qual", "超分质量档位", "Upscale quality",
-                        "控制内部 3D 场景缩放比例，原生抗锯齿 (100%) 最清晰。",
-                        "Controls internal render percentage; Native AA (100%) is sharpest.",
-                        &q, kUpscaleQualZh, kUpscaleQualEn, 6)) {
-            up.quality = static_cast<extras::UpscaleQuality>(q);
+        int sidx = 0;
+        for (int i = 0; i < kSpatialUpCount; ++i)
+            if (kSpatialUpModes[i] == up.mode) sidx = i;
+        if (card_choice("up_mode", "窗口空间锐化器", "Spatial window sharpener",
+                        "仅当游戏输出分辨率低于屏幕/窗口尺寸时触发（例如 1080p/1440p 游戏拉伸到 4K 全屏）；1:1 真原生输出时保持关闭即可。",
+                        "Applies FSR 1 or NIS when upscaling a smaller game output to a larger window (no-op at 1:1 native).",
+                        &sidx, kSpatialUpZh, kSpatialUpEn, kSpatialUpCount)) {
+            up.mode = kSpatialUpModes[sidx];
             mark(p);
         }
     }
-    if (card_slider_f("up_sharp", "画面锐度", "Sharpness",
-                      "调整 FSR / NIS 的锐化强度（0.00 关闭，1.00 最强，推荐 0.40 ~ 0.60）。",
-                      "Sharpening strength for FSR / NIS (0.00 off, 1.00 max).",
-                      &up.sharpness, 0.0, 1.0, 0.05, "%.2f")) {
-        mark(p);
+    if (up.mode == extras::UpscaleMode::Fsr1 || up.mode == extras::UpscaleMode::Nis) {
+        if (card_slider_f("up_sharp", "空间锐化强度", "Spatial sharpness",
+                          "调整 FSR 1 / NIS 窗口后处理锐化强度（0.00 关闭，1.00 最强）。",
+                          "Sharpening strength for post-present FSR 1 / NIS.",
+                          &up.sharpness, 0.0, 1.0, 0.05, "%.2f")) {
+            mark(p);
+        }
     }
 
     card_group("HDR 高动态范围输出", "HDR Output");
@@ -1053,227 +1064,51 @@ void tab_audio(const LiveStatus& live, Page& p, float bottom_h) {
 
 // ---- Tab 3: Controls ----------------------------------------------------------------------------------------------------------------
 void tab_controls(UiHost& host, const LiveStatus& live, Page& p, float bottom_h) {
+    (void)host;
     PadSettings& pad = p.edit.pad;
-    MouseSettings& m = p.edit.mouse;
 
     pane_begin("tab_controls", bottom_h);
 
-    card_group("按键提示与手柄布局", "Prompts & Gamepad Layout");
-    int pstyle = static_cast<int>(p.edit.prompts.style);
-    if (card_choice("prompts", "游戏内按键图标风格", "Button prompt icons",
-                    "切换界面上显示的按键图标（Switch / Xbox / PlayStation / 键鼠 / 自动跟随最近使用的设备）。",
-                    "Chooses which button icons the game displays.",
-                    &pstyle, kPromptZh, kPromptEn, kPromptStyleCount)) {
-        p.edit.prompts.style = static_cast<PromptStyle>(pstyle);
-        mark(p);
-    }
+    card_group("手柄参数设置 (应用后实时生效)", "Gamepad Tuning (Live)");
     if (card_toggle("abxy_lbl", "按键按标识映射 (Xbox A = Switch A)", "Buttons by label (A=A)",
-                    "开启：Xbox 手柄下键 A 对应 Switch A（确认）。关闭：按任天堂物理位置，右键 B 对应 Switch A（确认）。",
+                    "开启：Xbox 手柄下键 A 对应 Switch A（确认）、右键 B 对应取消。关闭：按任天堂物理位置，右键对应 A（确认）、下键对应 B（取消）。",
                     "On: Xbox bottom A acts as Switch A. Off: Nintendo positional layout (east button = Switch A).",
-                    &pad.label_abxy)) {
+                    &pad.label_abxy, false, true)) {
         mark(p);
     }
-
-    card_group("手柄摇杆、震动与陀螺仪", "Sticks, Rumble & Gyro");
     if (card_slider_f("ls_dz", "左摇杆死区", "Left stick dead zone",
-                      "过滤左摇杆中心轻微漂移，数值越大需要推得越远才开始移动。",
-                      "Filters minor left-stick drift near centre.", &pad.stick_deadzone, 0.0, 0.50, 0.02, "%.2f")) {
+                      "过滤左摇杆（移动）中心轻微漂移，数值越大需要推得越远才开始响应。",
+                      "Filters minor left-stick drift near centre.", &pad.stick_deadzone, 0.0, 0.50, 0.02, "%.2f", false, true)) {
         mark(p);
     }
     if (card_slider_f("rs_dz", "右摇杆死区", "Right stick dead zone",
-                      "过滤右摇杆（视角转动）的中心漂移。",
-                      "Filters minor right-stick drift near centre.", &pad.right_deadzone, 0.0, 0.50, 0.02, "%.2f")) {
+                      "过滤右摇杆（旋转视角）中心轻微漂移。",
+                      "Filters minor right-stick drift near centre.", &pad.right_deadzone, 0.0, 0.50, 0.02, "%.2f", false, true)) {
         mark(p);
     }
-    if (card_slider_f("ls_max", "左摇杆满行程阈值", "Left stick max range",
-                      "如果某些手柄推满仍无法全速奔跑，可适当调低此值（如 0.90）。",
-                      "Lower if your stick does not reach 100% run speed at full deflection.", &pad.stick_max, 0.50, 1.00, 0.05, "%.2f")) {
-        mark(p);
-    }
-    if (card_slider_f("look_s", "右摇杆视角灵敏度", "Look sensitivity",
-                      "控制手柄右摇杆旋转镜头的速度倍率。",
-                      "Multiplier for right-stick camera rotation speed.", &pad.look_sens, 0.25, 3.00, 0.05, "%.2fx")) {
+    if (card_slider_f("look_s", "右摇杆视角灵敏度", "Right-stick look sensitivity",
+                      "控制手柄右摇杆旋转镜头的速度倍率（0.25x ~ 3.00x，实时生效）。",
+                      "Multiplier for right-stick camera rotation speed (0.25x - 3.00x).", &pad.look_sens, 0.25, 3.00, 0.05, "%.2fx", false, true)) {
         mark(p);
     }
     if (card_toggle("pad_invy", "反转手柄垂直视角", "Invert right-stick Y",
-                    "开启后右摇杆向上推会向下看。",
-                    "Pushing right stick up looks down.", &pad.invert_y)) {
-        mark(p);
-    }
-    if (card_slider_f("trig_th", "扳机触发阈值", "Trigger threshold",
-                      "模拟扳机 (LT/RT) 按下多少比例后判定为 Switch 的 ZL/ZR 按下。",
-                      "How far analog triggers must be pressed to register ZL/ZR.", &pad.trigger_threshold, 0.05, 1.00, 0.05, "%.2f")) {
+                    "开启后右摇杆向上推会向下看（实时生效）。",
+                    "Pushing right stick up looks down (applies live).", &pad.invert_y, false, true)) {
         mark(p);
     }
     if (card_toggle("rumble", "手柄震动反馈", "Controller rumble",
-                    "开启或关闭游戏内的手柄震动反馈。",
-                    "Enables or disables gamepad vibration.", &pad.rumble)) {
+                    "开启或关闭游戏内对手柄发送的震动反馈（实时生效）。",
+                    "Enables or disables gamepad vibration (applies live).", &pad.rumble, false, true)) {
         mark(p);
     }
     if (card_slider_f("rumble_s", "震动强度", "Rumble strength",
-                      "调整手柄震动的整体强弱（1.00 为默认强度）。",
-                      "Scales gamepad vibration intensity.", &pad.rumble_scale, 0.0, 2.0, 0.10, "%.2fx")) {
-        mark(p);
-    }
-    if (card_toggle("gyro", "六轴陀螺仪体感", "Gyro motion sensor",
-                    "启用支持陀螺仪的手柄（Switch Pro / DualSense 等）体感输入。",
-                    "Enables six-axis gyro input on supported controllers.", &pad.gyro)) {
-        mark(p);
-    }
-    if (card_slider_f("gyro_s", "陀螺仪灵敏度", "Gyro scale",
-                      "调整陀螺仪体感微调的灵敏度倍率。",
-                      "Multiplier for gyro motion sensitivity.", &pad.gyro_scale, 0.1, 4.0, 0.1, "%.2fx")) {
+                      "调整手柄震动的强弱（0.00x 静音 ~ 1.00x 标准强度，实时生效）。",
+                      "Scales gamepad vibration intensity (0.00x - 1.00x).", &pad.rumble_scale, 0.0, 1.0, 0.10, "%.2fx", false, true)) {
         mark(p);
     }
 
-    card_group("键鼠控制", "Mouse & Keyboard");
-    double ms_x = source_sens(m.yaw_rad);
-    if (card_slider_f("ms_x", "鼠标水平灵敏度", "Mouse horizontal sensitivity",
-                      "键鼠操作时的水平镜头转动灵敏度。",
-                      "Horizontal mouse look sensitivity.", &ms_x, 0.2, 10.0, 0.2, "%.2f")) {
-        m.yaw_rad = rad_per_count(ms_x);
-        if (p.link_pitch) m.pitch_rad = m.yaw_rad;
-        mark(p);
-    }
-    double ms_y = source_sens(m.pitch_rad);
-    if (card_slider_f("ms_y", "鼠标垂直灵敏度", "Mouse vertical sensitivity",
-                      "键鼠操作时的垂直镜头转动灵敏度。",
-                      "Vertical mouse look sensitivity.", &ms_y, 0.2, 10.0, 0.2, "%.2f")) {
-        m.pitch_rad = rad_per_count(ms_y);
-        mark(p);
-    }
-    if (card_toggle("ms_invy", "反转鼠标垂直方向", "Invert mouse Y",
-                    "开启后鼠标向上移时视角向下看。",
-                    "Inverts vertical mouse movement.", &m.invert_y)) {
-        mark(p);
-    }
-    if (card_toggle("ms_menu", "菜单内显示鼠标指针", "Mouse cursor in menus",
-                    "允许在游戏内菜单使用鼠标悬停与点击。",
-                    "Enables mouse pointer hover and click inside game menus.", &m.menu_cursor)) {
-        mark(p);
-    }
-
-    // Collapsible advanced remapping & live status (keeps main card list super clean)
     ImGui::Spacing();
-    if (ImGui::CollapsingHeader(tr("高级：自定义手柄按键映射", "Advanced: Gamepad Button Remap"))) {
-        if (ImGui::BeginTable("pad_remap_tbl", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-            ImGui::TableSetupColumn(tr("物理按键", "Controller"));
-            ImGui::TableSetupColumn(tr("映射为 Switch 按键", "Switch Button"));
-            ImGui::TableHeadersRow();
-            for (int i = 0; i < kPadSrcCount; ++i) {
-                uint64_t& v = pad.remap[i];
-                const int sel = pad_choice_of(v);
-                ImGui::PushID(i);
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0);
-                ImGui::TextUnformatted(kPadSrcLabels[i]);
-                ImGui::TableSetColumnIndex(1);
-                ImGui::SetNextItemWidth(-FLT_MIN);
-                if (ImGui::BeginCombo("##rm", sel >= 0 ? kPadChoiceNames[sel] : tr("自定义", "Custom"))) {
-                    for (int c = 0; c < kPadChoiceCount; ++c) {
-                        if (ImGui::Selectable(kPadChoiceNames[c], c == sel) && c != sel) {
-                            v = pad_choice_value(c);
-                            mark(p);
-                        }
-                    }
-                    ImGui::EndCombo();
-                }
-                ImGui::PopID();
-            }
-            ImGui::EndTable();
-        }
-        if (ImGui::Button(tr("重置手柄按键映射", "Reset pad buttons"))) {
-            for (uint64_t& v : pad.remap) v = kPadDefault;
-            mark(p);
-        }
-    }
-
-    if (ImGui::CollapsingHeader(tr("高级：键鼠按键绑定表", "Advanced: Keyboard & Mouse Bindings"))) {
-        if (ImGui::BeginCombo(tr("场景上下文", "Context"), ctx_name(p.ctx))) {
-            for (int c = 0; c < kCtxCount; ++c) {
-                const Ctx ctx = static_cast<Ctx>(c);
-                if (ImGui::Selectable(ctx_name(ctx), ctx == p.ctx) && ctx != p.ctx) {
-                    stop_rebind(host, p);
-                    p.ctx = ctx;
-                }
-            }
-            ImGui::EndCombo();
-        }
-        int remove = -1;
-        if (ImGui::BeginTable("kb_binds", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY,
-                              ImVec2(0.0f, px(220.0f)))) {
-            ImGui::TableSetupColumn(tr("按键", "Input"));
-            ImGui::TableSetupColumn(tr("动作", "Action"));
-            ImGui::TableSetupColumn(tr("触发", "Trigger"), ImGuiTableColumnFlags_WidthFixed, px(90.0f));
-            ImGui::TableSetupColumn("##del", ImGuiTableColumnFlags_WidthFixed, px(32.0f));
-            ImGui::TableHeadersRow();
-            for (std::size_t i = 0; i < p.edit.bindings.size(); ++i) {
-                Binding& b = p.edit.bindings[i];
-                if (b.ctx != p.ctx) continue;
-                const int row = static_cast<int>(i);
-                ImGui::PushID(row);
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0);
-                const bool waiting = p.rebind == row;
-                std::string blbl = waiting ? tr("请按键...", "press key...")
-                                           : (b.in.kind == InKind::None ? "<none>" : input_name(b.in));
-                blbl += "##bin";
-                if (waiting) ImGui::PushStyleColor(ImGuiCol_Button, kPressed);
-                if (ImGui::Button(blbl.c_str(), ImVec2(-FLT_MIN, 0.0f))) {
-                    stop_fps_capture(host, p);
-                    p.rebind = row;
-                    host.begin_capture();
-                }
-                if (waiting) ImGui::PopStyleColor();
-                ImGui::TableSetColumnIndex(1);
-                ImGui::SetNextItemWidth(-FLT_MIN);
-                if (ImGui::BeginCombo("##act", act_label(b.act))) {
-                    for (int a = 0; a < kActCount; ++a) {
-                        const Act act = static_cast<Act>(a);
-                        if (ImGui::Selectable(act_label(act), act == b.act) && act != b.act) {
-                            b.act = act;
-                            mark(p);
-                        }
-                    }
-                    ImGui::EndCombo();
-                }
-                ImGui::TableSetColumnIndex(2);
-                ImGui::SetNextItemWidth(-FLT_MIN);
-                if (ImGui::BeginCombo("##trg", trig_name(b.trig))) {
-                    for (Trig t : kTrigChoices) {
-                        if (ImGui::Selectable(trig_name(t), t == b.trig) && t != b.trig) {
-                            b.trig = t;
-                            mark(p);
-                        }
-                    }
-                    ImGui::EndCombo();
-                }
-                ImGui::TableSetColumnIndex(3);
-                if (ImGui::SmallButton("x")) remove = row;
-                ImGui::PopID();
-            }
-            ImGui::EndTable();
-        }
-        if (remove >= 0) {
-            if (p.rebind == remove) stop_rebind(host, p);
-            else if (p.rebind > remove) --p.rebind;
-            p.edit.bindings.erase(p.edit.bindings.begin() + remove);
-            mark(p);
-        }
-        if (ImGui::Button(tr("添加绑定", "Add binding"))) {
-            Binding b;
-            b.ctx = p.ctx;
-            b.act = Act::Primary;
-            b.trig = Trig::Press;
-            p.edit.bindings.push_back(b);
-            stop_fps_capture(host, p);
-            p.rebind = static_cast<int>(p.edit.bindings.size()) - 1;
-            host.begin_capture();
-            mark(p);
-        }
-    }
-
-    if (ImGui::CollapsingHeader(tr("实时手柄/输入状态测试", "Live Switch Pad Monitor"))) {
+    if (ImGui::CollapsingHeader(tr("实时手柄 / 键盘输入状态测试", "Live Switch Pad Monitor"), ImGuiTreeNodeFlags_DefaultOpen)) {
         for (int i = 0; i < kSwitchButtonCount; ++i) {
             const bool on = (live.out.buttons & hid::btn(kSwitchButtons[i].bit)) != 0;
             ImGui::PushID(i);
@@ -1285,6 +1120,23 @@ void tab_controls(UiHost& host, const LiveStatus& live, Page& p, float bottom_h)
         }
         ImGui::Text("LS (%.2f, %.2f)   RS (%.2f, %.2f)", live.out.lx, live.out.ly, live.out.rx, live.out.ry);
     }
+
+    card_group("当前键位速查表 (实时映射)", "Active Controls Reference");
+    card_button("kb_move", "角色移动 (左摇杆)", "Move (Left Stick)",
+                "键盘 WASD 或方向键控制左摇杆移动；连接手柄后直接用左摇杆。",
+                "Keyboard WASD or Arrow keys control Left Stick.", "WASD / 方向键");
+    card_button("kb_cam", "旋转视角 (右摇杆)", "Camera (Right Stick)",
+                "键盘 I / J / K / L 控制视角转动；连接手柄后直接用右摇杆。",
+                "Keyboard I / J / K / L control Right Stick camera.", "I / J / K / L");
+    card_button("kb_abxy", "确认 / 取消 / 功用键 (A B X Y)", "Face Buttons (A B X Y)",
+                "空格或回车 = A（确认），退格或 Esc = B（取消），U = X（快传/菜单），O = Y。",
+                "Space/Enter = A, Backspace/Esc = B, U = X, O = Y.", "Space / Back / U / O");
+    card_button("kb_shld", "肩键与扳机 (L / R / ZL / ZR)", "Shoulders & Triggers",
+                "Q = L，E = R，数字键 1 = ZL，数字键 2 = ZR。",
+                "Q = L, E = R, 1 = ZL, 2 = ZR.", "Q / E / 1 / 2");
+    card_button("kb_sys", "菜单 / 地图 / 摇杆下压", "PLUS / MINUS / L3 / R3",
+                "Tab 或 + = PLUS（主菜单），- = MINUS，Shift = 左摇杆按下，Ctrl = 右摇杆按下；手柄同时按 - 与 + 可呼出本 F1 菜单。",
+                "Tab/+ = PLUS, - = MINUS, Shift/Ctrl = L3/R3. Gamepad MINUS + PLUS toggles F1 menu.", "Tab / - / Shift / Ctrl");
 
     pane_end(live);
 }
@@ -1351,10 +1203,13 @@ void tab_overlay(UiHost& host, const LiveStatus& live, Page& p, float bottom_h) 
         static const char* const kLangs[] = {"简体中文", "English"};
         int lang = g_zh ? 0 : 1;
         if (card_choice("menu_lang", "菜单界面语言", "Menu language",
-                        "在简体中文与英文之间实时切换当前 F1 设置菜单的显示语言。",
-                        "Switches the F1 settings menu between Simplified Chinese and English.",
+                        "在简体中文与英文之间实时切换当前 F1 设置菜单的显示语言，并自动保存到 controls.ini。",
+                        "Switches the F1 settings menu between Simplified Chinese and English (saved automatically).",
                         &lang, kLangs, kLangs, 2, false, true)) {
             g_zh = (lang == 0);
+            FpsSettings f = fps;
+            f.menu_lang = g_zh ? "zh" : "en";
+            set_fps_live(host, f);
         }
     }
 
@@ -1444,6 +1299,7 @@ void draw_settings_page(UiHost& host) {
     if (!p.loaded) {
         p.edit = host.settings();
         p.edit.fps = host.settings().fps;
+        g_zh = (p.edit.fps.menu_lang != "en");
         refresh_out_text(p);
         p.loaded = true;
     }
@@ -1495,6 +1351,11 @@ void draw_settings_page(UiHost& host) {
 }
 
 void draw_settings_menu(UiHost& host, gfx::Overlay& ov) {
+    static bool lang_init = false;
+    if (!lang_init) {
+        lang_init = true;
+        g_zh = (host.settings().fps.menu_lang != "en");
+    }
     static int last_frame = -2;
     const int frame = ImGui::GetFrameCount();
     const bool opened = frame != last_frame + 1;
@@ -1527,7 +1388,12 @@ void draw_settings_menu(UiHost& host, gfx::Overlay& ov) {
         const float lang_w = px(96.0f);
         const float right_x = ImGui::GetWindowContentRegionMax().x;
         ImGui::SameLine(std::max(px(260.0f), right_x - close_w - lang_w - px(10.0f)));
-        if (ImGui::Button(g_zh ? "EN / 中文" : "中文 / EN", ImVec2(lang_w, 0.0f))) g_zh = !g_zh;
+        if (ImGui::Button(g_zh ? "EN / 中文" : "中文 / EN", ImVec2(lang_w, 0.0f))) {
+            g_zh = !g_zh;
+            FpsSettings f = host.settings().fps;
+            f.menu_lang = g_zh ? "zh" : "en";
+            set_fps_live(host, f);
+        }
         ImGui::SameLine();
         if (ImGui::Button(tr("关闭 (F1)", "Close (F1)"), ImVec2(close_w, 0.0f))) ov.request_hide();
 

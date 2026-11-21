@@ -42,6 +42,23 @@ void present_last_frame_again();
 // Traces the next whole presented frame like [nvn] trace_frame (the scripted `@shot nvntrace_<name>` calls this).
 void backend_trace_next_frame();
 
+// Updates keep-aspect letterboxing live on the presenting thread (also initialized from BackendDesc::keep_aspect).
+void set_keep_aspect(bool on);
+
+// Live 3D DLSS/FSR upscaler override for the F1 settings menu.
+// upscaler: "fsr3" | "taau" | "bilinear" | "dlss" | "auto" (empty/null = keep current).
+// fsr_version: "3.1" | "4.1" | "2.3" (empty/null = keep current).
+// sharpness: 0.0..1.0 (< 0 = keep current).
+void set_dlss_live(const char* upscaler, const char* fsr_version, float sharpness);
+struct DlssLiveInfo {
+    std::string upscaler;
+    std::string fsr_version;
+    std::string active_name;
+    float sharpness = 0.0f;
+    bool fsr_available = false;
+};
+DlssLiveInfo dlss_live_info();
+
 // The size and NVNmemoryPoolFlags of the initialized memory pool behind a guest NVNmemoryPool object. False when `guest_pool` is not a live
 // pool of the back end. For game modules that look after a game's own pool allocators: a texture the game places past the end of a pool the
 // CPU cannot access (NVN_MEMORY_POOL_FLAGS_CPU_NO_ACCESS) gets GPU memory of its own instead of failing (nvnTextureInitialize).

@@ -77,7 +77,7 @@ struct Gpu {
     gfx::Device* dev = nullptr;
     gfx::Renderer* rend = nullptr;
     FrameLimiter* limiter = nullptr;
-    bool keep_aspect = false;
+    std::atomic<bool> keep_aspect{false};
     bool installed_entry_points = false;
     VkSemaphore timeline = VK_NULL_HANDLE;
     std::atomic<uint64_t> completed{0};
@@ -1104,7 +1104,10 @@ gfx::Renderer* renderer() { return g ? g->rend : nullptr; }
 FrameLimiter* limiter() { return g ? g->limiter : nullptr; }
 PresentPass* present_pass() { return g && g->present_ok ? &g->present : nullptr; }
 extras::OutputPass* output_pass() { return g && g->output_ok ? &g->output : nullptr; }
-bool keep_aspect() { return g && g->keep_aspect; }
+bool keep_aspect() { return g && g->keep_aspect.load(std::memory_order_relaxed); }
+void set_keep_aspect_live(bool on) {
+    if (g) g->keep_aspect.store(on, std::memory_order_relaxed);
+}
 
 uint64_t timestamp_ns() {
     static const auto t0 = std::chrono::steady_clock::now();
@@ -1131,7 +1134,7 @@ bool bring_up(gfx::Device& dev, gfx::Renderer* rend, FrameLimiter* limiter, bool
     gp->dev = &dev;
     gp->rend = rend;
     gp->limiter = limiter;
-    gp->keep_aspect = keep_aspect;
+    gp->keep_aspect.store(keep_aspect, std::memory_order_relaxed);
     {   // [nvn] submit_batch: auto = frame under Wine (each kernel submission walks the imported pools again, flush_batch), 1 elsewhere.
         // frame: one kernel submission per frame, the present's; N: flush every N submissions and whenever the render thread idles.
         std::string b = nxrt::config_get_str("nvn", "submit_batch", "auto");
@@ -1329,6 +1332,10 @@ void backend_flush_caches() {
 
 void backend_trace_next_frame() {
     if (be::gpu::active()) be::gpu::replay_request_trace();
+}
+
+void set_keep_aspect(bool on) {
+    be::gpu::set_keep_aspect_live(on);
 }
 
 BackendStats backend_stats() {

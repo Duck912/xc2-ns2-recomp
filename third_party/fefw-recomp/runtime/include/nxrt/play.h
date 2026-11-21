@@ -53,6 +53,22 @@ bool start(const StartOptions& opt);        // after nxrt::init, the renderer an
 void stop();                                // saves changed settings, removes the hooks and the input source
 bool overlay_blocks_game();                 // true while the F1 overlay (or on-screen keyboard) wants keyboard/mouse/pad input
 
+// Live gamepad tuning read by external input sources (e.g. xc2_boot's LiveInput). Lock-free snapshot.
+struct LivePadConfig {
+    bool label_abxy = false;
+    float stick_deadzone = 0.10f;
+    float right_deadzone = 0.10f;
+    float look_sens = 1.0f;
+    bool invert_y = false;
+    bool rumble = true;
+    float rumble_scale = 1.0f;
+};
+LivePadConfig live_pad_config();
+// Publishes the external input source's mapped Switch state (buttons + sticks -32767..32767) so the F1 menu's
+// gamepad navigation (- + + chord, A/B/D-pad) and Live Switch Pad Monitor work live. Returns the Switch button mask
+// currently held back from the game by the overlay (e.g. buttons still held right after closing the menu).
+uint64_t note_external_pad(uint64_t buttons, int lx, int ly, int rx, int ry);
+
 // Counters for the tests and the log.
 struct Stats {
     uint64_t frames = 0;                    // Update hook calls

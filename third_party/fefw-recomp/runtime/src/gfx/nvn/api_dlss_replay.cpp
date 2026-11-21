@@ -32,6 +32,7 @@
 #include "nvn_gpu_internal.h"
 #include "nxrt/config.h"
 #include "nxrt/log.h"
+#include "nxrt/nvn_backend.h"
 
 namespace nxrt::nvn::be {
 namespace {
@@ -58,13 +59,40 @@ std::atomic<int> g_upscaler_gen{0};
 static int g_upscaler_seen = -1;
 const char* upscaler_name(Upscaler u);   // defined below settings()
 
+std::mutex g_live_mu;
+std::atomic<uint32_t> g_live_seq{0};
+bool g_live_has_upscaler = false;
+Upscaler g_live_upscaler = Upscaler::Taau;
+std::string g_live_upscaler_str;
+std::string g_live_fsr_version;
+bool g_live_has_sharp = false;
+float g_live_sharpness = 0.0f;
+
+Upscaler parse_upscaler_str(std::string u) {
+    for (char& c : u) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (u == "bilinear" || u == "spatial") return Upscaler::Bilinear;
+    if (u == "fsr3" || u == "fsr") return Upscaler::Fsr3;
+    if (u == "dlss") return Upscaler::Dlss;
+    if (u == "auto") return Upscaler::Auto;
+    return Upscaler::Taau;
+}
+
+const char* upscaler_key(Upscaler u) {
+    switch (u) {
+        case Upscaler::Bilinear: return "bilinear";
+        case Upscaler::Fsr3: return "fsr3";
+        case Upscaler::Dlss: return "dlss";
+        case Upscaler::Auto: return "auto";
+        default: return "taau";
+    }
+}
+
 const Settings& settings() {
     static Settings s = [] {
         Settings r;
         std::string u = config_get_str("dlss", "upscaler", "taau");
         for (char& c : u) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        r.upscaler = u == "bilinear" || u == "spatial" ? Upscaler::Bilinear : u == "fsr3" || u == "fsr" ? Upscaler::Fsr3 : u == "dlss" ? Upscaler::Dlss
-                   : u == "auto" ? Upscaler::Auto : Upscaler::Taau;
+        r.upscaler = parse_upscaler_str(u);
         if (u != "taau" && u != "bilinear" && u != "spatial" && u != "fsr3" && u != "fsr" && u != "dlss" && u != "auto")
             NXLOG_W(kTag, "[dlss] upscaler = %s is not known: taau", u.c_str());
         r.jitter_sign = static_cast<int>(config_get_int("dlss", "jitter_sign", 0));
@@ -73,6 +101,17 @@ const Settings& settings() {
         r.sharpness = static_cast<float>(std::clamp(config_get_double("dlss", "sharpness", 0.0), 0.0, 1.0));
         return r;
     }();
+    static uint32_t live_seen = 0;
+    const uint32_t seq = g_live_seq.load(std::memory_order_acquire);
+    if (seq != live_seen) {
+        live_seen = seq;
+        std::lock_guard<std::mutex> lk(g_live_mu);
+        if (g_live_has_upscaler) {
+            s.upscaler = g_live_upscaler;
+            g_upscaler_seen = static_cast<int>(g_live_upscaler);
+        }
+        if (g_live_has_sharp) s.sharpness = g_live_sharpness;
+    }
     static const std::string hot = config_get_str("dlss", "hot_file", "");
     if (!hot.empty()) {
         static std::chrono::steady_clock::time_point last{};
@@ -791,4 +830,73 @@ void dlss_replay_shutdown() {
     extras::Taau::shutdown();
 }
 
+void dlss_set_live_impl(const char* upscaler, const char* fsr_version, float sharpness) {
+    bool bump_gen = false;
+    std::string log_up;
+    std::string log_fv;
+    float log_sharp = -1.0f;
+    {
+        std::lock_guard<std::mutex> lk(g_live_mu);
+        if (upscaler && *upscaler) {
+            const Upscaler u = parse_upscaler_str(upscaler);
+            const std::string key = upscaler_key(u);
+            const Upscaler prev_u = g_live_has_upscaler ? g_live_upscaler : parse_upscaler_str(config_get_str("dlss", "upscaler", "taau"));
+            if (prev_u != u) bump_gen = true;
+            g_live_upscaler = u;
+            g_live_upscaler_str = key;
+            g_live_has_upscaler = true;
+            log_up = key;
+        }
+        if (fsr_version && *fsr_version) {
+            const std::string prev_fv = !g_live_fsr_version.empty() ? g_live_fsr_version : config_get_str("upscale", "fsr_version", "3.1");
+            if (prev_fv != fsr_version) bump_gen = true;
+            g_live_fsr_version = fsr_version;
+            log_fv = fsr_version;
+        }
+        if (sharpness >= 0.0f) {
+            g_live_sharpness = std::clamp(sharpness, 0.0f, 1.0f);
+            g_live_has_sharp = true;
+            log_sharp = g_live_sharpness;
+        }
+    }
+    if (!log_fv.empty()) extras::set_ffx_version_live(log_fv.c_str());
+    if (bump_gen) g_upscaler_gen.fetch_add(1, std::memory_order_release);
+    g_live_seq.fetch_add(1, std::memory_order_release);
+    NXLOG_I("nvn.dlss", "live menu switch: upscaler=%s fsr_version=%s sharpness=%.2f (reset=%d)",
+            log_up.empty() ? "-" : log_up.c_str(), log_fv.empty() ? "-" : log_fv.c_str(),
+            static_cast<double>(log_sharp), bump_gen ? 1 : 0);
+}
+
+DlssLiveInfo dlss_live_info_impl() {
+    DlssLiveInfo info;
+    {
+        std::lock_guard<std::mutex> lk(g_live_mu);
+        info.upscaler = g_live_has_upscaler ? g_live_upscaler_str : config_get_str("dlss", "upscaler", "taau");
+        info.fsr_version = !g_live_fsr_version.empty() ? g_live_fsr_version : config_get_str("upscale", "fsr_version", "3.1");
+        info.sharpness = g_live_has_sharp ? g_live_sharpness
+                                          : static_cast<float>(std::clamp(config_get_double("dlss", "sharpness", 0.0), 0.0, 1.0));
+    }
+    info.fsr_available = extras::temporal_ffx_available();
+    const int cur = g_in_use.load(std::memory_order_relaxed);
+    if (cur == static_cast<int>(Upscaler::Fsr3)) {
+        const std::string v = extras::temporal_ffx_active_version();
+        info.active_name = v.empty() ? "FSR 3" : v;
+    } else if (cur >= 0) {
+        info.active_name = upscaler_name(static_cast<Upscaler>(cur));
+    }
+    return info;
+}
+
 }  // namespace nxrt::nvn::be
+
+namespace nxrt::nvn {
+
+void set_dlss_live(const char* upscaler, const char* fsr_version, float sharpness) {
+    be::dlss_set_live_impl(upscaler, fsr_version, sharpness);
+}
+
+DlssLiveInfo dlss_live_info() {
+    return be::dlss_live_info_impl();
+}
+
+}  // namespace nxrt::nvn

@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -262,6 +263,20 @@ struct G {
     // vibration from the game (hid thread) -> pads (main thread)
     std::atomic<float> vib[2][2] = {};   // [hand][low, high] amplitude
 
+    // external input source bridge (xc2_boot's LiveInput): lock-free pad config & pad state -> F1 menu/monitor
+    std::atomic<bool> pad_cfg_label_abxy{false};
+    std::atomic<float> pad_cfg_ls_dz{0.10f};
+    std::atomic<float> pad_cfg_rs_dz{0.10f};
+    std::atomic<float> pad_cfg_look_sens{1.0f};
+    std::atomic<bool> pad_cfg_invert_y{false};
+    std::atomic<bool> pad_cfg_rumble{true};
+    std::atomic<float> pad_cfg_rumble_scale{1.0f};
+
+    std::atomic<bool> ext_pad_active{false};
+    std::atomic<uint64_t> ext_pad_buttons{0};
+    std::atomic<int> ext_pad_lx{0}, ext_pad_ly{0}, ext_pad_rx{0}, ext_pad_ry{0};
+    std::atomic<uint64_t> ext_menu_mask{0};
+
     // rebinding
     std::atomic<int> capture_state{0};   // 0 idle, 1 waiting for an input
     std::mutex cap_mu;
@@ -308,6 +323,78 @@ const char* window_mode_name(platform::FullscreenMode m) {
 
 // Master volume (live). The mute while the window has no focus is set every frame (update_hook) and on focus changes.
 void apply_audio(const AudioSettings& a) { audio::set_master_volume(static_cast<float>(a.volume)); }
+
+void publish_live_pad_config(const PadSettings& p) {
+    G& st = g();
+    st.pad_cfg_label_abxy.store(p.label_abxy, std::memory_order_relaxed);
+    st.pad_cfg_ls_dz.store(static_cast<float>(std::clamp(p.stick_deadzone, 0.0, 0.5)), std::memory_order_relaxed);
+    st.pad_cfg_rs_dz.store(static_cast<float>(std::clamp(p.right_deadzone, 0.0, 0.5)), std::memory_order_relaxed);
+    st.pad_cfg_look_sens.store(static_cast<float>(std::clamp(p.look_sens, 0.25, 3.0)), std::memory_order_relaxed);
+    st.pad_cfg_invert_y.store(p.invert_y, std::memory_order_relaxed);
+    st.pad_cfg_rumble.store(p.rumble, std::memory_order_relaxed);
+    st.pad_cfg_rumble_scale.store(static_cast<float>(std::clamp(p.rumble_scale, 0.0, 1.0)), std::memory_order_relaxed);
+}
+
+Game3dSettings hydrate_game3d_from_config() {
+    Game3dSettings r;
+    const int64_t nat_res = config_get_int("xc2", "native_res", 0);
+    const int64_t nat_w = config_get_int("xc2", "native_w", 3840);
+    if (nat_res <= 0) r.res_preset = 4;
+    else if (nat_w <= 1600) r.res_preset = 3;
+    else if (nat_w <= 1920) r.res_preset = 2;
+    else if (nat_w <= 2560) r.res_preset = 1;
+    else r.res_preset = 0;
+
+    std::string up = config_get_str("dlss", "upscaler", "fsr3");
+    for (char& c : up) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (up != "fsr3" && up != "taau" && up != "bilinear") up = (up == "fsr" || up == "auto") ? "fsr3" : "taau";
+    r.upscaler = up;
+
+    std::string fv = config_get_str("upscale", "fsr_version", "3.1");
+    if (fv.rfind("4", 0) == 0) fv = "4.1";
+    else if (fv.rfind("2", 0) == 0) fv = "2.3";
+    else fv = "3.1";
+    r.fsr_version = fv;
+    r.sharpness = std::clamp(config_get_double("dlss", "sharpness", 0.5), 0.0, 1.0);
+    return r;
+}
+
+void apply_game3d_settings(const Game3dSettings& old_g, const Game3dSettings& g3d) {
+    const bool up_changed = (g3d.upscaler != old_g.upscaler || g3d.fsr_version != old_g.fsr_version ||
+                             std::fabs(g3d.sharpness - old_g.sharpness) > 1e-4);
+    if (up_changed) {
+        nvn::set_dlss_live(g3d.upscaler.c_str(), g3d.fsr_version.c_str(), static_cast<float>(g3d.sharpness));
+        std::string err;
+        char sbuf[32];
+        std::snprintf(sbuf, sizeof sbuf, "%.2f", std::clamp(g3d.sharpness, 0.0, 1.0));
+        const bool ok1 = config_write("dlss", "upscaler", g3d.upscaler, &err);
+        const bool ok2 = config_write("dlss", "sharpness", sbuf, &err);
+        const bool ok3 = config_write("upscale", "fsr_version", g3d.fsr_version, &err);
+        const bool ok4 = config_write("upscale", "fsr_follow_size", (!g3d.fsr_version.empty() && g3d.fsr_version[0] == '4') ? "1" : "0", &err);
+        if (!ok1 || !ok2 || !ok3 || !ok4) NXLOG_W(kTag, "cannot persist 3D upscaler settings to nxrt.ini: %s", err.c_str());
+    }
+    if (g3d.res_preset != old_g.res_preset) {
+        struct PresetDef { const char* am_res; const char* res_cls; const char* nat_res; const char* nat_w; const char* nat_h; };
+        static constexpr PresetDef kPresets[] = {
+            {"3840x2160", "0", "2", "3840", "2160"},   // 0: 4K true native (3840x2160 -> 3840x2160)
+            {"3840x2160", "0", "2", "2560", "1440"},   // 1: 1440p render -> 4K upscale
+            {"3840x2160", "0", "2", "1920", "1080"},   // 2: 1080p render -> 4K upscale
+            {"3840x2160", "0", "2", "1600", "900"},    // 3: 900p render -> 4K upscale
+            {"3840x2160", "0", "0", "0",    "0"},      // 4: console dynamic 4K
+        };
+        const int idx = std::clamp(g3d.res_preset, 0, 4);
+        const PresetDef& pr = kPresets[idx];
+        std::string err;
+        const bool ok = config_write("am", "resolution", pr.am_res, &err) &&
+                        config_write("xc2", "res_class", pr.res_cls, &err) &&
+                        config_write("xc2", "native_res", pr.nat_res, &err) &&
+                        config_write("xc2", "native_w", pr.nat_w, &err) &&
+                        config_write("xc2", "native_h", pr.nat_h, &err);
+        if (!ok) NXLOG_W(kTag, "cannot persist 3D resolution preset to nxrt.ini: %s", err.c_str());
+        else NXLOG_I(kTag, "3D resolution preset -> %d (%s, res_class=%s, native_res=%s, %sx%s) saved to nxrt.ini (takes effect on restart)",
+                     idx, pr.am_res, pr.res_cls, pr.nat_res, pr.nat_w, pr.nat_h);
+    }
+}
 
 void apply_unfocused_mute() {
     G& st = g();
@@ -704,12 +791,16 @@ void apply_pending_settings(uint64_t now) {
     const std::string old_mode = st.settings.display.window_mode;
     const int old_monitor = st.settings.display.monitor;
     const int old_w = st.settings.display.width, old_h = st.settings.display.height;
+    const Game3dSettings old_g3d = st.settings.game3d;
     st.settings = s;
     st.settings_epoch++;
     lk.unlock();
     if (st.engine) st.engine->set_settings(s, now);
+    publish_live_pad_config(s.pad);
     apply_frame_cap(s);
     display_tuning(s.display);
+    nvn::set_keep_aspect(s.display.keep_aspect);
+    apply_game3d_settings(old_g3d, s.game3d);
     if (const GamePlay* gp = game_play(); gp && gp->settings_changed) gp->settings_changed(s);     // the game's display options, lock-on
     extras::set_settings(s.extras);
     extras::hdr_refresh_levels();
@@ -967,6 +1058,33 @@ void keyboard_service() {
     if (swkbd) {
         poll_pads(now);
         nvn::present_last_frame_again();
+    } else if (st.ext_pad_active.load(std::memory_order_relaxed)) {
+        // External input source (e.g. xc2_boot's LiveInput): feed menu gamepad navigation (- + + chord, A/B/D-pad)
+        // and forward game vibration to connected SDL pads safely on the main thread.
+        if (st.overlay) {
+            st.overlay->set_keyboard_abxy(st.settings.pad.label_abxy);
+            const uint64_t eb = st.ext_pad_buttons.load(std::memory_order_relaxed);
+            const int elx = st.ext_pad_lx.load(std::memory_order_relaxed);
+            const int ely = st.ext_pad_ly.load(std::memory_order_relaxed);
+            const uint64_t mask = st.overlay->set_menu_pad(eb, elx, ely);
+            st.ext_menu_mask.store(mask, std::memory_order_relaxed);
+        }
+        uint16_t lo = 0, hi = 0;
+        {
+            const float l = std::max(st.vib[0][0].load(), st.vib[1][0].load());
+            const float h = std::max(st.vib[0][1].load(), st.vib[1][1].load());
+            map_rumble(l, h, st.settings.pad, &lo, &hi);
+        }
+        const bool rumble_changed = lo != st.rumble_lo || hi != st.rumble_hi;
+        const bool rumble_refresh = (lo || hi) && now - st.last_rumble_ns > 100 * kMs;
+        if (rumble_changed || rumble_refresh) {
+            input::GamepadInfo infos[8];
+            const size_t n = input::gamepad_list(infos, 8);
+            for (size_t i = 0; i < n; ++i) platform::gamepad_rumble(infos[i].id, lo, hi, 250);
+            st.rumble_lo = lo;
+            st.rumble_hi = hi;
+            st.last_rumble_ns = now;
+        }
     }
 }
 
@@ -1051,7 +1169,15 @@ public:
             s.refresh_hz = platform::display_refresh_hz();
             platform::pixel_size(&s.width, &s.height);
         }
-        s.out = st.engine->output(now_ns());
+        if (st.ext_pad_active.load(std::memory_order_relaxed)) {
+            s.out.buttons = st.ext_pad_buttons.load(std::memory_order_relaxed);
+            s.out.lx = static_cast<float>(st.ext_pad_lx.load(std::memory_order_relaxed)) / 32767.0f;
+            s.out.ly = static_cast<float>(st.ext_pad_ly.load(std::memory_order_relaxed)) / 32767.0f;
+            s.out.rx = static_cast<float>(st.ext_pad_rx.load(std::memory_order_relaxed)) / 32767.0f;
+            s.out.ry = static_cast<float>(st.ext_pad_ry.load(std::memory_order_relaxed)) / 32767.0f;
+        } else {
+            s.out = st.engine->output(now_ns());
+        }
         s.pitch_deg = gs.pitch_rad * 180.0 / kPi;
         s.input_calls = st.pi_calls.load();
         return s;
@@ -1195,6 +1321,8 @@ bool load() {
     }
     // Display extras: a value set in mpr.ini or in the environment (NXRT_HDR_MODE ...) overrides the file; the file overrides the built-in defaults.
     st.settings.extras = merge_env(st.settings.extras);
+    st.settings.game3d = hydrate_game3d_from_config();
+    publish_live_pad_config(st.settings.pad);
     extras::set_settings(st.settings.extras);
     // S38 GPU paths: the file's choice becomes [nvn] pool_mirror / pass_barriers unless mpr.ini or the environment set them. The replay
     // reads both once, at its first pool and its first submission, after this.
@@ -1320,6 +1448,7 @@ bool start(const StartOptions& opt) {
         if (st.window) platform::pixel_size(&ww, &wh);
         if (ww <= 0 || wh <= 0) { ww = st.settings.display.width; wh = st.settings.display.height; }
         display_tuning(st.settings.display);
+        nvn::set_keep_aspect(st.settings.display.keep_aspect);
         if (gp && gp->install_render) gp->install_render(st.base, st.settings.display, ww, wh);   // the game's display options, tone curve
     }
     // the frame boundary, then the game's input, camera, lock-on and menu hooks (hooks of one address run in registration order)
@@ -1355,6 +1484,30 @@ void stop() {
 bool overlay_blocks_game() {
     const G& st = g();
     return st.started && st.overlay && st.overlay->blocks_game();
+}
+
+LivePadConfig live_pad_config() {
+    const G& st = g();
+    LivePadConfig c;
+    c.label_abxy = st.pad_cfg_label_abxy.load(std::memory_order_relaxed);
+    c.stick_deadzone = st.pad_cfg_ls_dz.load(std::memory_order_relaxed);
+    c.right_deadzone = st.pad_cfg_rs_dz.load(std::memory_order_relaxed);
+    c.look_sens = st.pad_cfg_look_sens.load(std::memory_order_relaxed);
+    c.invert_y = st.pad_cfg_invert_y.load(std::memory_order_relaxed);
+    c.rumble = st.pad_cfg_rumble.load(std::memory_order_relaxed);
+    c.rumble_scale = st.pad_cfg_rumble_scale.load(std::memory_order_relaxed);
+    return c;
+}
+
+uint64_t note_external_pad(uint64_t buttons, int lx, int ly, int rx, int ry) {
+    G& st = g();
+    st.ext_pad_buttons.store(buttons, std::memory_order_relaxed);
+    st.ext_pad_lx.store(lx, std::memory_order_relaxed);
+    st.ext_pad_ly.store(ly, std::memory_order_relaxed);
+    st.ext_pad_rx.store(rx, std::memory_order_relaxed);
+    st.ext_pad_ry.store(ry, std::memory_order_relaxed);
+    st.ext_pad_active.store(true, std::memory_order_release);
+    return st.ext_menu_mask.load(std::memory_order_relaxed);
 }
 
 Stats stats() {

@@ -223,6 +223,15 @@ struct FpsSettings {
     Corner corner = Corner::TopLeft;                     // [fps] corner
     int detail = 1;                                      // [fps] detail: 0 frame rate only, 1 frame rate and frame time, 2 also the 1% low and the worst frame
     bool in_screenshots = false;                         // [fps] in_screenshots: the counter is drawn into screenshots too (test tooling asks for this)
+    std::string menu_lang = "zh";                        // [fps] menu_lang: "zh" (Simplified Chinese) or "en" (English)
+};
+
+// ---- 3D game resolution & upscaler (synced with nxrt.ini: [am], [xc2], [dlss], [upscale]) ----
+struct Game3dSettings {
+    int res_preset = 0;                 // 0=4K native, 1=1440p->4K, 2=1440p native, 3=1080p native, 4=console dynamic 4K
+    std::string upscaler = "fsr3";      // "fsr3" | "taau" | "bilinear"
+    std::string fsr_version = "3.1";    // "3.1" | "4.1" | "2.3"
+    double sharpness = 0.5;             // [dlss] sharpness (0.0..1.0)
 };
 
 // ---- lock-on and camera feel (S32) --------------------------------------------------------------------------------------------
@@ -253,6 +262,7 @@ struct Settings {
     extras::Settings extras;       // the [hdr] [upscale] [latency] [picture] sections (nxrt/extras.h): HDR output, upscaling, low latency
     PromptSettings prompts;
     FpsSettings fps;
+    Game3dSettings game3d;         // hydrated from & written back to nxrt.ini (not stored in controls.ini)
     FastbootSettings fastboot;     // [tweaks] skip_intro skip_boot_logos fast_menus menu_speed (play_fastboot.h, S46)
     Output out[kActCount];         // the [switch] table; defaulted from ActInfo::default_out
     std::vector<Binding> bindings;

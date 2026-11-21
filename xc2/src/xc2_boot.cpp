@@ -259,11 +259,12 @@ void LiveInput::live(nxrt::hid::InputSnapshot &out) {
     }
     // gamepad: play mode pumps SDL's event queue on the window-owning main thread (play.cpp keyboard_service),
     // which keeps pad discovery and state fresh without cross-thread SDL_PollEvent races.
+    const nxrt::play::LivePadConfig pcfg = nxrt::play::live_pad_config();
     int px = 0, py = 0, prx = 0, pry = 0;
     uint64_t pb = 0;
     uint32_t raw_buttons = 0;   // the SDL button mask as the pads report it (XC2_PAD_DEBUG)
     uint32_t raw_unmapped = 0;  // the device's own mask, before SDL's gamepad mapping
-    if (!menu_blocked && nxrt::input::gamepad_count()) {
+    if (nxrt::input::gamepad_count()) {
         // SDL hands a pad that went away and came back a NEW instance id (a power-save drop, a Bluetooth hiccup, the
         // window losing the foreground and getting it again: the log shows "gamepad 3 added ... removed ... gamepad 4
         // added ..."). A cached id nothing answers to means no pad input for the rest of the run, which reads as "the
@@ -287,11 +288,21 @@ void LiveInput::live(nxrt::hid::InputSnapshot &out) {
             raw_unmapped |= raw.raw_buttons;
             auto has = [&](int bit) { return (m >> bit) & 1u; };
             auto hasr = [&](int bit) { return (raw.raw_buttons >> bit) & 1u; };
+            auto map_face = [&](bool south, bool east, bool west, bool north) {
+                if (pcfg.label_abxy) {
+                    if (south) pb |= btn(kBtnA);
+                    if (east)  pb |= btn(kBtnB);
+                    if (west)  pb |= btn(kBtnX);
+                    if (north) pb |= btn(kBtnY);
+                } else {
+                    if (east)  pb |= btn(kBtnA);
+                    if (south) pb |= btn(kBtnB);
+                    if (north) pb |= btn(kBtnX);
+                    if (west)  pb |= btn(kBtnY);
+                }
+            };
             if (raw_mode) {
-                if (hasr(0)) pb |= btn(kBtnA);
-                if (hasr(1)) pb |= btn(kBtnB);
-                if (hasr(2)) pb |= btn(kBtnX);
-                if (hasr(3)) pb |= btn(kBtnY);
+                map_face(hasr(0), hasr(1), hasr(2), hasr(3));
                 if (hasr(4)) pb |= btn(kBtnL);
                 if (hasr(5)) pb |= btn(kBtnR);
                 if (hasr(6)) pb |= btn(kBtnMinus);
@@ -303,10 +314,7 @@ void LiveInput::live(nxrt::hid::InputSnapshot &out) {
                 if (hasr(13)) pb |= btn(kBtnLeft);
                 if (hasr(14)) pb |= btn(kBtnRight);
             } else {
-                if (has(0)) pb |= btn(kBtnA);          // the printed label (an Xbox pad's bottom button is A)
-                if (has(1)) pb |= btn(kBtnB);
-                if (has(2)) pb |= btn(kBtnX);
-                if (has(3)) pb |= btn(kBtnY);
+                map_face(has(0), has(1), has(2), has(3));
                 if (has(9)) pb |= btn(kBtnL);
                 if (has(10)) pb |= btn(kBtnR);
                 if (has(6)) pb |= btn(kBtnPlus);
@@ -325,6 +333,22 @@ void LiveInput::live(nxrt::hid::InputSnapshot &out) {
             { const int v = -raw.axes[1]; if (v * v > py * py) py = v; }   // SDL y is down-positive, hid y is up-positive
             if (raw.axes[2] * raw.axes[2] > prx * prx) prx = raw.axes[2];
             { const int v = -raw.axes[3]; if (v * v > pry * pry) pry = v; }
+        }
+        auto apply_deadzone = [](int &sx, int &sy, float dz) {
+            const float fx = static_cast<float>(sx) / 32767.0f;
+            const float fy = static_cast<float>(sy) / 32767.0f;
+            const float mag = std::sqrt(fx * fx + fy * fy);
+            if (mag <= dz || dz >= 0.99f) { sx = 0; sy = 0; return; }
+            const float sc = (std::min)(1.0f, (mag - dz) / (1.0f - dz)) / mag;
+            sx = std::clamp(static_cast<int>(std::lround(fx * sc * 32767.0f)), -32767, 32767);
+            sy = std::clamp(static_cast<int>(std::lround(fy * sc * 32767.0f)), -32767, 32767);
+        };
+        apply_deadzone(px, py, pcfg.stick_deadzone);
+        apply_deadzone(prx, pry, pcfg.right_deadzone);
+        if (prx || pry) {
+            prx = std::clamp(static_cast<int>(std::lround(static_cast<float>(prx) * pcfg.look_sens)), -32767, 32767);
+            pry = std::clamp(static_cast<int>(std::lround(static_cast<float>(pry) * pcfg.look_sens)), -32767, 32767);
+            if (pcfg.invert_y) pry = -pry;
         }
     }
     // XC2_PAD_DEBUG: what the pads report BEFORE the mapping, logged when the raw button mask changes (and every 3 s while a
@@ -359,13 +383,16 @@ void LiveInput::live(nxrt::hid::InputSnapshot &out) {
         if (face & btn(kBtnX)) pb |= btn(kBtnLeft);
         if (face & btn(kBtnY)) pb |= btn(kBtnRight);
     }
-    const uint64_t b = kb | pb;
-    if (!b && !kx && !ky && !klx && !kly && !px && !py && !prx && !pry) return;
+    const uint64_t b_all = kb | pb;
+    const int sx = kx ? kx : px, sy = ky ? ky : py, rx = klx ? klx : prx, ry = kly ? kly : pry;
+    const uint64_t menu_mask = nxrt::play::note_external_pad(b_all, sx, sy, rx, ry);
+    if (menu_blocked) return;
+    const uint64_t b = b_all & ~menu_mask;
+    if (!b && !sx && !sy && !rx && !ry) return;
     // player 1 and the handheld entry the service also fills (XC2 asks for both)
     for (uint32_t slot : {0u, 9u}) {
         NpadInput &p = out.npad[slot];
         p.buttons |= b;
-        const int sx = kx ? kx : px, sy = ky ? ky : py, rx = klx ? klx : prx, ry = kly ? kly : pry;
         if (sx || sy) { p.left.x = sx; p.left.y = sy; }
         if (rx || ry) { p.right.x = rx; p.right.y = ry; }
     }
@@ -873,23 +900,36 @@ static void arm_frame_rate(uint64_t main_base) {
 
 // ---- native resolution override (3.0.1) -------------------------------------------------------------------------------------
 // [xc2] native_res = 0 (off) | 1 (native 100%, DLSS off) | 2 (DLSS/FSR 1:1 Native AA at [xc2] native_w x native_h)
-// [xc2] native_w / native_h: target 3D render size for native_res=2 (default 2560x1440, matching network 1/2 output)
+// [xc2] native_w / native_h: target 3D render size for native_res=2 (defaults to [am] resolution, fallback 2560x1440)
 // [xc2] res_class  = 0 (auto) | 2 (force mode 5: 2560x1440) | 1 (force mode 1: 3840x2160)
 static void arm_native_res(uint64_t main_base) {
     static int64_t g_nat_mode = 0;
     g_nat_mode = nxrt::config_get_int("xc2", "native_res", 0);
     const int64_t mode = g_nat_mode;
     const int64_t rcls = nxrt::config_get_int("xc2", "res_class", 0);
-    static int32_t g_nat_w = static_cast<int32_t>(nxrt::config_get_int("xc2", "native_w", 2560));
-    static int32_t g_nat_h = static_cast<int32_t>(nxrt::config_get_int("xc2", "native_h", 1440));
+    int32_t def_w = 2560, def_h = 1440;
+    {
+        const std::string am_res = nxrt::config_get_str("am", "resolution", "");
+        const size_t xpos = am_res.find_first_of("xX");
+        if (xpos != std::string::npos) {
+            const int32_t pw = std::atoi(am_res.c_str());
+            const int32_t ph = std::atoi(am_res.c_str() + xpos + 1);
+            if (pw >= 1280 && ph >= 720 && pw <= 7680 && ph <= 4320) {
+                def_w = pw;
+                def_h = ph;
+            }
+        }
+    }
+    static int32_t g_nat_w = 2560;
+    static int32_t g_nat_h = 1440;
+    g_nat_w = static_cast<int32_t>(nxrt::config_get_int("xc2", "native_w", def_w));
+    g_nat_h = static_cast<int32_t>(nxrt::config_get_int("xc2", "native_h", def_h));
     // Always attach lightweight RT rebuild logger (logs first 8 calls or size changes) so logs confirm actual 3D resolution.
     nxrt::hook_add_entry(main_base + 0x844120, [](::Ctx* c, uint64_t, void*) -> int {
         static int last_rw = -1, last_rh = -1, last_bw = -1, last_bh = -1, count = 0;
         const uint64_t rtmgr = c->x[0];
-        if (g_nat_mode == 2 && rtmgr && nxrt::mem::is_mapped(rtmgr + 0x928, 4)) {
-            const float s = (std::min)(1.0f, static_cast<float>(g_nat_w) / 3840.0f);
-            std::memcpy(reinterpret_cast<void*>(rtmgr + 0x928), &s, 4);
-        }
+        int32_t d[4] = {};
+        bool have_dims = false;
         if (rtmgr && nxrt::mem::is_mapped(rtmgr + 8, 8)) {
             uint64_t ctx = 0;
             std::memcpy(&ctx, reinterpret_cast<const void*>(rtmgr + 8), 8);
@@ -897,14 +937,37 @@ static void arm_native_res(uint64_t main_base) {
                 uint64_t view = 0;
                 std::memcpy(&view, reinterpret_cast<const void*>(ctx + 0x5e0), 8);
                 if (view && nxrt::mem::is_mapped(view + 0x18, 16)) {
-                    int32_t d[4] = {};
                     std::memcpy(d, reinterpret_cast<const void*>(view + 0x18), 16);
+                    have_dims = (d[2] > 0 && d[3] > 0);
                     if (d[0] != last_rw || d[1] != last_rh || d[2] != last_bw || d[3] != last_bh || count < 3) {
                         last_rw = d[0]; last_rh = d[1]; last_bw = d[2]; last_bh = d[3];
                         ++count;
                         NXLOG_I("xc2", "native_res: rt_rebuild #%d render=%dx%d base=%dx%d w1=%llu", count, d[0], d[1], d[2], d[3],
                                 static_cast<unsigned long long>(c->x[1]));
                     }
+                }
+            }
+        }
+        if (g_nat_mode == 2 && rtmgr && nxrt::mem::is_mapped(rtmgr + 0x928, 4)) {
+            const float denom = (have_dims && d[2] > 0) ? static_cast<float>(d[2]) : 3840.0f;
+            const float s = (std::min)(1.0f, static_cast<float>(g_nat_w) / denom);
+            std::memcpy(reinterpret_cast<void*>(rtmgr + 0x928), &s, 4);
+            // Switch dlss_rt+28 to XC2's direct-to-swapchain DLSS/FSR mode (0) with output = base (d[2] x d[3]),
+            // so both 1:1 true native (4K/1440p/1080p) AND locked temporal upscaling (e.g. 1440p -> 4K) feed
+            // FSR/TAAU cleanly into the full output swapchain without the spatial-blit black-screen bug.
+            if (have_dims && d[2] > 0 && d[3] > 0 && nxrt::mem::is_mapped(rtmgr + 2316, 28)) {
+                const uint32_t zero32 = 0;
+                std::memcpy(reinterpret_cast<void*>(rtmgr + 2316), &zero32, 4);
+                uint64_t dlss_rt = 0;
+                std::memcpy(&dlss_rt, reinterpret_cast<const void*>(rtmgr + 2336), 8);
+                if (dlss_rt && nxrt::mem::is_mapped(dlss_rt, 88)) {
+                    const uint8_t one8 = 1;
+                    const uint32_t bw = static_cast<uint32_t>(d[2]);
+                    const uint32_t bh = static_cast<uint32_t>(d[3]);
+                    std::memcpy(reinterpret_cast<void*>(dlss_rt + 28), &zero32, 4);
+                    std::memcpy(reinterpret_cast<void*>(dlss_rt + 48), &bw, 4);
+                    std::memcpy(reinterpret_cast<void*>(dlss_rt + 52), &bh, 4);
+                    std::memcpy(reinterpret_cast<void*>(dlss_rt + 64), &one8, 1);
                 }
             }
         }
@@ -937,56 +1000,126 @@ static void arm_native_res(uint64_t main_base) {
             return 1;
         });
     } else if (mode == 2) {
-        // Keep DLSS/FSR slot active and permanently lock [obj+0x58c/0x590/0x594] to native_w/base_w x native_h/base_h
-        // (e.g. 2560/3840 = 0.6667f), so 0x85f090 never overwrites 0x58c/0x590 back to 0.5f on subsequent frames.
+        // When native_w x native_h == base (3840x2160), f_71008442e0 sets [fb+440]=0 (render==base),
+        // causing f_710084d230 to return 0 and the tonemapper to write into t10 instead of the DLSS
+        // input RT (t54), leaving DLSS reading a black t54. Keep f_710084d230 returning 1 so the
+        // tonemapper always feeds DLSS cleanly, including at true native 4K (3840x2160).
+        nxrt::hook_add_entry(main_base + 0x84d230, [](::Ctx* c, uint64_t, void*) -> int {
+            c->x[0] = 1;
+            return 1;
+        });
+        // Keep DLSS/FSR slot active and let 0x85f090 execute normally (including 0x85ee70 state sync and
+        // half-res scale copies at +0x5a0/+0x5a8), feeding it our locked target scale via dynres (+0x24/+0x28).
         nxrt::hook_add_entry(main_base + 0x85f090, [](::Ctx* c, uint64_t, void*) -> int {
             const uint64_t obj = c->x[0];
+            const uint64_t dynres = c->x[1];
             const int32_t bw = static_cast<int32_t>(c->x[3]);
             const int32_t bh = static_cast<int32_t>(c->x[4]);
             if (!obj || bw <= 0 || bh <= 0 || !nxrt::mem::is_mapped(obj + 0x57c, 0x40)) return 0;
-            int16_t cd = 0;
-            std::memcpy(&cd, reinterpret_cast<const void*>(obj + 0x5b4), 2);
-            if (cd > 0) {
-                uint32_t st = 0;
-                std::memcpy(&st, reinterpret_cast<const void*>(obj + 0x5b0), 4);
-                --cd;
-                std::memcpy(reinterpret_cast<void*>(obj + 0x5b4), &cd, 2);
-                const uint32_t ret = (st == 1) ? 1u : 0u;
-                const uint32_t nst = ret << 1;
-                std::memcpy(reinterpret_cast<void*>(obj + 0x5b0), &nst, 4);
-                c->x[0] = ret;
-                return 1;
-            }
             const int32_t tw = (std::min)(bw, g_nat_w) & ~1;
             const int32_t th = (std::min)(bh, g_nat_h) & ~1;
             const float sx = static_cast<float>(tw) / static_cast<float>(bw);
             const float sy = static_cast<float>(th) / static_cast<float>(bh);
-            float cur_x = 0.0f, cur_y = 0.0f;
-            uint8_t inited = 0;
-            std::memcpy(&cur_x, reinterpret_cast<const void*>(obj + 0x58c), 4);
-            std::memcpy(&cur_y, reinterpret_cast<const void*>(obj + 0x590), 4);
-            std::memcpy(&inited, reinterpret_cast<const void*>(obj + 0x57f), 1);
-            const bool changed = !inited || std::fabs(cur_x - sx) > 0.001f || std::fabs(cur_y - sy) > 0.001f;
+            const uint8_t one_b = 1;
+            const float one_f = 1.0f;
+            std::memcpy(reinterpret_cast<void*>(obj + 0x57e), &one_b, 1);
             std::memcpy(reinterpret_cast<void*>(obj + 0x584), &sx, 4);
             std::memcpy(reinterpret_cast<void*>(obj + 0x588), &sy, 4);
-            std::memcpy(reinterpret_cast<void*>(obj + 0x58c), &sx, 4);
-            std::memcpy(reinterpret_cast<void*>(obj + 0x590), &sy, 4);
-            const uint32_t pct = (static_cast<uint32_t>(sx * 100.0f) & 0xFFu) | ((static_cast<uint32_t>(sy * 100.0f) & 0xFFu) << 8);
-            std::memcpy(reinterpret_cast<void*>(obj + 0x594), &pct, 4);
-            if (changed) {
-                const uint8_t one_b = 1;
-                const int16_t two_h = 2;
-                const uint32_t one_w = 1;
-                std::memcpy(reinterpret_cast<void*>(obj + 0x57f), &one_b, 1);
-                std::memcpy(reinterpret_cast<void*>(obj + 0x5b4), &two_h, 2);
-                std::memcpy(reinterpret_cast<void*>(obj + 0x5b0), &one_w, 4);
-                c->x[0] = 1;
-            } else {
+            std::memcpy(reinterpret_cast<void*>(obj + 0x598), &one_f, 4);
+            std::memcpy(reinterpret_cast<void*>(obj + 0x59c), &one_f, 4);
+            c->x[2] = 1;
+            if (dynres && nxrt::mem::is_mapped(dynres, 0x44)) {
                 const uint32_t zero_w = 0;
-                std::memcpy(reinterpret_cast<void*>(obj + 0x5b0), &zero_w, 4);
-                c->x[0] = 0;
+                const uint32_t preset3 = 3;
+                std::memcpy(reinterpret_cast<void*>(dynres + 0x00), &one_b, 1);
+                std::memcpy(reinterpret_cast<void*>(dynres + 0x24), &sx, 4);
+                std::memcpy(reinterpret_cast<void*>(dynres + 0x28), &sy, 4);
+                std::memcpy(reinterpret_cast<void*>(dynres + 0x38), &zero_w, 4);
+                std::memcpy(reinterpret_cast<void*>(dynres + 0x3c), &zero_w, 4);
+                std::memcpy(reinterpret_cast<void*>(dynres + 0x40), &preset3, 4);
+            }
+            return 0;
+        });
+        // Lock dynres::update (0x7b8b30) so heavy scenes (e.g. Gormott) never step [dynres+0x38] (0..4)
+        // or toggle U_POST ENABLE_SHARPEN/ENABLE_SAMPLE_BLOOM shader permutations mid-frame.
+        nxrt::hook_add_entry(main_base + 0x7b8b30, [](::Ctx* c, uint64_t, void*) -> int {
+            const uint64_t dynres = c->x[0];
+            if (dynres && nxrt::mem::is_mapped(dynres, 0x44)) {
+                const uint8_t one_b = 1;
+                const uint32_t zero_w = 0;
+                const uint32_t preset3 = 3;
+                std::memcpy(reinterpret_cast<void*>(dynres + 0x00), &one_b, 1);
+                std::memcpy(reinterpret_cast<void*>(dynres + 0x38), &zero_w, 4);
+                std::memcpy(reinterpret_cast<void*>(dynres + 0x3c), &zero_w, 4);
+                std::memcpy(reinterpret_cast<void*>(dynres + 0x40), &preset3, 4);
             }
             return 1;
+        });
+        // Ensure nvn_dlss::getPresetInputSize (0x8eab90) returns native_w x native_h even on Frame 1
+        // (when 0x844ad0 queries mode_idx=7 -> 1920x1080), so secondary RTs [x27+0x190..0x1b0] match
+        // the 2560x1440 primary RTs and preserve NVN memory-pool VkImage aliasing.
+        nxrt::hook_add_entry(main_base + 0x8eab90, [](::Ctx* c, uint64_t, void*) -> int {
+            const uint64_t out = c->x[1];
+            const int32_t bw = static_cast<int32_t>(c->x[3]);
+            const int32_t bh = static_cast<int32_t>(c->x[4]);
+            if (out && bw > 0 && bh > 0 && nxrt::mem::is_mapped(out, 8)) {
+                const int32_t tw = (std::min)(bw, g_nat_w) & ~1;
+                const int32_t th = (std::min)(bh, g_nat_h) & ~1;
+                std::memcpy(reinterpret_cast<void*>(out), &tw, 4);
+                std::memcpy(reinterpret_cast<void*>(out + 4), &th, 4);
+                return 1;
+            }
+            return 0;
+        });
+        // Per-frame dlss_rt hook (0x83f660 = getHaltonJitter, x0 = dlss_rt):
+        // 1) When target == base (e.g. true native 4K 3840x2160), keep dlss_rt+28 = 0 (direct-to-swapchain
+        //    DLSS output) even if f_710084d250 re-sets mode 1/3 on a scene or display transition.
+        // 2) Zero Halton(2,3) sub-pixel projection jitter when using a spatial upscaler (bilinear),
+        //    eliminating 1-pixel building-edge wobble without affecting temporal upscalers (FSR3/TAAU).
+        nxrt::hook_add_entry(main_base + 0x83f660, [](::Ctx* c, uint64_t, void*) -> int {
+            const uint64_t dlss_rt = c->x[0];
+            if (dlss_rt && nxrt::mem::is_mapped(dlss_rt, 88)) {
+                uint64_t ctx = 0;
+                std::memcpy(&ctx, reinterpret_cast<const void*>(dlss_rt), 8);
+                if (ctx && nxrt::mem::is_mapped(ctx + 0x5e0, 8)) {
+                    uint64_t view = 0;
+                    std::memcpy(&view, reinterpret_cast<const void*>(ctx + 0x5e0), 8);
+                    if (view && nxrt::mem::is_mapped(view + 40, 8)) {
+                        int32_t bw = 0, bh = 0;
+                        std::memcpy(&bw, reinterpret_cast<const void*>(view + 40), 4);
+                        std::memcpy(&bh, reinterpret_cast<const void*>(view + 44), 4);
+                        if (bw > 0 && bh > 0 && g_nat_w >= bw && g_nat_h >= bh) {
+                            uint32_t cur_mode = 0;
+                            std::memcpy(&cur_mode, reinterpret_cast<const void*>(dlss_rt + 28), 4);
+                            if (cur_mode != 0) {
+                                const uint32_t zero32 = 0;
+                                const uint8_t one8 = 1;
+                                const uint32_t ubw = static_cast<uint32_t>(bw);
+                                const uint32_t ubh = static_cast<uint32_t>(bh);
+                                std::memcpy(reinterpret_cast<void*>(dlss_rt + 28), &zero32, 4);
+                                std::memcpy(reinterpret_cast<void*>(dlss_rt + 48), &ubw, 4);
+                                std::memcpy(reinterpret_cast<void*>(dlss_rt + 52), &ubh, 4);
+                                std::memcpy(reinterpret_cast<void*>(dlss_rt + 64), &one8, 1);
+                                uint64_t rtmgr = 0;
+                                std::memcpy(&rtmgr, reinterpret_cast<const void*>(dlss_rt + 8), 8);
+                                if (rtmgr && nxrt::mem::is_mapped(rtmgr + 2316, 4)) {
+                                    std::memcpy(reinterpret_cast<void*>(rtmgr + 2316), &zero32, 4);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            const std::string up = nxrt::config_get_str("dlss", "upscaler", "bilinear");
+            if (up == "bilinear" || up == "nearest" || up == "none") {
+                const uint64_t out = c->x[8];
+                if (out && nxrt::mem::is_mapped(out, 8)) {
+                    const uint64_t zero = 0;
+                    std::memcpy(reinterpret_cast<void*>(out), &zero, 8);
+                }
+                return 1;
+            }
+            return 0;
         });
         nxrt::hook_add_entry(main_base + 0x85f3c0, [](::Ctx* c, uint64_t, void*) -> int {
             const uint64_t obj = c->x[0], pw = c->x[1], ph = c->x[2];
@@ -1660,6 +1793,10 @@ int main(int argc, char **argv) {
     nxrt::InitOptions opt;
     opt.log_path = logp;
     if (!nxrt::init(opt)) die("runtime start-up failed (address-space layout)");
+    // Load play settings BEFORE creating the window, Vulkan device/renderer and NVN back end (nxrt/play.h start-up order),
+    // so controls.ini's HDR, low latency, keep_aspect, ASTC quality and windowed size all take effect at boot.
+    nxrt::play::load();
+    const nxrt::play::DisplayConfig play_disp = nxrt::play::display();
     // ---- graphics: window (default) or headless; the NVN back end replays the game's command lists on Vulkan ----
     const char* gfxmode = "window";
     for (int i = 1; i < argc; i++)
@@ -1672,11 +1809,10 @@ int main(int argc, char **argv) {
         nxrt::platform::init();
         nxrt::platform::WindowDesc wd;
         wd.title = nxrt::game::info().title;
-        // [gfx] window_width / window_height (default 1280x720): the window is the swapchain and the size play mode tells the game its
-        // display is, so this is how a 1080p output is asked for; the play settings' [display] width/height only move a window that already
-        // exists (HANDOVER 50).
-        wd.width = static_cast<int>(nxrt::config_get_int("gfx", "window_width", 1280));
-        wd.height = static_cast<int>(nxrt::config_get_int("gfx", "window_height", 720));
+        const int ini_w = static_cast<int>(nxrt::config_get_int("gfx", "window_width", 1280));
+        const int ini_h = static_cast<int>(nxrt::config_get_int("gfx", "window_height", 720));
+        wd.width = play_disp.width >= 320 ? play_disp.width : ini_w;
+        wd.height = play_disp.height >= 240 ? play_disp.height : ini_h;
         if (!nxrt::platform::create_window(wd)) die("cannot create the window");
     }
     {
@@ -1698,6 +1834,7 @@ int main(int argc, char **argv) {
         bd.device = gfx_device.get();
         bd.renderer = gfx_renderer.get();
         bd.limiter = frame_limiter;
+        bd.keep_aspect = play_disp.keep_aspect;
         if (!nxrt::nvn::install_backend(bd)) die("NVN back end failed to start (see the log)");
         nxrt::play::StartOptions po;
         po.device = gfx_device.get();
