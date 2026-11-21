@@ -329,16 +329,9 @@ void prewarm_init() {
 
 void prewarm_record(const GraphicsKey& key) {
     Rec r;
-    // Why a key was not added to the file matters: a key the file never learns is compiled at its draw on every run instead
-    // of ahead of time at start-up (the DLC's scene change cost 499 of them in 673 ms, 2026-11-21). Counted, logged once.
-    static std::atomic<uint32_t> s_reject_tess{0}, s_reject_hash{0}, s_reject_disabled{0}, s_reject_dup{0};
-    auto reject = [](std::atomic<uint32_t>& n, const char* why) {
-        if (n.fetch_add(1, std::memory_order_relaxed) == 0) NXLOG_W(kTag, "prewarm: a key is not recorded (%s); later ones are not logged", why);
-    };
-    if (key.tess[0] || key.tess[1]) { reject(s_reject_tess, "a tessellation stage"); return; }
-    if (!rec_of(key, &r)) { reject(s_reject_hash, "a stage with no code hash"); return; }
+    if (!rec_of(key, &r)) return;                               // the record has no room for tessellation stages
     std::lock_guard<std::mutex> lk(g_mu);
-    if (!g_enabled) { reject(s_reject_disabled, "prewarm is off"); return; }
+    if (!g_enabled) return;
     if (g_recs.size() >= kMaxRecords || !g_digests.insert(digest_of(r.h, r.rest)).second) return;
     g_recs.push_back(r);
     g_rec_jobs.push_back(nullptr);                              // built or linked at its draw this session
