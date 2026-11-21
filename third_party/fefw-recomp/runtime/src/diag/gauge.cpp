@@ -34,6 +34,7 @@ Registry& reg() {
 // ---- frame times of the window -------------------------------------------------------------------------------------------
 constexpr size_t kRing = 1 << 16;           // frames kept between two samples (enough for 6,500 fps at a 10 s window)
 std::atomic<uint64_t> g_ring_n{0};
+std::atomic<uint64_t> g_film_end{0};   // QPC ticks of the last film end, 0 before the first: the summaries tag themselves with its age
 std::atomic<uint64_t> g_ring[kRing];        // QueryPerformanceCounter ticks of each presented frame
 
 uint64_t qpc() {
@@ -248,8 +249,14 @@ void monitor_run(double summary_s) {
             if (n > 0) seen_frames = true;
             if (!dt.empty()) {
                 const FrameStats st = stats_of(dt);
-                NXLOG_I("hitch", "%llu frames in %.1f s: mean %.1f fps, 1%% low %.1f fps, worst %.1f ms, %zu over 2x the median (%.1f ms)",
-                        (unsigned long long)window_frames, st.span_s, st.mean_fps, st.low1_fps, st.worst_ms, st.over2x, st.median_ms);
+                char film[64] = "";
+                const uint64_t fe = g_film_end.load(std::memory_order_relaxed);
+                if (fe) {
+                    const double age = static_cast<double>(hitch_ticks() - fe) / static_cast<double>(qpc_freq());
+                    if (age >= 0.0 && age <= 120.0) snprintf(film, sizeof film, "  [film ended %.1f s before this window]", age);
+                }
+                NXLOG_I("hitch", "%llu frames in %.1f s: mean %.1f fps, 1%% low %.1f fps, worst %.1f ms, %zu over 2x the median (%.1f ms)%s",
+                        (unsigned long long)window_frames, st.span_s, st.mean_fps, st.low1_fps, st.worst_ms, st.over2x, st.median_ms, film);
             } else if (seen_frames) {
                 NXLOG_W("hitch", "no frame presented in the last %.1f s", summary_s);
             }
@@ -339,6 +346,8 @@ void run(double interval_s, double t0) {
 }
 
 }  // namespace
+
+void hitch_note_film_end() { g_film_end.store(hitch_ticks(), std::memory_order_relaxed); }
 
 void gauge_register(const char* name, std::function<int64_t()> fn) {
     Registry& r = reg();

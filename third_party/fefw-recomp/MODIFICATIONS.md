@@ -131,3 +131,11 @@ git log --oneline 6f1d964..HEAD -- third_party/fefw-recomp
 - **runtime/cmake/media_deps.cmake (2026-11-21)** - libvorbis is detected the way libvpx is, so a development build decodes the
   films' sound as well (`NXRT_HAVE_VORBIS=1`). Only `xc2/release` used to define it, so every dev `xc2_boot.exe` played the
   picture without sound.
+
+- **runtime/src/media/video_ffmpeg.cpp, runtime/src/media/video_codec.cpp (2026-11-21)** - one D3D11VA device for every film
+  stream instead of one per stream: it is built by a background thread when the video codec module installs, so the cost lands in
+  the loading screen and not in the first frame of a cutscene (0.1.4: the presenting thread waited 183 ms of a 213 ms frame).
+  The decoder logs the device's creation time and the time from a stream's first packet to its first picture.
+- **runtime/src/diag/gauge.cpp, runtime/include/nxrt/gauge.h (2026-11-21)** - `hitch_note_film_end()`: for two minutes after a
+  film ends, the `hitch:` summaries carry `[film ended N s before this window]`, so a slow stretch that follows a cutscene is
+  visible in a player's log without asking them to time anything.
