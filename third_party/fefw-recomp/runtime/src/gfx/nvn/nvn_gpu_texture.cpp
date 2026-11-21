@@ -1946,6 +1946,20 @@ void tex_sparse_before_copy(Texture* t, uint32_t layer, uint32_t level) {
 void tex_mark_gpu_written(Texture* t) {
     TexGpu* g = tex_or_null(t);
     if (!g) return;
+    // Is the film's own picture texture being written by the GPU? Its storage is never written by the CPU (measured: zero
+    // rewrites over a whole run, 2026-11-21), so if anything produces its content it is a draw or a copy on the GPU - and
+    // this counter says whether that still happens when the picture freezes.
+    if (film_texture_is(t->id)) {
+        static std::atomic<uint64_t> n{0};
+        static std::atomic<int64_t> last{0};
+        const uint64_t k = n.fetch_add(1, std::memory_order_relaxed) + 1;
+        const int64_t ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                               std::chrono::steady_clock::now().time_since_epoch()).count();
+        int64_t prev = last.load(std::memory_order_relaxed);
+        if (ms - prev >= 1000 && last.compare_exchange_strong(prev, ms))
+            NXLOG_I("nvn.tex", "film texture %u: written by the GPU %llu time(s) so far", t->id,
+                    static_cast<unsigned long long>(k));
+    }
     ++g->h_gpu_writes;
     g->gpu_written = true;
     t->cpu_dirty.store(false);                   // the GPU data is the newer one until the CPU writes again

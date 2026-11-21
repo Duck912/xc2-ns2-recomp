@@ -24,6 +24,11 @@
 #include "nvn_core.h"
 #include "nvn_gpu.h"
 #include "nvn_impl.h"
+
+namespace nxrt::media {
+bool media_film_range_hit(uint64_t addr, uint64_t size);   // video_codec.cpp: was a film frame read into this range
+bool media_film_active();                                  // video_codec.cpp: a film decoder exists right now
+}
 #include "nvn_texture_layout.h"
 #include "nxrt/gauge.h"
 
@@ -340,6 +345,33 @@ NVNboolean nvnTextureInitialize(NVNtexture* texture, const NVNtextureBuilder* bu
     t->levels = L.levels;
     t->layers = L.layers;
     t->id = next_texture_id(info.device);
+    // A film frame is read into the game's own memory (nn::codec's ReadDecoderOutputImage -> the buffer VideoFrame::GetBuffer
+    // hands back) and no buffer->texture copy is ever made from it, so if that picture reaches the screen the game must be
+    // sampling a texture built over exactly that memory. This is the line that says whether such a texture exists at all, and
+    // with which format (2026-11-21).
+    if (t->mem && t->storage_size &&
+        nxrt::media::media_film_range_hit(reinterpret_cast<uint64_t>(t->mem), t->storage_size)) {
+        static std::atomic<uint32_t> n{0};
+        const uint32_t k = n.fetch_add(1, std::memory_order_relaxed);
+        if (k < 32)
+            NXLOG_I("nvn.tex", "texture %u: storage %llx (%llu KB) is memory a film frame was read into (%ux%u fmt %d)",
+                    t->id, static_cast<unsigned long long>(reinterpret_cast<uint64_t>(t->mem)),
+                    static_cast<unsigned long long>(t->storage_size >> 10), info.width, info.height, info.format);
+    }
+    // Every texture that appears while a film decoder exists, with its storage address: the film's picture has to land on one
+    // of these, and comparing the addresses with the buffer ReadDecoderOutputImage writes into says which (2026-11-21).
+    if (nxrt::media::media_film_active()) {
+        // The film's own picture texture: a large one built while the decoder is alive. The registry counts its rewrites, which
+        // is the same question as "is the game still consuming frames" (2026-11-21).
+        if (info.width >= 1920) nxrt::nvn::be::film_texture_note(t->id);
+        static std::atomic<uint32_t> n{0};
+        const uint32_t k = n.fetch_add(1, std::memory_order_relaxed);
+        if (k < 64)
+            NXLOG_I("nvn.tex", "film texture #%u: id %u storage %llx (%llu KB) %ux%u fmt %d%s", k, t->id,
+                    static_cast<unsigned long long>(reinterpret_cast<uint64_t>(t->mem)),
+                    static_cast<unsigned long long>(t->storage_size >> 10), info.width, info.height, info.format,
+                    t->mem ? "" : " (host backed)");
+    }
     if (const char* df = nxrt::services::debug_last_file_read(); df && df[0]) {
         size_t i = 0;
         for (; i + 1 < sizeof t->dbg_file && df[i]; ++i) t->dbg_file[i] = df[i];

@@ -6,6 +6,7 @@
 // never came and its picture stopped with them, exactly when the movie's audio stream opened (2026-11-18, 4K CG, 1.3 s in).
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <deque>
@@ -43,10 +44,11 @@ constexpr uint64_t kBufData = 0x00, kBufSize = 0x08, kBufFilled = 0x10, kBufTime
 constexpr uint64_t kAfBuffer = 0x00, kAfChannels = 0x14;   // AudioFrame: buffer, then the channel count
 
 bool g_log = false;
-// [media] movie_audio: decode the film's own audio track on the host. Off by default: every packet this library hands the
-// decoder arrives one byte long (measured 2026-11-21, both video_decoder modes: filled 1, payload 0x0a/0x0e, cadence a
-// correct 21.3 ms), so nothing decodes and the player only loses the sound it used to play itself.
-bool g_audio = false;
+// [media] movie_audio: decode the film's own audio track on the host. ON by default (see install_audio_decoder_hle): every
+// packet this library hands the decoder arrives one byte long (measured 2026-11-21: filled 1, payload 0x0a/0x0e, cadence a
+// correct 21.3 ms), so it decodes to silence, but the player paces itself on these frames - with the decoder off the opening
+// film froze on its first picture for about five seconds on both machines (handover 65, section 249).
+bool g_audio = true;
 struct Fns {
     uint64_t create_event, attach_event, get_int32, set_int32, set_size;
 };
@@ -106,6 +108,21 @@ struct AudioDecoder {
 
 std::mutex g_reg_mu;
 std::vector<AudioDecoder*> g_reg;
+
+// One line a second while the film's audio is in use: the queues that decide whether the player still gets its rhythm.
+// Ungated on purpose - [media] video_decoder_log changes the timing this is meant to measure (2026-11-21).
+std::atomic<uint64_t> g_adec_acquire{0}, g_adec_miss{0}, g_adec_release{0}, g_adec_packets{0};
+void adec_state_tick(const AudioDecoder* d) {
+    static std::atomic<int64_t> last{0};
+    const int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (now - last.load(std::memory_order_relaxed) < 1000) return;
+    last.store(now, std::memory_order_relaxed);
+    NXLOG_I(kTag, "adec state: packets %llu decoded %llu sound %zu ready %zu free %zu frames %zu | acquire %llu miss %llu release %llu",
+            static_cast<unsigned long long>(d->packets), static_cast<unsigned long long>(d->decoded), d->sound.size(),
+            d->ready.size(), d->free_.size(), d->frames.size(),
+            static_cast<unsigned long long>(g_adec_acquire.load()), static_cast<unsigned long long>(g_adec_miss.load()),
+            static_cast<unsigned long long>(g_adec_release.load()));
+}
 
 std::mutex g_map_mu;
 std::map<uint64_t, AudioDecoder*> g_map;   // guest object -> host state; the object itself is left untouched
@@ -384,6 +401,7 @@ void adec_flush(::Ctx* c) {
 // output-ready event. A chunk larger than the frame's buffer is cut, which the player hears as a click but never as a stall.
 void deliver_sound(AudioDecoder& d) {
     bool any = false;
+    const auto now = std::chrono::steady_clock::now();
     while (!d.sound.empty() && !d.free_.empty()) {
         const uint64_t f = d.free_.back();
         d.free_.pop_back();
@@ -467,6 +485,7 @@ void adec_decode_async(::Ctx* c) {
     }
     if (d->vorbis_open && data && n) {
         ogg_packet op{};
+        g_adec_packets.fetch_add(1, std::memory_order_relaxed);
         op.packet = reinterpret_cast<unsigned char*>(static_cast<uintptr_t>(data));
         op.bytes = static_cast<long>(n);
         op.granulepos = -1;
@@ -494,6 +513,7 @@ void adec_decode_async(::Ctx* c) {
         deliver_sound(*d);
     }
 #endif
+    if (d) adec_state_tick(d);
     if (g_log) {
         static std::atomic<uint64_t> n{0};
         const uint64_t k = n.fetch_add(1);
@@ -511,7 +531,11 @@ void adec_acquire(::Ctx* c) {
     if (A(2)) wr32(A(2), 0xffffffffu);
     if (!d) { RET(kResultNoFrame); return; }
     std::lock_guard<std::mutex> lk(d->mu);
+    g_adec_acquire.fetch_add(1, std::memory_order_relaxed);
+    adec_state_tick(d);
+    if (d->ready.empty()) deliver_sound(*d);   // a frame may have come back since; the backlog goes into it
     if (d->ready.empty()) {
+        g_adec_miss.fetch_add(1, std::memory_order_relaxed);
         if (g_log) {
             static std::atomic<uint64_t> n{0};
             const uint64_t k = n.fetch_add(1);
@@ -532,8 +556,17 @@ void adec_release(::Ctx* c) {
     AudioDecoder* d = adec_of(A(0));
     const uint64_t f = A(1);
     if (d && f) {
+        g_adec_release.fetch_add(1, std::memory_order_relaxed);
         std::lock_guard<std::mutex> lk(d->mu);
-        if (std::find(d->frames.begin(), d->frames.end(), f) != d->frames.end()) d->free_.push_back(f);
+        if (std::find(d->frames.begin(), d->frames.end(), f) != d->frames.end()) {
+            d->free_.push_back(f);
+            // The client returns a frame so the next chunk of sound can go into it. Without this the ring only ever refills
+            // inside DecodeAsync - and every packet of this track is submitted in the first second, so once they stop the
+            // ring drains to zero ready frames and its output-ready event never fires again: the player waits for audio that
+            // is sitting in "sound" and the picture stops with it (2026-11-21, exactly the stall of handover 65 section 249).
+            deliver_sound(*d);
+        }
+        adec_state_tick(d);
     }
     RET(0);
 }

@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Registry of initialized textures by storage range (see nvn_core.h).
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstring>
+#include <set>
 #include <map>
 #include <mutex>
 #include <utility>
@@ -14,6 +17,10 @@
 #include "nxrt/log.h"
 #include "nvn_format.h"
 #include "nvn_gpu.h"
+
+namespace nxrt::media {
+bool media_film_range_hit(uint64_t addr, uint64_t size);   // video_codec.cpp: a film frame was read into this range
+}
 
 namespace nxrt::nvn::be {
 namespace {
@@ -195,6 +202,23 @@ bool texture_hash_virtual(const Texture& t, uint64_t& hash) {
     return true;
 }
 
+namespace {
+std::mutex g_film_mu;
+std::set<uint32_t> g_film_tex;
+std::atomic<uint64_t> g_film_writes{0};
+int64_t g_film_last_log_ms{0};
+}  // namespace
+
+void film_texture_note(uint32_t id) {
+    std::lock_guard<std::mutex> lk(g_film_mu);
+    if (g_film_tex.size() < 8) g_film_tex.insert(id);
+}
+
+bool film_texture_is(uint32_t id) {
+    std::lock_guard<std::mutex> lk(g_film_mu);
+    return g_film_tex.count(id) != 0;
+}
+
 void textures_cpu_wrote(const void* lo, uint64_t size) {
     const uint64_t a = reinterpret_cast<uint64_t>(lo), b = a + size;
     std::vector<Ref<Texture>> hit;
@@ -239,6 +263,28 @@ void textures_cpu_wrote(const void* lo, uint64_t size) {
         tev(t.get(), "cpu_wrote", reinterpret_cast<uint64_t>(lo), size);
         t->cpu_dirty.store(true);
         gpu::mark_texture_cpu_dirty(t.get());
+        // Is this the film's own texture being rewritten? One line a second is enough to say whether the game still turns
+        // the decoded pictures into texture content (2026-11-21).
+        if (film_texture_is(t->id)) {
+            g_film_writes.fetch_add(1, std::memory_order_relaxed);
+            const int64_t ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::steady_clock::now().time_since_epoch()).count();
+            if (ms - g_film_last_log_ms >= 1000) {
+                g_film_last_log_ms = ms;
+                NXLOG_I("nvn.tex", "film texture %u: rewritten %llu time(s) so far", t->id,
+                        static_cast<unsigned long long>(g_film_writes.load()));
+            }
+        }
+        // Did the write land in memory a film frame was read into? If any texture is over that buffer at all, this says so -
+        // and it is the one that carries the picture to the screen (2026-11-21).
+        if (nxrt::media::media_film_range_hit(reinterpret_cast<uint64_t>(t->mem), t->storage_size)) {
+            static std::atomic<uint32_t> n{0};
+            const uint32_t k = n.fetch_add(1, std::memory_order_relaxed);
+            if (k < 12)
+                NXLOG_I("nvn.tex", "film write #%u: texture %u (%llx, %llu KB) marked written", k, t->id,
+                        static_cast<unsigned long long>(reinterpret_cast<uint64_t>(t->mem)),
+                        static_cast<unsigned long long>(t->storage_size >> 10));
+        }
     }
 }
 

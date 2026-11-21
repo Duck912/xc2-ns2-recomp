@@ -50,11 +50,18 @@
 #include "nxrt/dispatch.h"
 #include "nxrt/game.h"
 #include "nxrt/gauge.h"
+#include "nxrt/kernel.h"
 #include "nxrt/log.h"
 #include "nxrt/module.h"
 #include "nxrt/video_codec.h"
 #include "video_nvdec.h"
 #include "video_ffmpeg.h"
+
+// The NVN side of the same build (nvn_texture_registry.cpp): a picture this decoder writes into the game's memory has to be
+// announced there, or the texture the game samples over that memory never uploads again (see read_nv12).
+namespace nxrt::nvn::be {
+void textures_cpu_wrote(const void* lo, uint64_t size);
+}
 
 #if NXRT_HAVE_LIBVPX
 #include <vpx/vp8dx.h>
@@ -88,6 +95,9 @@ constexpr size_t kAhead = 4;        // pictures the worker may keep decoded ahea
 constexpr size_t kPendingMax = 8192;   // packets queued undecoded (~500 MB of AV1 for a film, well past the 2810 of this one). Submits
                                       // only copy; the worker decodes ahead. The queue was 8 for a while and every submit then decoded
                                       // one packet inline (23 ms) on the player's thread, which starved it (frames 60-90 ms late).
+constexpr size_t kRefuseAt = 8;  // undecoded packets at which the submission-ready event goes DOWN (a watermark, not a refusal:
+                                 // the reference emulator keeps every submitted packet and uses 8 only for this, 2026-11-21)
+constexpr size_t kQueueCap = 8192;   // memory bound on queued packets only; a 90 s 4K film is about 9 MB
 constexpr size_t kBacklog = 1;   // decoded pictures waiting for a buffer before input stops being "ready". 3 let the movie library's
                                  // adapter submit ~10 packets per frame, and every Submit decodes 4K AV1 inline on the player's own thread:
                                  // the frame loop fell ~180 ms behind and dropped every frame but the first (GetBuffer once, 2026-11-18).
@@ -194,6 +204,9 @@ bool film_trace_on() {
     return on;
 }
 std::atomic<int> g_signals_owed{0};   // signals the decoder workers owe; svc.cpp drains them on any guest call
+// True between CreateDecoder and Finalize: lets the NVN side log the textures that appear while a film is running, with their
+// storage addresses, so the frame buffer the client reads into can be matched against them (2026-11-21).
+std::atomic<bool> g_film_active{false};
 
 // The guest buffers the client has read a picture into. The movie library puts them into a texture with a GPU copy, not a CPU
 // upload (no 4K texture is ever uploaded during a film), so the copy is where the frame either reaches the screen or does not.
@@ -311,6 +324,7 @@ struct Decoder {
     bool submit_event_made = false;
     bool want_submit_signal = false;
     bool started = false;                                 // between Start*Decoder and Stop*Decoder: only then is input "ready"
+    bool eos_pending = false;                             // end of stream seen, but the pictures before it have not all gone
     std::vector<uint8_t> last;                            // last decoded picture (NV12) for the end-of-stream buffer
     uint16_t last_w = 0, last_h = 0;
     uint64_t pictures = 0;
@@ -524,6 +538,37 @@ bool assign(Decoder& d) {
                         static_cast<unsigned long long>(d.slot[index].gen), static_cast<unsigned long long>(s_delivered.load()));
         }
     }
+    // End of stream, and nothing left to hand out: fill one free buffer with the last picture marked eos, once. The client
+    // reads it, learns the film ended, and stops on its own (the reference library's drain does the same).
+    if (d.eos_pending && d.ready.empty() && !d.pend.empty()) {
+        const uint32_t index = d.pend.front();
+        d.pend.pop_front();
+        uint16_t lw = 0, lh = 0;
+        {
+            std::lock_guard<std::mutex> dlk(d.dec_mu);   // order: d.mu then dec_mu (decode_one never holds both)
+            lw = d.last_w;
+            lh = d.last_h;
+        }
+        if (index < d.slot.size()) {
+            Decoder::Slot& s = d.slot[index];
+            s.w = lw;
+            s.h = lh;
+            s.ts = 0;
+            s.eos = true;
+            s.filled = true;
+            s.filled_gen = s.gen;
+        }
+        d.eos_pending = false;
+        any = true;
+        s_delivered++;
+        g_signals_owed.fetch_add(1, std::memory_order_relaxed);
+        NXLOG_I("vcodec", "decoder %u: end of stream delivered into buffer %u", d.id, index);
+    }
+    // A picture just left "ready" for a buffer, so the worker may be able to decode again - and it is asleep on exactly that
+    // condition (ready.size() < kAhead). It used to be woken only by Submit, so the sequence "client releases its buffer, the
+    // queue still holds 8 packets, the worker sleeps because ready was full" parked the whole film: the worker slept with
+    // pending 8 and ready 0 while the client armed a fence nothing could ever reach (measured 2026-11-21).
+    if (any) d.cv.notify_all();
     return any;
 }
 
@@ -536,7 +581,7 @@ void after_change(::Ctx* c, Decoder& d, bool fences) {
     bool signal = false;
     {
         std::lock_guard<std::mutex> lk(d.mu);
-        if (d.submit_event_made && d.started && d.ready.size() < kBacklog && d.pending.size() < 8) {
+        if (d.submit_event_made && d.started && d.ready.size() < kBacklog && d.pending.size() < kRefuseAt) {
             signal = d.want_submit_signal;
             d.want_submit_signal = false;
         }
@@ -548,6 +593,39 @@ void after_change(::Ctx* c, Decoder& d, bool fences) {
 
 // See the note above g_film_ranges: true when [addr, addr+size) overlaps a buffer a film frame was read into. Outside the
 // anonymous namespace so the NVN copy path can ask (api_cmd_work.cpp).
+bool media_film_active() { return g_film_active.load(std::memory_order_relaxed); }
+
+// Diagnostic for the player trace's stall watchdog (no locks held by the caller): what the decoder holds, and what the client
+// is still armed on. "REACHED" means the picture is in the buffer and our signal never got out; "not reached" means no picture
+// was placed at all; nothing printed means the client is not waiting on a fence - it is waiting on something else entirely.
+void media_dump_state(const char* why) {
+    std::vector<std::shared_ptr<Decoder>> decs;
+    {
+        std::lock_guard<std::mutex> lk(g_reg_mu);
+        for (auto& e : g_decoders) decs.push_back(e.second);
+    }
+    for (auto& d : decs) {
+        size_t pending = 0, ready = 0, pend = 0, fifo = 0, filled = 0;
+        {
+            std::lock_guard<std::mutex> lk(d->mu);
+            pending = d->pending.size();
+            ready = d->ready.size();
+            pend = d->pend.size();
+            fifo = d->fifo.size();
+            for (auto& s : d->slot) if (s.filled) ++filled;
+        }
+        NXLOG_W("vcodec", "%s: decoder %u pending %zu ready %zu pend %zu fifo %zu filled %zu", why, d->id, pending, ready, pend, fifo, filled);
+    }
+    std::lock_guard<std::mutex> lk(g_evt_mu);
+    if (g_armed.empty()) NXLOG_W("vcodec", "%s: the client is not armed on any decoder fence", why);
+    for (auto& kv : g_armed) {
+        const bool reached = fence_done(kSyncMarker | kv.second.dec, kv.second.seq);
+        NXLOG_W("vcodec", "%s: client armed evt %llx on decoder %u gen %llu index %llu -> %s", why, (unsigned long long)kv.first,
+                kv.second.dec, (unsigned long long)(kv.second.seq >> 32), (unsigned long long)(kv.second.seq & 0xffffffffull),
+                reached ? "REACHED (the picture is there; our signal never went out)" : "not reached (no picture was placed)");
+    }
+}
+
 bool media_film_range_hit(uint64_t addr, uint64_t size) {
     if (!addr || !size) return false;
     std::lock_guard<std::mutex> lk(g_film_range_mu);
@@ -585,7 +663,7 @@ void media_drain_signals(::Ctx* c) {
             std::lock_guard<std::mutex> lk(d->mu);
             // Only when a packet would actually be accepted now: a manual-clear event that stays signalled makes the
             // client resubmit the same packet in a tight loop (200 us apart, 2026-11-21).
-            if (d->submit_event_made && d->started && d->want_submit_signal && d->ready.size() < kBacklog && d->pending.size() < 8) {
+            if (d->submit_event_made && d->started && d->want_submit_signal && d->ready.size() < kBacklog && d->pending.size() < kRefuseAt) {
                 signal = true;
                 d->want_submit_signal = false;
             }
@@ -744,6 +822,16 @@ void decode_into(Decoder& d, const uint8_t* data, size_t size, int64_t pts, std:
 // ---- nn::codec handlers -----------------------------------------------------------------------------------------------------------
 void make_pref(::Ctx* c) {   // MakeDecodeImagePreference(w, h, format, mode) -> Preference via x8
     const uint64_t out = c->x[8];
+    // The mode is the whole question: 2 is the SDK's native-texture mode, where the decoder writes each picture straight
+    // into the client's own NVN texture instead of the client reading it out (hle_movie.c: MD_MODE_TEX). Nothing in this
+    // runtime reads it, so if the client asks for it we silently degrade to CPU reads (2026-11-21).
+    {
+        static std::atomic<uint32_t> n{0};
+        const uint32_t k = n.fetch_add(1, std::memory_order_relaxed);
+        if (k < 16)
+            NXLOG_I("vcodec", "MakeDecodeImagePreference #%u: %ux%u format %u mode %u", k, static_cast<uint32_t>(A(0)),
+                    static_cast<uint32_t>(A(1)), static_cast<uint32_t>(A(2)), static_cast<uint32_t>(A(3)));
+    }
     std::memset(reinterpret_cast<void*>(out), 0, 64);
     wr16(out + 0, static_cast<uint16_t>(A(0)));
     wr16(out + 2, static_cast<uint16_t>(A(1)));
@@ -765,10 +853,17 @@ void calc_pool(::Ctx* c) {   // CalculateDecoderImagePoolBuffer(size*, align*, p
     const uint64_t per = (w && h) ? nv12_storage(w, h) : 0x1000ull;
     if (A(0)) wr64(A(0), per * n);
     if (A(1)) wr64(A(1), 0x1000);
+    {
+        static std::atomic<uint32_t> n2{0};
+        const uint32_t k = n2.fetch_add(1, std::memory_order_relaxed);
+        if (k < 16)
+            NXLOG_I("vcodec", "CalculateDecoderImagePoolBuffer #%u: %ux%u count %u -> size %llu align 0x1000 (one NV12 picture %llu)",
+                    k, w, h, n, (unsigned long long)(per * n), (unsigned long long)per);
+    }
     RET(0);
 }
 void init_pool(::Ctx* c) {   // InitializeDecoderImagePool(pool, mem, size, pref*, count, mode)
-    const uint64_t g = A(0), pref = A(3);
+    const uint64_t g = A(0), mem = A(1), size = A(2), pref = A(3);
     Pool* p = new Pool();
     if (pref && rd64(pref + 16) == kPrefMarker) {
         std::memcpy(&p->w, reinterpret_cast<const void*>(pref), 2);
@@ -779,6 +874,10 @@ void init_pool(::Ctx* c) {   // InitializeDecoderImagePool(pool, mem, size, pref
     p->h = static_cast<uint16_t>((p->h + 1) & ~1);
     wr64(g, reinterpret_cast<uint64_t>(p));
     wr64(g + 8, kPoolMarker);
+    // The client hands us the memory its pool is supposed to live in (mem, size). This runtime keeps the pictures on the host
+    // and copies them out on ReadDecoderOutputImage, so nothing here ever writes that memory - but if the game builds its film
+    // texture over it, the screen is showing memory nobody updates. Registering the range lets the texture probe say so.
+    film_range_note(mem, size);
     // The library can read a pool image before the first picture is placed in it (the first acquire happens before any packet is
     // decoded). An all-zero image decodes as bright green, which flashed for the first seconds of the 4K CG (uv0=0 at read #1,
     // 127 from read #2). Start it as limited-range black instead.
@@ -794,9 +893,10 @@ void init_pool(::Ctx* c) {   // InitializeDecoderImagePool(pool, mem, size, pref
     }
     {
         static std::atomic<uint32_t> n{0};
-        if (n.fetch_add(1, std::memory_order_relaxed) < 6)
-        NXLOG_I("vcodec", "InitializeDecoderImagePool %llx: %ux%u format %u count %u (image %zu bytes, uv0 %u)", (unsigned long long)g, p->w, p->h,
-                p->format, p->count(),
+        const uint32_t k = n.fetch_add(1, std::memory_order_relaxed);
+        if (k < 64)
+        NXLOG_I("vcodec", "pool #%u InitializeDecoderImagePool %llx: %ux%u format %u count %u mode %u | mem %llx size %llu (image %zu bytes, uv0 %u)", k, (unsigned long long)g, p->w, p->h,
+                p->format, p->count(), static_cast<uint32_t>(A(5)), (unsigned long long)mem, (unsigned long long)size,
                 p->imgs.empty() ? size_t(0) : p->imgs[0].size(),
                 (!p->imgs.empty() && p->imgs[0].size() > static_cast<size_t>(p->w) * p->h) ? p->imgs[0][static_cast<size_t>(p->w) * p->h] : 999u);
     }
@@ -862,6 +962,12 @@ void read_nv12(::Ctx* c) {
             if (y * uvstride + cw > uvsize) break;
             std::memcpy(uvdst + y * uvstride, &nv12[pw * ph + (y0 / 2 + y) * pw + (x0 & ~1u)], cw);
         }
+    // The client's picture is sampled from this memory: no buffer->texture copy ever happens in the film path, so a texture
+    // built over these buffers is what reaches the screen. A write through this pointer comes from the host, not from the
+    // guest's own store, so the texture write-watch never records it and the overlay keeps showing the first frame. Mark the
+    // range the way the runtime does after its own CPU writes (2026-11-21).
+    nxrt::nvn::be::textures_cpu_wrote(ydst, static_cast<uint64_t>(h) * ystride);
+    if (uvdst) nxrt::nvn::be::textures_cpu_wrote(uvdst, static_cast<uint64_t>(h / 2) * uvstride);
     if (g_log) {
         static std::atomic<uint32_t> stat_n{0};
         if (stat_n.fetch_add(1, std::memory_order_relaxed) < 4 && p && !p->imgs.empty() && !nv12.empty()) {
@@ -906,16 +1012,24 @@ void read_rgba(::Ctx* c) {   // BT.709 limited range
             o[4 * x + 3] = 255;
         }
     }
+    // As in read_nv12: a host-side write must be announced or the texture over this buffer is never uploaded again.
+    if (dst) nxrt::nvn::be::textures_cpu_wrote(dst, static_cast<uint64_t>(h) * stride);
     RET(0);
 }
 void read_rgba_hdr(::Ctx* c) {   // same pixels as Rgba; the transfer function is applied by the player's shader
     read_rgba(c);
 }
 void native_image_handle(::Ctx* c) {
-    static bool once = false;
-    if (!once) {
-        once = true;
-        NXLOG_W("vcodec", "GetDecoderImagePoolNativeImageHandle: GPU (native texture) output is not implemented; only CPU reads work");
+    // The client asks for a native image only if it means to sample the pool's memory as a texture (the reference
+    // implementation hands out the game's own buffer for exactly that). We answer 0, so it has to fall back to CPU reads.
+    // Logged on every call, ungated: whether it asks at all, and how often, separates "it needs the image and we refuse" from
+    // "it never wanted one" (2026-11-21).
+    static std::atomic<uint32_t> n{0};
+    const uint32_t k = n.fetch_add(1, std::memory_order_relaxed);
+    if (k < 64) {
+        Pool* p = pool_of(A(0));
+        NXLOG_W("vcodec", "GetDecoderImagePoolNativeImageHandle #%u: pool %llx index %u (%ux%u, %u image(s)) -> 0 (not implemented, CPU reads only)",
+                k, (unsigned long long)A(0), static_cast<uint32_t>(A(1)), p ? p->w : 0, p ? p->h : 0, p ? p->count() : 0);
     }
     RET(0);
 }
@@ -927,6 +1041,7 @@ void calc_work(::Ctx* c) {   // Calculate*DecoderWorkBuffer(size*, align*, ...)
 }
 void create_decoder(::Ctx* c, int codec, uint32_t w, uint32_t h) {
     const uint64_t g = A(0);
+    g_film_active.store(true, std::memory_order_relaxed);
     auto d = std::make_shared<Decoder>();
     d->codec = codec;
     {
@@ -978,6 +1093,7 @@ void finalize_decoder(::Ctx* c) {
 #endif
         }
         NXLOG_I("vcodec", "decoder %u finalized after %llu pictures", d->id, (unsigned long long)d->pictures);
+        g_film_active.store(false, std::memory_order_relaxed);
         s_destroyed++;
         wr64(g, 0);
         wr64(g + 8, 0);
@@ -999,7 +1115,21 @@ void register_buffer(::Ctx* c) {   // (dec, index, pool, u32)
             d->pend.push_back(index);                       // waiting for a picture
             if (d->fifo.size() < 8) d->fifo.push_back(index);   // and acquirable, as the SDK's library does on register
         }
-        if (g_log) NXLOG_I("vcodec", "decoder %u: buffer %u registered (pool %llx)", d->id, index, (unsigned long long)A(2));
+        // How many output buffers the client hands us decides whether it can pipeline at all: the SDK's own library makes one
+        // image pool per picture and registers each. Not gated on [media] video_decoder_log - this is the first line to read
+        // when a film plays for a second and then stops (2026-11-21).
+        {
+            static std::atomic<uint32_t> rn{0};
+            const uint32_t k = rn.fetch_add(1, std::memory_order_relaxed);
+            if (k < 64) {
+                Pool* p = pool_of(A(2));
+                NXLOG_I("vcodec", "register #%u: decoder %u buffer %u pool %llx (%ux%u, %u image(s)) | pools %zu fifo %zu pend %zu",
+                        k, d->id, index, (unsigned long long)A(2), p ? p->w : 0, p ? p->h : 0, p ? p->count() : 0,
+                        d->pools.size(), d->fifo.size(), d->pend.size());
+            }
+        }
+        if (index >= d->slot.size())
+            NXLOG_W("vcodec", "register: buffer index %u is past the %zu slots and was dropped", index, d->slot.size());
     }
     RET(0);
 }
@@ -1116,14 +1246,15 @@ void decode_one(Decoder& d) {
         if (!p.data.empty()) decode_into(d, p.data.data(), p.data.size(), p.pts, out);
         if (p.eos) {
             if (d.vpx_ok) decode_into(d, nullptr, 0, p.pts, out);   // drain
-            Picture pic;
-            pic.nv12 = d.last;
-            pic.w = d.last_w;
-            pic.h = d.last_h;
-            pic.pts = p.pts;
-            pic.eos = true;
-            out.push_back(std::move(pic));
-            NXLOG_I("vcodec", "decoder %u: end of stream after %llu pictures", d.id, (unsigned long long)d.pictures);
+            // End of stream is a marker for the LAST picture of the stream, not a picture of its own. The player's demuxer
+            // reads the whole file in the first second and then resubmits this zero-byte packet until it is taken, so
+            // handing out a fresh eos picture here told the client the film ended at frame ~60 while hundreds of pictures
+            // were still queued behind it - and the client stopped (measured 2026-11-21). Mark the picture this packet
+            // produced, else remember it and deliver it once the queue is empty (see assign).
+            if (!out.empty()) out.back().eos = true;
+            else d.eos_pending = true;
+            NXLOG_I("vcodec", "decoder %u: end of stream after %llu pictures (%zu still queued)", d.id,
+                    (unsigned long long)d.pictures, d.pending.size());
             hitch_note_film_end();   // the hitch summaries say how long ago this was, so a slow stretch after a cutscene is visible
         }
     }
@@ -1201,9 +1332,12 @@ void submit_packet(::Ctx* c, uint64_t dec, const uint8_t* data, size_t size, int
         // accepting every packet piles up tens of thousands of them, so the end-of-stream packet arrives long after the
         // client sent it and the picture stops a few seconds in (2026-11-21). The SDK library refuses, and the client
         // resubmits the same packet after the submission-ready event.
-        if (d->ready.size() >= 12 || d->pending.size() >= 8) {
-            // Refused: the client now waits for the submission-ready event, so one is owed (the drain raises it from the
-            // next guest call). Without this the client waited for ever and the film sat on one frame (2026-11-21).
+        // Accept what the client submits. The upstream audit of the reference emulator (#472) settled this the hard way: the
+        // eight-packet admission limit was reverted because the client ignores 3603 and moves on instead of retrying (606
+        // rejected packets, no retry, in one session), and 8 is only the watermark at which the ready event goes down. Ours
+        // refused, the client dropped the rest of the stream, and the film ran out at frame 61 with five packets left
+        // (measured 2026-11-21). The ceiling below only bounds memory: a 90 s 4K film is about 9 MB.
+        if (!eos && d->pending.size() >= kQueueCap) {
             d->want_submit_signal = true;
             g_signals_owed.fetch_add(1, std::memory_order_relaxed);
             lk.unlock();
@@ -1244,7 +1378,13 @@ void acquire_output(::Ctx* c) {   // (u32* index, NativeSyncHandle* fence, dec)
         if (d->fifo.empty()) {
             // The SDK's library answers Result 3604 when it has no buffer to hand out; the client polls its sync handles and
             // comes back. Returning success here made the player spin (11 acquisitions in 0.3 ms, 2026-11-21).
+            const size_t n_pend = d->pend.size(), n_held = d->ready.size(), n_pending = d->pending.size();
+            static std::atomic<uint32_t> nq{0};
+            const uint32_t qk = nq.fetch_add(1, std::memory_order_relaxed);
             lk.unlock();
+            if (qk < 24)
+                NXLOG_I("vcodec", "acquire -> 3604 (no buffer): pend %zu fifo 0 held %zu pending %zu | the client has to come back later",
+                        n_pend, n_held, n_pending);
             if (A(0)) wr32(A(0), 0);
             if (A(1)) { wr64(A(1), 0); wr64(A(1) + 8, 0); }
             RET(kResultNoBuffer);
@@ -1253,6 +1393,16 @@ void acquire_output(::Ctx* c) {   // (u32* index, NativeSyncHandle* fence, dec)
             index = d->fifo.front();
             d->fifo.pop_front();
             seq = (d->slot[index].gen << 32) | index;
+            // The library arms its fence right after this call and waits for it, so a fence nothing completes stalls the
+            // player for as long as the picture takes - measured 381 ms from acquire to the first read on the runs of main that
+            // failed, against every read under 40 ms on the runs that played (2026-11-21). Decode one packet here, outside the
+            // lock, so the picture exists before the client arms anything. main has this first-frame fallback; the protocol
+            // rewrite dropped it, which is why pr19plus stalls on runs where main gets through.
+            if (d->ready.empty() && !d->pending.empty()) {
+                lk.unlock();
+                decode_one(*d);
+                lk.lock();
+            }
             // Hand the buffer out as it is: the client waits on its sync handle and polls the properties, exactly as the SDK's
             // own library expects. It becomes readable once the decoder writes a picture into it (assign fills the slot).
             if (d->slot[index].filled && !d->ready.empty()) assign(*d);
@@ -1279,6 +1429,8 @@ void acquire_output(::Ctx* c) {   // (u32* index, NativeSyncHandle* fence, dec)
 void release_output(::Ctx* c) {   // (dec, index, pre-fence)
     film_trace("release", A(1), 0, 0);
     if (auto d = dec_of(A(0))) {
+        size_t n_pend = 0, n_fifo = 0;
+        uint64_t gen = 0;
         {
             std::lock_guard<std::mutex> lk(d->mu);
             const uint32_t i = static_cast<uint32_t>(A(1));
@@ -1288,11 +1440,19 @@ void release_output(::Ctx* c) {   // (dec, index, pre-fence)
                 s.filled = false;
                 if (d->pend.size() < 32) d->pend.push_back(i);
                 if (d->fifo.size() < 8) d->fifo.push_back(i);
+                gen = s.gen;
             }
+            n_pend = d->pend.size();
+            n_fifo = d->fifo.size();
         }
-        if (g_log) {
+        // Unconditional, first 32: a client that reads but never releases looks exactly like one that stopped reading, and the
+        // difference is whether the film's buffer ever comes back to us (2026-11-21).
+        {
             static std::atomic<uint32_t> n{0};
-            if (n.fetch_add(1, std::memory_order_relaxed) < 12) NXLOG_I("vcodec", "decoder %u: release index %u", d->id, static_cast<uint32_t>(A(1)));
+            const uint32_t k = n.fetch_add(1, std::memory_order_relaxed);
+            if (k < 32)
+                NXLOG_I("vcodec", "release #%u: decoder %u index %u gen %llu -> pend %zu fifo %zu", k, d->id,
+                        static_cast<uint32_t>(A(1)), static_cast<unsigned long long>(gen), n_pend, n_fifo);
         }
     }
     RET(0);

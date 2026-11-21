@@ -231,6 +231,11 @@ void texture_registry_remove(Texture* t);
 void texture_registry_detach_gpu();   // sets Texture::gpu to null on every registered texture (the images are being freed: gpu::tex_shutdown)
 void textures_cpu_wrote(const void* lo, uint64_t size);      // marks every texture whose storage overlaps [lo, lo+size) cpu_dirty and tells the GPU layer
 size_t texture_registry_size();
+// The texture the film's pictures are converted into: recorded when it is built while a decoder is alive (api_texture.cpp),
+// and counted when its storage is rewritten (nvn_texture_registry.cpp). "the game stopped writing it" is the same statement
+// as "the game stopped consuming frames" (2026-11-21).
+void film_texture_note(uint32_t id);
+bool film_texture_is(uint32_t id);
 // Frame-trace mark with the texture id as its argument (a no-op unless [prof] trace is on): tx.init, tx.write, tx.flush, tx.reg, tx.use.
 void tx_mark(const char* what, const Texture* t);
 // Sparse textures: registered by the virtual pool they live in. A remap of tiles (nvnMemoryPoolMapVirtual) or a write to the physical

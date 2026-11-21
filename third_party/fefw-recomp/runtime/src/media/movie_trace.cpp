@@ -308,6 +308,9 @@ const Entry kEntries[] = {
 
 }  // namespace
 
+// video_codec.cpp: the decoder's queues and the fences the client is armed on (same namespace as this file).
+void media_dump_state(const char* why);
+
 // Called from install_video_codec_hle before the modules are linked: every import of these names then lands here.
 // The film starts while the game is still loading; the player then takes one frame every 2-8 s for up to half a minute before it
 // jumps ahead. Dump the guest threads once a stall is clear, so the stack says what the player is waiting on.
@@ -319,6 +322,7 @@ void stall_watch() {
         const int64_t now = now_ns();
         if (now - last < 300'000'000ll) continue;   // the start-up stalls are under a second now; catch them all
         if (g_stall_dumps.fetch_add(1, std::memory_order_relaxed) >= 3) continue;
+        media_dump_state("stall");
         const std::string dump = nxrt::diag_thread_dump();
         const std::string path = "stall_" + std::to_string(g_stall_dumps.load()) + ".txt";
         {

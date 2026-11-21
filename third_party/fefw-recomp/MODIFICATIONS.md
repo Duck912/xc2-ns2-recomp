@@ -169,3 +169,15 @@ git log --oneline 6f1d964..HEAD -- third_party/fefw-recomp
   (TexelFetchScale), a draw that writes an unscaled storage image keeps its targets unscaled (the light list and its
   registration mask stay texel for texel: no dot grid), the DLSS/TAAU output follows the scale, optional
   `[gfx] render_scale_min_width`. Nothing changes unless render_scale is set.
+
+- **runtime/src/media/video_codec.cpp, movie_adec.cpp, movie_trace.cpp (2026-11-21)** - the film's picture stopped after a few
+  frames. Three faults, each one the opposite of what the reference library does (`dm/host/hle_codec_video.c` in the
+  nxnative profile, and the upstream audit of the reference emulator): `Acquire` handed out a buffer with nothing in it and a
+  fence nothing would complete, so the client waited ~380 ms for the first picture and gave up (it now decodes one packet
+  inline, as `hle_codec_video.c`'s comment requires); a zero-byte end-of-stream packet was turned into a picture of its own,
+  telling the client the film ended at frame 62 with hundreds of pictures still queued (the marker now goes on the last real
+  picture, and only an empty buffer is handed out once the queue is empty); and `Submit` answered 3603 past eight queued
+  packets while the client ignores that result and moves on, so the whole stream was lost after 71 packets (the queue now
+  keeps every submitted packet, bounded at 8192 for memory, and eight is only the watermark of the submission-ready event).
+  The rest is diagnostic: a per-second film-audio heartbeat, a stall dump that names the fence the client is armed on and the
+  decoder's queues, a counter of GPU writes to the film's picture texture, and a texture registry that reports rewrites of it.
