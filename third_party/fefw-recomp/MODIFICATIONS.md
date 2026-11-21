@@ -138,4 +138,6 @@ git log --oneline 6f1d964..HEAD -- third_party/fefw-recomp
   The decoder logs the device's creation time and the time from a stream's first packet to its first picture.
 - **runtime/src/diag/gauge.cpp, runtime/include/nxrt/gauge.h (2026-11-21)** - `hitch_note_film_end()`: for two minutes after a
   film ends, the `hitch:` summaries carry `[film ended N s before this window]`, so a slow stretch that follows a cutscene is
-  visible in a player's log without asking them to time anything.
+  visible in a player's log without asking them to time anything. Each summary also carries a `per frame:` split of the
+  window (replay, idle, present, gpu wait, upload, pipe, pool import, guest service and wait, ms per frame): the slow-frame
+  lines describe the tail, and a steady 20-30 fps is made of the average frame, which nothing reported before.
