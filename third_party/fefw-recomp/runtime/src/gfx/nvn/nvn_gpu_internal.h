@@ -86,6 +86,9 @@ struct Frame {
     // Runs fn on the render thread after the submission has completed on the GPU (and, for objects the replay used, no
     // later submission can still be using them if they were last used in this one).
     void defer(std::function<void()> fn);
+    // [nvn] tex_prologue: a command buffer that goes to the queue right before this submission's current one (opened on first use). First
+    // uploads of textures no command of the submission has touched yet are recorded here, so the replay need not end a render pass for them.
+    VkCommandBuffer prologue();
     // A descriptor set of this submission's pool (freed when the slot is reused). Null on failure.
     VkDescriptorSet alloc_set(VkDescriptorSetLayout layout);
 };

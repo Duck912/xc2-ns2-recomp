@@ -46,6 +46,7 @@
 #include "extras/temporal.h"
 #include "nvn_pipeline.h"
 #include "nvn_shaders.h"
+#include "nvn_texprep.h"
 
 namespace nxrt::nvn::be::gpu {
 namespace {
@@ -1660,6 +1661,45 @@ void prepare_textures(const ProgLayout& pl) {
                               [&](Texture* t) { return std::any_of(g_storage_bound.begin(), g_storage_bound.end(), [&](Texture* s) { return shares_image(t, s); }); }),
                need.end());
     if (need.empty() && need_storage.empty()) return;
+    {   // [nvn] tex_prologue (default on): a texture no command has touched yet (its image is still UNDEFINED) gets its first upload in the
+        // submission's prologue, a command buffer that runs before everything recorded for it, so the pass need not end. An area load drew
+        // ~400 new textures in one frame, each ending and restarting the G-buffer pass (~90 ms of GPU time for that frame).
+        static const bool pro_on = config_get_bool("nvn", "tex_prologue", true);
+        if (need.size() >= 32) {   // diagnostic: what a big upload list holds (layouts, dirty, uploaded) - once per size class
+            static int told = 0;
+            if (told < 12) {
+                ++told;
+                std::map<int, int> lay;
+                int dirty = 0, ov = 0;
+                for (Texture* t : need) { lay[static_cast<int>(tex_layout(t))]++; dirty += t->cpu_dirty.load() ? 1 : 0; ov += t->overflow ? 1 : 0; }
+                std::string sl;
+                for (auto& kv : lay) sl += " " + std::to_string(kv.first) + ":" + std::to_string(kv.second);
+                NXLOG_I(kTag, "tex_prologue diag: %zu textures to prepare at one draw (pool set %d): layouts%s, cpu_dirty %d, overflow %d", need.size(),
+                        pl.has_set[kPoolSet] ? 1 : 0, sl.c_str(), dirty, ov);
+            }
+        }
+        if (pro_on) {
+            static uint64_t n_pro = 0;
+            auto first_use = [](Texture* t) { return tex_layout(t) == VK_IMAGE_LAYOUT_UNDEFINED && !t->overflow; };
+            if (std::any_of(need.begin(), need.end(), first_use)) {
+                if (VkCommandBuffer pc = F->prologue()) {
+                    Frame pf = *F;
+                    pf.cb = pc;
+                    for (Texture* t : need) {
+                        if (!first_use(t)) continue;
+                        out_texture_read(t);
+                        tex_ensure_current(t, pf);
+                        tex_transition(t, pf, tex_sampled_layout(t));
+                        ++n_pro;
+                    }
+                    need.erase(std::remove_if(need.begin(), need.end(), [](Texture* t) { return tex_layout(t) == tex_sampled_layout(t) && !t->cpu_dirty.load(); }),
+                               need.end());
+                    if ((n_pro & 1023) == 1) NXLOG_I(kTag, "tex_prologue: %llu first uploads recorded in a submission prologue so far", (unsigned long long)n_pro);
+                }
+            }
+            if (need.empty() && need_storage.empty()) return;
+        }
+    }
     for (Texture* t : need) out_texture_read(t);           // an upload reads game memory: compute results held there go back first
     for (Texture* t : need_storage) out_texture_read(t);
     end_pass(true);     // layout changes and uploads follow: each carries the dependency for its own image
@@ -6188,6 +6228,31 @@ void replay_begin_submit(Frame& f) {
     ++g_dbg_frame;
     P = Pass();
     g_set_cache.clear();
+    {   // [nvn] tex_preupload (default on): textures whose background preparation has finished are uploaded here, outside every pass. An area
+        // load (XC2 NS2: 402 textures, 256 MiB in one frame) otherwise ended and restarted the render pass at the first draw of each one
+        // (prepare_textures): hundreds of pass breaks inside the G-buffer pass, ~90 ms of GPU time for one frame.
+        static const bool pre_on = config_get_bool("nvn", "tex_preupload", false);   // off: it uploaded textures in bursts during play, before they were needed (more 20-45 ms frames)
+        if (pre_on && texprep::enabled()) {
+            static std::vector<Ref<Texture>> ready;
+            ready.clear();
+            texprep::ready_textures(ready, 1024);
+            if (!ready.empty()) {
+                NXFT("tex.preupload");
+                uint32_t n = 0;
+                for (const Ref<Texture>& rt : ready) {
+                    Texture* t = rt.get();
+                    if (!t || t->destroyed.load() || !tex_gpu(t)) continue;
+                    out_texture_read(t);
+                    tex_ensure_current(t, f);
+                    tex_transition(t, f, tex_sampled_layout(t));
+                    ++n;
+                }
+                static uint64_t total = 0, calls = 0;
+                total += n;
+                if ((++calls & 255) == 1) NXLOG_I(kTag, "tex_preupload: %llu textures uploaded at submission start so far", (unsigned long long)total);
+            }
+        }
+    }
     {   // [nvn] lean_draws: the setting, the bound-slot masks from the state itself, and the pushed set 0 (a new command buffer has none)
         g_lean = lean_setting();
         g_bm_vtx = 0;
