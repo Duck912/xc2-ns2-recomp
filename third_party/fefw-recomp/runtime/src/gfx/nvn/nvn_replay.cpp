@@ -5316,14 +5316,50 @@ bool report_counter(uint64_t address, uint64_t* out) {
     return true;
 }
 
-// Where a counter report's query result is copied (vkCmdCopyQueryPoolResults). With [nvn] mirror_capture the GPU reads the pool through its
-// device-local copy, and do_write_memory has just put the placeholder into that copy too: a result copied into the pool only would leave
-// the copy at the placeholder (0 samples passed) for every later GPU read, and the game's cloud sea and fog volumes, which depend on such
-// results, were not drawn. The copy, as a GPU write: mirror_capture_end writes it back to the pool at the end of the submission, and the
-// next captures leave it out while it is in flight.
-BufRef query_result_target(uint64_t address, uint64_t size) {
-    if (mirror_capture_on()) return mirror_capture_bind(address, size, true);
-    return resolve_buffer(address, size);
+void do_write_memory(uint64_t gpu_addr, const void* data, uint32_t size);
+
+// A counter report whose counter word is a query's result: the placeholder (counter 0, the timestamp), the result over the counter word
+// (query < 0: none), and with stamp_after the timestamp again (the feedback query's second result lands on it).
+// With [nvn] mirror_capture the GPU reads the pool through its device-local copy, so the result has to land there (the cloud sea and fog
+// volumes were not drawn when it went to the pool only). The report is assembled in the copy and then copied to the pool in one piece:
+// written into the pool as a placeholder and completed only by the write-back at the end of the submission, the game's memory read
+// "0 samples passed, new timestamp" for most of the frame, and a game a frame ahead ([nvn] present_ahead) culled the effects behind those
+// queries (flames, smoke and water reflections flickering in and out).
+void report_from_query(uint64_t address, uint64_t timestamp, VkQueryPool qp, int query, bool stamp_after) {
+    struct { uint64_t counter, timestamp; } rep = {0, timestamp};
+    constexpr VkQueryResultFlags kFlags = VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT;
+    g_reports[address] = kReportUnknown;   // the query result lands on the GPU
+    if (mirror_capture_on()) {
+        const BufRef pool = resolve_buffer(address, sizeof rep);
+        const BufRef copy = pool.ok ? mirror_capture_bind(address, sizeof rep, true) : BufRef{};
+        if (copy.ok && copy.buffer != pool.buffer) {
+            end_pass();
+            memory_barrier(F->cb);
+            gpu_wrote(address, sizeof rep, kWriteUpdate);
+            vkCmdUpdateBuffer(F->cb, copy.buffer, copy.offset, sizeof rep, &rep);
+            if (query >= 0) {
+                memory_barrier(F->cb);
+                vkCmdCopyQueryPoolResults(F->cb, qp, static_cast<uint32_t>(query), 1, copy.buffer, copy.offset, 16, kFlags);
+                if (stamp_after) {
+                    memory_barrier(F->cb);
+                    vkCmdUpdateBuffer(F->cb, copy.buffer, copy.offset + 8, 8, &rep.timestamp);
+                }
+            }
+            memory_barrier(F->cb);
+            const VkBufferCopy c{copy.offset, pool.offset, sizeof rep};
+            vkCmdCopyBuffer(F->cb, copy.buffer, pool.buffer, 1, &c);
+            memory_barrier(F->cb);
+            gstamp("report");
+            return;
+        }
+    }
+    do_write_memory(address, &rep, sizeof rep);
+    if (query < 0) return;
+    const BufRef b = resolve_buffer(address, sizeof rep);
+    if (!b.ok) return;
+    vkCmdCopyQueryPoolResults(F->cb, qp, static_cast<uint32_t>(query), 1, b.buffer, b.offset, 16, kFlags);
+    memory_barrier(F->cb);
+    if (stamp_after) do_write_memory(address + 8, &rep.timestamp, 8);
 }
 
 bool conditional_render_enabled(uint32_t mode, uint64_t address) {
@@ -6049,17 +6085,7 @@ void run_list(const CmdList& list, int depth) {
                         g_occ_last = g_occ_active;
                         g_occ_active = -1;
                     }
-                    if (p.address) {
-                        rep.counter = 0;
-                        g_reports[p.address] = kReportUnknown;   // the query result lands on the GPU
-                        do_write_memory(p.address, &rep, sizeof rep);
-                        const BufRef b = query_result_target(p.address, sizeof rep);
-                        if (b.ok && g_occ_last >= 0) {
-                            vkCmdCopyQueryPoolResults(F->cb, g_occ_pool, static_cast<uint32_t>(g_occ_last), 1, b.buffer, b.offset, 16,
-                                                      VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
-                            memory_barrier(F->cb);
-                        }
-                    }
+                    if (p.address) report_from_query(p.address, rep.timestamp, g_occ_pool, g_occ_last, false);
                     break;
                 }
                 if (p.type == NVN_COUNTER_TYPE_PRIMITIVES_GENERATED || p.type == NVN_COUNTER_TYPE_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN) {
@@ -6069,18 +6095,8 @@ void run_list(const CmdList& list, int depth) {
                         cw_end_query(cw, &cw == &g_cw[1]);
                         cw.last = cw.active;
                         cw.active = -1;
-                        if (p.address) {
-                            rep.counter = 0;
-                            g_reports[p.address] = kReportUnknown;   // the result lands on the GPU
-                            do_write_memory(p.address, &rep, sizeof rep);
-                            const BufRef b = query_result_target(p.address, sizeof rep);
-                            if (b.ok) {
-                                // the feedback query has two results (written, needed): the second would land on the timestamp word, which is written again after it
-                                vkCmdCopyQueryPoolResults(F->cb, cw.pool, static_cast<uint32_t>(cw.last), 1, b.buffer, b.offset, 16, VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
-                                memory_barrier(F->cb);
-                                if (&cw == &g_cw[1]) do_write_memory(p.address + 8, &rep.timestamp, 8);
-                            }
-                        }
+                        // the feedback query has two results (written, needed): the second lands on the timestamp word, written again after it
+                        if (p.address) report_from_query(p.address, rep.timestamp, cw.pool, cw.last, &cw == &g_cw[1]);
                         break;
                     }
                     rep.counter = p.type == NVN_COUNTER_TYPE_PRIMITIVES_GENERATED ? g_prims_generated : g_prims_xfb;
