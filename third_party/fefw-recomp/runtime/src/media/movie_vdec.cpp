@@ -263,7 +263,28 @@ void deliver(Decoder& d) {
             y = static_cast<uint64_t>(p.w) * p.h;
             uv = nv12_size(p.w, p.h) - y;
             const uint64_t buf = rd64(f + kVfBuf), cap = rd64(f + kVfSize);
-            if (buf && y + uv <= cap) std::memcpy(reinterpret_cast<void*>(buf), p.nv12.data(), y + uv);
+            if (buf && y + uv <= cap) {
+                std::memcpy(reinterpret_cast<void*>(buf), p.nv12.data(), y + uv);
+                // NXRT_FILM_DUMP: write the frame as the guest will read it back, so a difference between what the decoder
+                // produced and what sits in the game's buffer is visible (a green picture with correct decode data means the
+                // copy or the buffer layout is wrong, not the decoder).
+                static const std::string dump_path = [] {
+                    const char* s = std::getenv("NXRT_FILM_DUMP");
+                    return s ? std::string(s) + ".guest" : std::string();
+                }();
+                static bool dumped = false;
+                if (!dump_path.empty() && !dumped) {
+                    dumped = true;
+                    if (FILE* fo = std::fopen(dump_path.c_str(), "wb")) {
+                        const uint32_t head[2] = {p.w, p.h};
+                        std::fwrite(head, sizeof head, 1, fo);
+                        std::fwrite(reinterpret_cast<const void*>(buf), 1, y + uv, fo);
+                        std::fclose(fo);
+                        NXLOG_I(kTag, "guest frame dumped to %s (%ux%u, %llu bytes, buffer cap %llu)", dump_path.c_str(), p.w, p.h,
+                                static_cast<unsigned long long>(y + uv), static_cast<unsigned long long>(cap));
+                    }
+                }
+            }
             else {
                 if (!d.warned_size) NXLOG_W(kTag, "a %ux%u picture (%llu bytes) does not fit its frame's %llu-byte buffer: frames left empty", p.w, p.h,
                                             static_cast<unsigned long long>(y + uv), static_cast<unsigned long long>(cap));

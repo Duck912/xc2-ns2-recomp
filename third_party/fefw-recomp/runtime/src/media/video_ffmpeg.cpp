@@ -125,6 +125,73 @@ bool ffdec_decode(FfDec* d, const uint8_t* data, size_t size, int64_t pts, std::
             if (av_hwframe_transfer_data(d->sw, f, 0) < 0) { av_frame_unref(d->frame); d->failed = true; return false; }
             f = d->sw;
         }
+        // Once per stream: what the decoder actually handed back. A green picture with a correct-looking AV1 decode is a
+        // chroma or colour-matrix problem, and the plane means tell a missing chroma plane (U/V flat at 128 or 0) apart from
+        // a range or matrix mismatch (all three planes plausible but shifted). AMD's D3D11VA path is the one that goes green
+        // on a plain 8-bit SDR swapchain (2026-11-21, issue: opening film).
+        static bool told_first = false;
+        if (!told_first && (f->format == AV_PIX_FMT_YUV420P || f->format == AV_PIX_FMT_NV12) && f->data[0]) {
+            told_first = true;
+            auto plane_mean = [](const uint8_t* d, int stride, int w, int h) {
+                if (!d || w <= 0 || h <= 0) return -1.0;
+                unsigned long long sum = 0;
+                for (int y = 0; y < h; ++y)
+                    for (int x = 0; x < w; ++x) sum += d[static_cast<size_t>(y) * stride + x];
+                return static_cast<double>(sum) / (static_cast<double>(w) * h);
+            };
+            const int cw = (f->width + 1) / 2, ch = (f->height + 1) / 2;
+            double u = -1, v = -1, ua = -1;
+            if (f->format == AV_PIX_FMT_NV12) {
+                // one interleaved plane: U at every other byte, V at the odd bytes
+                if (f->data[1]) {
+                    unsigned long long su = 0, sv = 0;
+                    for (int y = 0; y < ch; ++y) {
+                        const uint8_t* r = f->data[1] + static_cast<size_t>(y) * f->linesize[1];
+                        for (int x = 0; x < cw; ++x) { su += r[2 * x]; sv += r[2 * x + 1]; }
+                    }
+                    u = static_cast<double>(su) / (static_cast<double>(cw) * ch);
+                    v = static_cast<double>(sv) / (static_cast<double>(cw) * ch);
+                }
+            } else if (f->data[2]) {
+                u = plane_mean(f->data[1], f->linesize[1], cw, ch);
+                v = plane_mean(f->data[2], f->linesize[2], cw, ch);
+                ua = plane_mean(f->data[2], f->linesize[2], cw, ch);
+            }
+            NXLOG_I(kTag, "first picture: %dx%d format %d, Y mean %.1f, U mean %.1f, V mean %.1f, strides %d/%d/%d, range %d, primaries %d, space %d",
+                    f->width, f->height, static_cast<int>(f->format), plane_mean(f->data[0], f->linesize[0], f->width, f->height), u, v,
+                    f->linesize[0], f->linesize[1], f->linesize[2], static_cast<int>(f->color_range),
+                    static_cast<int>(f->color_primaries), static_cast<int>(f->colorspace));
+        }
+        // NXRT_FILM_DUMP=<path>: the first decoded picture as the player will write it (header w,h then the planes). Lets
+        // the pixels be checked without guessing which stage turned them green.
+        static const std::string dump_path = [] {
+            const char* s = std::getenv("NXRT_FILM_DUMP");
+            return s ? std::string(s) : std::string();
+        }();
+        static bool dumped_first = false;
+        if (!dump_path.empty() && !dumped_first && (f->format == AV_PIX_FMT_YUV420P || f->format == AV_PIX_FMT_NV12) && f->data[0]) {
+            dumped_first = true;
+            if (FILE* fo = std::fopen(dump_path.c_str(), "wb")) {
+                const uint32_t head[2] = {static_cast<uint32_t>(f->width), static_cast<uint32_t>(f->height)};
+                std::fwrite(head, sizeof head, 1, fo);
+                for (int y = 0; y < f->height; ++y) std::fwrite(f->data[0] + static_cast<size_t>(y) * f->linesize[0], 1, f->width, fo);
+                if (f->format == AV_PIX_FMT_NV12) {
+                    for (int y = 0; y < (f->height + 1) / 2; ++y)
+                        std::fwrite(f->data[1] + static_cast<size_t>(y) * f->linesize[1], 1, f->width, fo);
+                } else {
+                    const int cw = (f->width + 1) / 2, ch = (f->height + 1) / 2, pl = cw * ch;
+                    std::vector<uint8_t> u(pl), v(pl);
+                    for (int y = 0; y < ch; ++y) {
+                        std::memcpy(u.data() + static_cast<size_t>(y) * cw, f->data[1] + static_cast<size_t>(y) * f->linesize[1], cw);
+                        std::memcpy(v.data() + static_cast<size_t>(y) * cw, f->data[2] + static_cast<size_t>(y) * f->linesize[2], cw);
+                    }
+                    std::fwrite(u.data(), 1, pl, fo);
+                    std::fwrite(v.data(), 1, pl, fo);
+                }
+                std::fclose(fo);
+                NXLOG_I(kTag, "first picture dumped to %s (%dx%d, format %d)", dump_path.c_str(), f->width, f->height, static_cast<int>(f->format));
+            }
+        }
         if (f->format == AV_PIX_FMT_YUV420P && f->data[0] && f->data[1] && f->data[2]) {
             FfDecPicture p;
             p.w = f->width;
