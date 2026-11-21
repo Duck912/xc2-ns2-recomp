@@ -10,7 +10,9 @@
 #include <cstring>
 #include <functional>
 #include <map>
+#include <condition_variable>
 #include <mutex>
+#include <thread>
 #include <vector>
 
 #include "nxrt/config.h"
@@ -165,11 +167,55 @@ GaugeHook gauge_alias_reservations("mem.alias_reservations", [] {   // host rese
     return static_cast<int64_t>(g_reserve_base.size());
 });
 
+// ---- host reservations released off the guest thread -------------------------------------------------------------------
+// UnmapPhysicalMemory of a whole pool releases one host reservation per 64 KiB granule: XC2 NS2 unmaps its 640 MiB mesh pools in one
+// call, 10241 VirtualFree(MEM_RELEASE) of ~6.3 us each (each one flushes the address translations of every core), 64.6 of the call's
+// 69.2 ms on the game's presenting thread (a ~70 ms frame, 2026-11-20). The bookkeeping (g_phys, the vm map, the write tracker) stays in
+// the call; the VirtualFree calls go to this thread. The guest does not touch pages it unmapped. Everything that reserves host memory in
+// the alias region (map_physical_memory, alias_alloc) waits for the queue first, so a granule is never reserved again before it is free.
+std::mutex g_rel_mu;
+std::condition_variable g_rel_cv, g_rel_done_cv;
+std::vector<uint64_t> g_rel_queue;   // granule bases to release
+bool g_rel_busy = false;             // the thread holds a batch taken off the queue
+
+void release_thread() {
+    std::vector<uint64_t> batch;
+    for (;;) {
+        {
+            std::unique_lock lk(g_rel_mu);
+            g_rel_busy = false;
+            g_rel_done_cv.notify_all();
+            g_rel_cv.wait(lk, [] { return !g_rel_queue.empty(); });
+            batch.swap(g_rel_queue);
+            g_rel_busy = true;
+        }
+        for (uint64_t g : batch)
+            if (!VirtualFree(reinterpret_cast<void*>(g), 0, MEM_RELEASE))
+                NXLOG_E(kTag, "UnmapPhysicalMemory: releasing %llx failed, error %lu", U(g), static_cast<unsigned long>(GetLastError()));
+        batch.clear();
+    }
+}
+
+void release_later(uint64_t g) {
+    static std::once_flag once;
+    std::call_once(once, [] { std::thread(release_thread).detach(); });
+    std::lock_guard lk(g_rel_mu);
+    g_rel_queue.push_back(g);
+    g_rel_cv.notify_one();
+}
+
+// Returns once every queued release is done. Cheap when nothing is queued.
+void release_wait() {
+    std::unique_lock lk(g_rel_mu);
+    g_rel_done_cv.wait(lk, [] { return g_rel_queue.empty() && !g_rel_busy; });
+}
+
 // Reserves and commits [addr, addr+size) at exactly addr. A host reservation starts on a 64 KiB boundary, so a page-aligned address is
 // served by reserving the enclosing 64 KiB range and committing the pages. False when any of it is taken by something else.
 bool alias_alloc(uint64_t addr, uint64_t size) {
     const uint64_t base = addr & ~(mem::kAllocGranularity - 1);
     const uint64_t end = (addr + size + mem::kAllocGranularity - 1) & ~(mem::kAllocGranularity - 1);
+    release_wait();   // a granule unmapped just before may still be reserved
     void* p = VirtualAlloc(reinterpret_cast<void*>(base), static_cast<SIZE_T>(end - base), MEM_RESERVE, PAGE_READWRITE);
     if (!p) return false;
     if (reinterpret_cast<uint64_t>(p) != base ||
@@ -649,6 +695,10 @@ void unmap_transfer_memory(::Ctx* c) {
 // Host side: one reservation per 64 KiB granule, its mapped pages in a 16-bit mask; pages are committed and decommitted individually
 // (fresh pages read as zero, like the kernel's cleared pages) and the granule is released when its last page goes.
 std::map<uint64_t, uint16_t> g_phys;   // granule base -> mask of the physical pages mapped in it (bit n = page n of the granule)
+// The pages set in g_phys, kept up to date by map and unmap. The limit check used to add them up over the whole map on every call: with
+// XC2 NS2's ~2.5 GiB of mesh pools that is ~40k granules, ~1 ms per call, and the game maps a new pool in ~70 calls on its main thread
+// (a ~70 ms frame mid-game, 2026-11-20).
+uint64_t g_phys_pages = 0;
 
 // The physical pages this process may map: the system resource size (GetInfo 16, [process] system_resource_size). VAMM maps its
 // address region granule by granule and keeps asking until MapPhysicalMemory refuses, which is what a console does once the pool
@@ -678,9 +728,7 @@ bool granule_free(uint64_t g) {   // nothing of the host's (or another window's)
 }
 GaugeHook gauge_physical_bytes("mem.physical_bytes", [] {   // MapPhysicalMemory pages mapped now
     std::lock_guard lk(g_mu);
-    uint64_t n = 0;
-    for (const auto& kv : g_phys) n += static_cast<uint64_t>(std::popcount(kv.second)) * mem::kPage;
-    return static_cast<int64_t>(n);
+    return static_cast<int64_t>(g_phys_pages * mem::kPage);
 });
 
 void map_physical_memory(::Ctx* c) {
@@ -694,6 +742,7 @@ void map_physical_memory(::Ctx* c) {
         return;
     }
     std::lock_guard lk(g_mu);
+    release_wait();   // under g_mu, so no unmap queues more meanwhile: granules unmapped before are free on the host again
     const uint64_t end = addr + size;
     if (end < addr || !in_map_region(addr, size)) {
         fail(c, "MapPhysicalMemory (outside the map region)", kernel::kInvalidMemoryState, addr, size, 0);
@@ -731,8 +780,8 @@ void map_physical_memory(::Ctx* c) {
         }
     }
     if (const uint64_t lim = physical_limit()) {
-        uint64_t mapped = 0, want_bytes = 0;
-        for (const auto& kv : g_phys) mapped += static_cast<uint64_t>(std::popcount(kv.second)) * mem::kPage;
+        const uint64_t mapped = g_phys_pages * mem::kPage;
+        uint64_t want_bytes = 0;
         for (uint64_t g = addr & ~(kGranule - 1); g < end; g += kGranule) {
             auto it = g_phys.find(g);
             const uint16_t add = static_cast<uint16_t>(page_bits(g, addr, end) & ~(it == g_phys.end() ? 0 : it->second));
@@ -772,6 +821,7 @@ void map_physical_memory(::Ctx* c) {
             i += n - 1;
         }
         it->second = static_cast<uint16_t>(it->second | add);
+        g_phys_pages += static_cast<uint64_t>(std::popcount(add));
     }
     NXLOG_D(kTag, "MapPhysicalMemory(addr %llx, size %llx)", U(addr), U(size));
     svc_ret(c, kernel::kOk);
@@ -810,8 +860,9 @@ void unmap_physical_memory(::Ctx* c) {
         if (!drop) continue;
         mem::ww::forget(g, kGranule, false);   // armed pages read-write again and counted written before they go away
         it->second = static_cast<uint16_t>(it->second & ~drop);
+        g_phys_pages -= static_cast<uint64_t>(std::popcount(drop));
         if (it->second == 0) {
-            VirtualFree(reinterpret_cast<void*>(g), 0, MEM_RELEASE);
+            release_later(g);   // the host reservation goes on the release thread
             mem::vm_set(g, kGranule, mem::kMemFree, 0);   // the granule's other pages were free already
             g_phys.erase(it);
             continue;
@@ -894,11 +945,13 @@ void svc_register_memory_group() {
 // Tests only: releases every alias-region window and forgets the MapMemory list and the heap size. The heap itself and
 // the vm map are reset by mem::shutdown().
 void svc_memory_reset_for_tests() {
+    release_wait();
     std::lock_guard lk(g_mu);
     for (auto& kv : g_windows) alias_free(kv.first);
     g_windows.clear();
     for (auto& kv : g_phys) VirtualFree(reinterpret_cast<void*>(kv.first), 0, MEM_RELEASE);
     g_phys.clear();
+    g_phys_pages = 0;
     g_maps.clear();
     g_perm_locked.clear();
     g_heap_cur = 0;
