@@ -41,6 +41,7 @@ void present_last_frame_again();
 
 // Traces the next whole presented frame like [nvn] trace_frame (the scripted `@shot nvntrace_<name>` calls this).
 void backend_trace_next_frame();
+void backend_trace_frames(int count);   // trace the next `count` presented frames (draw list only is up to trace_targets)
 
 // Updates keep-aspect letterboxing live on the presenting thread (also initialized from BackendDesc::keep_aspect).
 void set_keep_aspect(bool on);

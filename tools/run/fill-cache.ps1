@@ -21,6 +21,13 @@ function Test-Python([string]$p) {
 $py = $env:XC2_PYTHON
 if (-not (Test-Python $py)) {
     $py = $null
+    # The packaged interpreter first: a release carries tools\python with zstandard/lz4/capstone inside it.
+    foreach ($cand in @((Join-Path $root 'xc2\build\release\tools\python\python.exe'),
+                        (Join-Path $root 'tools\python\python.exe'))) {
+        if (Test-Python $cand) { $py = $cand; break }
+    }
+}
+if (-not $py) {
     foreach ($name in 'python', 'python3', 'py') {
         $cand = Get-Command $name -ErrorAction SilentlyContinue
         if ($cand -and (Test-Python $cand.Source)) { $py = $cand.Source; break }
@@ -36,13 +43,28 @@ $codes = @(Get-ChildItem $Missing -Filter 'code_*.bin' -ErrorAction SilentlyCont
 if (-not $codes) { Write-Output 'fill-cache: nothing to do'; exit 0 }
 Write-Output ("fill-cache: {0} block(s) to translate" -f $codes.Count)
 
+# Where the translator is, in the order a player's copy would find it:
+#   1. the self-contained publish (dotnet publish -r win-x64 --self-contained), which needs no .NET installed;
+#   2. a release package that carries tools\spirv_harness next to the tree;
+#   3. the development build, which is framework-dependent and therefore needs the .NET runtime.
 if (-not $Harness) {
-    $Harness = Join-Path $root 'third_party\fefw-recomp\tools\shaders\build\bin\Release\net10.0\spirv_harness.exe'
+    foreach ($cand in @(
+        (Join-Path $root 'third_party\fefw-recomp\tools\shaders\build\publish\win-x64\spirv_harness.exe'),
+        (Join-Path $root 'tools\spirv_harness\spirv_harness.exe'),
+        (Join-Path $root 'third_party\fefw-recomp\tools\shaders\build\bin\Release\net10.0\spirv_harness.exe'))) {
+        if (Test-Path $cand) { $Harness = $cand; break }
+    }
 }
-if (-not (Test-Path $Harness)) { Write-Output ("fill-cache: no harness at " + $Harness); exit 1 }
+if (-not $Harness -or -not (Test-Path $Harness)) {
+    Write-Output 'fill-cache: no spirv_harness.exe. Build it once with:'
+    Write-Output '  dotnet publish third_party\fefw-recomp\tools\shaders\harness\SpirvHarness.csproj -c Release -r win-x64 --self-contained true -o third_party\fefw-recomp\tools\shaders\build\publish\win-x64'
+    exit 1
+}
+Write-Output ("fill-cache: python " + $py)
+Write-Output ("fill-cache: harness " + $Harness)
 
 # the manifest dump_missing wrote is already in the corpus layout, so build_cache takes the folder as it is
-& $py (Join-Path $root 'tools\shader-cache\build_cache.py') --blocks $Missing --cache $Cache --harness $Harness --jobs 8
+& $py (Join-Path $root 'tools\shader\cache\build_cache.py') --blocks $Missing --cache $Cache --harness $Harness --jobs 8
 if ($LASTEXITCODE -ne 0) { Write-Output 'fill-cache: build_cache failed'; exit 1 }
 
 # the same run can tell us which samplers need their type corrected; that is what format-07753 is

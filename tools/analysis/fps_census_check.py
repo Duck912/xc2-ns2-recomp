@@ -2,8 +2,8 @@
 import csv, sys
 new = {r['site']: r for r in csv.DictReader(open(sys.argv[1], encoding='ascii'))}
 old = {r['site']: r for r in csv.DictReader(open(r'work\fps_census\report.csv', encoding='ascii'))}
-sites = [l.split('#')[0].split()[0] for l in open(r'xc2\scripts\fps_counters.txt', encoding='ascii') if l.strip() and not l.startswith('#')]
-ci = [s for s in sites if 'int' in open(r'xc2\scripts\fps_counters.txt', encoding='ascii').read().split(s)[0].split('\n')[-1]]
+sites = [l.split('#')[0].split()[0] for l in open(r'xc2\build\fps_counters.txt', encoding='ascii') if l.strip() and not l.startswith('#')]
+ci = [s for s in sites if 'int' in open(r'xc2\build\fps_counters.txt', encoding='ascii').read().split(s)[0].split('\n')[-1]]
 bad = 0
 for s in sites:
     n = new.get(s)

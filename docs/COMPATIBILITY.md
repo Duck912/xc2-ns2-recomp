@@ -7,7 +7,8 @@ You need your own dump: the ExeFS of the 3.0.1 program and its romfs. No game da
 ## Requirements
 
 - Windows 10 or later, x86-64 with AVX2
-- a GPU with Vulkan 1.3 (`VK_EXT_external_memory_host`); AMD RDNA 2 tested, NVIDIA untested
+- a GPU with Vulkan 1.3 (`VK_EXT_external_memory_host`); tested on an AMD RDNA 2 card only (the development
+  machine has one), NVIDIA and Intel untested
 - 16 GB of RAM; the 3.0.1 romfs alone is 25.6 GB, and the build needs roughly as much again for the generated
   C++ and objects, so keep about 60 GB free during the build
 - your own copy of the game and its 3.0.1 update
@@ -55,5 +56,5 @@ Ryzen 7 5800X + Radeon RX 6800 XT, Adrenalin 26.10.1, 1440p window:
 - **First run compiles pipelines**: about 22 seconds with no frame, then it never happens again.
 - **Slow frames on area transitions** (texture uploads and memory-pool imports), not in steady play.
 - **Two shader patches are not distributed** (they are derived from the game's own shaders), so a build made from
-  this repository alone keeps two fog/UV defects that the maintainer's build fixes. The probe shader templates
-  under `tools/probe/` are the same kind of material and are likewise kept out of the repository.
+  this repository alone keeps two fog/UV defects that the maintainer's build fixes. The fog-probe templates and the
+  generators written against them are the same kind of material and are kept out of the repository too.

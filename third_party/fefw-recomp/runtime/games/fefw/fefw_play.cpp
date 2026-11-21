@@ -159,9 +159,27 @@ void hook_movie_select(::Ctx* c, uint64_t, void*) {
 void hook_movie_count(::Ctx* c, uint64_t, void*) {
     const uint64_t player = c->x[19];
     int32_t storage = 0;
-    if (!rd(player + kMovieStorage, &storage) || storage != 1 || !mem::is_mapped(player + kMovieFrames, 8)) return;
+    static bool told = false;
+    if (!rd(player + kMovieStorage, &storage)) {
+        if (!told) NXLOG_W(kTag, "movie count: player 0x%llx not mapped", static_cast<unsigned long long>(player));
+        return;
+    }
+    if (storage != 1 || !mem::is_mapped(player + kMovieFrames, 8)) {
+        if (!told) {
+            told = true;
+            NXLOG_W(kTag, "movie count: storage %d (%s), count field %s", storage, storage == 1 ? "CPU frames" : "native images",
+                    mem::is_mapped(player + kMovieFrames, 8) ? "mapped" : "NOT mapped");
+        }
+        return;
+    }
+    uint64_t before = 0;
+    rd(player + kMovieFrames, &before);
     const uint64_t frames = 4;
     std::memcpy(reinterpret_cast<void*>(player + kMovieFrames), &frames, 8);
+    if (!told) {
+        told = true;
+        NXLOG_I(kTag, "movie count: %llu frames asked for, set to 4", static_cast<unsigned long long>(before));
+    }
 }
 
 // Samples the clock once a second: the F1 menu shows the rate over the last few seconds (clock_info), the log gets a line every

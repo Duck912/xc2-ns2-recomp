@@ -616,7 +616,18 @@ std::unique_ptr<Renderer> Renderer::create(Device& dev, const RendererDesc& desc
     Impl& s = *r->impl_;
     s.dev = &dev;
     s.desc = desc_in;
-    s.desc.frames_in_flight = static_cast<uint32_t>(std::clamp<int64_t>(config_get_int("gfx", "frames_in_flight", desc_in.frames_in_flight), 1, 3));
+    // One frame in flight on an NVIDIA GPU. With two or more, the copy that presents the window texture can run while
+    // the next frame is already drawing into it: the picture shows stripes / half-frames and flickers, the GPU falls
+    // seconds behind, and the device is lost. Measured on a 4060 laptop, 2026-11-20: 3 and 2 both corrupt, 1 is clean,
+    // while the same build on a 6800 XT is fine at 3. [gfx] frames_in_flight still overrides this.
+    int fif_default = static_cast<int>(desc_in.frames_in_flight);
+    if (dev.physical() != VK_NULL_HANDLE) {
+        VkPhysicalDeviceProperties pp = {};
+        vkGetPhysicalDeviceProperties(dev.physical(), &pp);
+        if (pp.vendorID == 0x10DE) fif_default = 1;
+    }
+    s.desc.frames_in_flight = static_cast<uint32_t>(std::clamp<int64_t>(config_get_int("gfx", "frames_in_flight", fif_default), 1, 3));
+    if (fif_default == 1) NXLOG_I(kTag, "frames in flight: 1 (NVIDIA default: more than one leaves the window texture racing the next frame)");
     PresentMode pm = desc_in.present_mode;
     const std::string cfg_pm = config_get_str("gfx", "present_mode", "");
     if (!cfg_pm.empty() && !parse_present_mode(cfg_pm.c_str(), &pm)) NXLOG_W(kTag, "unknown [gfx] present_mode '%s'", cfg_pm.c_str());
@@ -771,9 +782,23 @@ void Renderer::end_frame(SubmitPrefix* prefix) {
     }
     vkEndCommandBuffer(slot.cmd);
 
-    VkSemaphoreSubmitInfo wait = {VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
-    wait.semaphore = slot.acquire;
-    wait.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    VkSemaphoreSubmitInfo waits[2] = {};
+    uint32_t nwaits = 0;
+    if (!s.headless) {
+        waits[nwaits].sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+        waits[nwaits].semaphore = slot.acquire;
+        waits[nwaits].stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        nwaits++;
+    }
+    // The copy below reads the window texture: when the frame's draws were submitted separately (the default
+    // [nvn] submit_batch = 1), this submit has to wait for them or it presents half a frame (N card stripes/flicker).
+    if (prefix && prefix->wait) {
+        waits[nwaits].sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+        waits[nwaits].semaphore = prefix->wait;
+        waits[nwaits].value = prefix->wait_value;
+        waits[nwaits].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        nwaits++;
+    }
     VkSemaphoreSubmitInfo signal = {VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
     signal.semaphore = t.render_done;
     signal.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
@@ -784,11 +809,9 @@ void Renderer::end_frame(SubmitPrefix* prefix) {
     si.commandBufferInfoCount = static_cast<uint32_t>(cbs.size());
     si.pCommandBufferInfos = cbs.data();
     VkSemaphoreSubmitInfo signals[3] = {};
-    if (!s.headless) {
-        si.waitSemaphoreInfoCount = 1;
-        si.pWaitSemaphoreInfos = &wait;
-        signals[si.signalSemaphoreInfoCount++] = signal;
-    }
+    si.waitSemaphoreInfoCount = nwaits;
+    si.pWaitSemaphoreInfos = nwaits ? waits : nullptr;
+    if (!s.headless) signals[si.signalSemaphoreInfoCount++] = signal;
     if (prefix && prefix->timeline) {
         VkSemaphoreSubmitInfo& tl = signals[si.signalSemaphoreInfoCount++];
         tl = {VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};

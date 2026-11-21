@@ -2,6 +2,22 @@
 
 Ten minutes from a clean clone to the title screen. If a step fails, see [Common failures](#common-failures).
 
+## If you downloaded the release package
+
+The release is a self-contained package: no MSVC, no Python, no .NET, no Zig — nothing to install.
+
+1. Unzip `XC2-package-dist.zip` anywhere (491.7 MB; the game itself is unpacked next to it, about 30 GB).
+2. Run `xc2-launcher.exe`.
+3. **Game files**: pick the folder that holds `exefs/` and `romfs/`, or press `.nup` and pick a package; then
+   press **Use these game files**.
+4. **Set up** — 8–15 minutes. It recompiles the game's own code from your dump (537 translation units), links
+   it, translates about 12,150 shader programs and collects the few that exist in no file. The step list and the
+   log below it move the whole time; a slower machine takes longer, and it is not hung.
+5. **Play**. The first launch after that compiles GPU pipelines for about 20 seconds, once per driver.
+
+DLC is picked up from the dump automatically; saves land in `save/` next to the launcher. Everything below is
+the source path — clone and build it yourself.
+
 ## Before you start
 
 | you need | why |
@@ -60,11 +76,11 @@ and `build-boot.ps1` finds no `nxrt_game_xc2ns2_core.lib`.
 ## 4. Lift, compile, link
 
 ```powershell
-.\xc2\scripts\build.ps1 -Exefs xc2\game\xc2ns301 -Run:$false `
+.\tools\build\build.ps1 -Exefs xc2\game\xc2ns301 -Run:$false `
     -Modules 'main,sdk,subsdk0,subsdk1,subsdk2,subsdk3,rtld' `
-    -LiftDir xc2\build\lift-301 -ObjDir xc2\build\obj-301 -LibDir xc2\build\lib-301
-.\xc2\scripts\build-boot.ps1 -Exefs xc2\game\xc2ns301 -OutDir xc2\build\boot-301 `
-    -LibDir xc2\build\lib-301 -MainLib xc2\build\lib-301\main.lib -Defines XC2_MODULES_7
+    -LiftDir xc2\build\301\lift -ObjDir xc2\build\301\obj -LibDir xc2\build\301\lib
+.\tools\build\build-boot.ps1 -Exefs xc2\game\xc2ns301 -OutDir xc2\build\301\boot `
+    -LibDir xc2\build\301\lib -MainLib xc2\build\301\lib\main.lib -Defines XC2_MODULES_7
 ```
 
 The `link failed` at the end of `build.ps1` is expected: that is the stub link, `build-boot.ps1` does the real one.

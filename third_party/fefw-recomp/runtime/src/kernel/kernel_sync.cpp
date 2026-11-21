@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <atomic>
 #include <thread>
@@ -278,11 +279,32 @@ std::string sync_wait_report() {
     std::string out = "kernel sync waiters:\n";
     char b[256];
     auto list = [&](const char* kind, const std::vector<KThread*>& v, uint64_t KThread::*field) {
+        int dumped = 0;
         for (KThread* t : v) {
             const uint64_t a = t->*field;
-            std::snprintf(b, sizeof b, "  %-18s %s (guest %llu) address 0x%llx value 0x%08x tag 0x%x wake %d\n", kind, t->name.c_str(),
-                          static_cast<unsigned long long>(t->id), static_cast<unsigned long long>(a), a ? load32(a) : 0u, t->wait_tag, t->wake ? 1 : 0);
+            // For a condition-variable wait the mutex word says who holds it (the owner's tag): that is the other half of the deadlock.
+            std::snprintf(b, sizeof b, "  %-18s %s (guest %llu) address 0x%llx value 0x%08x tag 0x%x wake %d mutex 0x%llx = 0x%08x\n", kind,
+                          t->name.c_str(), static_cast<unsigned long long>(t->id), static_cast<unsigned long long>(a), a ? load32(a) : 0u, t->wait_tag,
+                          t->wake ? 1 : 0, static_cast<unsigned long long>(t->wait_mutex), t->wait_mutex ? load32(t->wait_mutex) : 0u);
             out += b;
+            // What the waiter is parked on: a SystemEvent has its type byte at +0x28 and its key at +0x20, so 0x60 bytes from
+            // the key - 0x20 show the handle and any vtable the object carries (a name is not enough: this game waits on objects
+            // of its own as well as on ours).
+            if (a && dumped < 4 && (a & 3) == 0) {
+                ++dumped;
+                for (int row = 0; row < 4; ++row) {
+                    const uint64_t base = a - 0x20 + static_cast<uint64_t>(row) * 16;
+                    char hex[3 * 16 + 1] = {};
+                    char asc[17] = {};
+                    for (int i = 0; i < 16; ++i) {
+                        const uint8_t byte = *reinterpret_cast<const uint8_t*>(static_cast<uintptr_t>(base + static_cast<uint64_t>(i)));
+                        std::snprintf(hex + i * 3, 4, "%02x ", byte);
+                        asc[i] = byte >= 32 && byte < 127 ? static_cast<char>(byte) : '.';
+                    }
+                    std::snprintf(b, sizeof b, "      %llx-20+%02x  %s %s\n", static_cast<unsigned long long>(a), row * 16, hex, asc);
+                    out += b;
+                }
+            }
         }
     };
     list("WaitForAddress", g_addr_waiters, &KThread::wait_addr);
@@ -347,6 +369,68 @@ uint32_t wait_process_wide_key(uint64_t mutex, uint64_t key, uint32_t tag, int64
         return kTimedOut;
     }
     return me.wait_result;
+}
+
+namespace {
+std::mutex g_watch_mu;
+std::vector<uint64_t> g_watch;
+}  // namespace
+
+void watch_system_event(uint64_t ev) {
+    if (!ev) return;
+    std::lock_guard<std::mutex> lk(g_watch_mu);
+    if (g_watch.size() < 8 && std::find(g_watch.begin(), g_watch.end(), ev) == g_watch.end()) g_watch.push_back(ev);
+}
+
+void clear_watched_system_events() {
+    std::lock_guard<std::mutex> lk(g_watch_mu);
+    g_watch.clear();
+}
+
+size_t watched_system_events(uint64_t* out, size_t max) {
+    std::lock_guard<std::mutex> lk(g_watch_mu);
+    const size_t n = std::min(max, g_watch.size());
+    std::copy(g_watch.begin(), g_watch.begin() + static_cast<ptrdiff_t>(n), out);
+    return n;
+}
+
+bool any_waiter_on(uint64_t key) {
+    Guard g;
+    return std::any_of(g_cv_waiters.begin(), g_cv_waiters.end(), [&](KThread* t) { return t->wait_key == key; });
+}
+
+void signal_system_event(uint64_t ev) {
+    if (!ev) return;
+    // +0x20 is the futex word of nn::os::SystemEventType: waiters park on it, so signal there as the console does. The handle
+    // covers the callers that wait on the readable handle instead (services attach host events that way).
+    // The type byte at +0x28 picks manual (0) or auto (1) clear; both keep the signalled word at +0x10 and park waiters on the
+    // process-wide key at +0x20 - read off the lifted nn::os::SignalSystemEvent (sdk 0x75000866f8): it locks +0x1C, sets the low
+    // byte of +0x10 when that is 0, then wakes +0x20. A wake without that byte leaves the waiter sleeping again (measured: the
+    // movie player stayed parked on its own key for 10 s while every signal arrived).
+    if (!(*reinterpret_cast<const uint8_t*>(static_cast<uintptr_t>(ev + 0x10))))
+        *reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(ev + 0x10)) = 1;
+    {
+        static std::atomic<uint64_t> n{0};
+        const uint64_t k = n.fetch_add(1);
+        if (k < 8 || k % 600 == 0) NXLOG_I("kernel", "signal_system_event 0x%llx: futex 0x%llx (call %llu)", static_cast<unsigned long long>(ev),
+                                          static_cast<unsigned long long>(ev + 0x20), static_cast<unsigned long long>(k));
+    }
+    // The SDK signals under the event's critical section at +0x1C, which makes check-and-sleep atomic against a signal. We are
+    // outside guest code, so a signal that lands between the waiter's check and its sleep is lost: set the word and wake again
+    // while a waiter is still parked there (a bounded retry, not a spin).
+    for (int attempt = 0; attempt < 4 && any_waiter_on(ev + 0x20); ++attempt) {
+        *reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(ev + 0x10)) = 1;
+        signal_process_wide_key(ev + 0x20, 1);
+        if (attempt + 1 < 4) SwitchToThread();
+    }
+    const uint32_t h = *reinterpret_cast<const uint32_t*>(static_cast<uintptr_t>(ev));
+    if (h) {
+        auto k = handle_as<KEvent>(h);
+        if (k) {
+            k->state->signaled = true;
+            notify_waitable_changed();
+        }
+    }
 }
 
 uint32_t signal_process_wide_key(uint64_t key, int32_t count) {

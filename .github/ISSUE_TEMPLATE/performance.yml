@@ -1,0 +1,66 @@
+name: Slow or stuttering
+description: Low frame rate, or hitches, in a place that runs fine elsewhere
+labels: [performance]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Three things and you are done - the log below carries the rest.
+
+        The report zip is the important one: it holds the frame times, what grew during a slow frame, and whether a
+        cutscene had just ended. Without it a stutter report can only be guessed at.
+  - type: input
+    id: where
+    attributes:
+      label: Where in the game
+      description: Chapter and area, plus what you were doing. "Chapter 1, the field after the first camp, walking" is enough.
+      placeholder: Chapter 1, field after the first camp, walking around
+    validations:
+      required: true
+  - type: input
+    id: report
+    attributes:
+      label: Report zip
+      description: |
+        Open a command prompt in the folder you unzipped and run:
+
+        ```
+        tools\python\python.exe tools\report.py
+        ```
+
+        Play until it goes slow, keep going for a few seconds of the slow part, then close the game. It writes
+        `work\reports\report-<stamp>.zip` - attach that file. Nothing in it is game data.
+      placeholder: report-20261121-120000.zip
+    validations:
+      required: true
+  - type: dropdown
+    id: recovery
+    attributes:
+      label: What it does
+      options:
+        - It recovers by itself after a while
+        - It stays slow until I reload
+        - Only the first time I come here
+        - Every time
+    validations:
+      required: true
+  - type: input
+    id: build
+    attributes:
+      label: Build (optional)
+      description: The report zip already says it; fill this in if you know it.
+      placeholder: 0.1.4
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else (optional)
+      description: |
+        What you saw, the upscaler and "Lock render resolution" if you changed them, and whether the game had just
+        played a cutscene when it started. A screenshot is welcome here.
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Confirmation
+      options:
+        - label: I attached no game files.
+          required: true

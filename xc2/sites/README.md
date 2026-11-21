@@ -11,7 +11,7 @@ somewhere to fire. One file per module.
 
 ## How they are used
 
-`xc2/scripts/build.ps1` passes `--sites` to the lifter for every module, in this order:
+`tools/build/build.ps1` passes `--sites` to the lifter for every module, in this order:
 
 1. `xc2/build/sites-<module>.txt` — yours, if you made one; it wins, so local experiments never touch this folder;
 2. `xc2/sites/sites-<module>.txt` — this folder.

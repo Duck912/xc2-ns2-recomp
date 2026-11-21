@@ -289,6 +289,12 @@ public:
         VkSemaphore timeline = VK_NULL_HANDLE;
         uint64_t value = 0;
         bool submitted = false;           // out: vkQueueSubmit2 succeeded
+        // A submission this frame's command buffer must wait for before it reads the window texture: the game's own
+        // submissions when they are NOT merged into this one ([nvn] submit_batch != frame). Nothing else orders them on
+        // the queue, and the N card showed half-drawn frames - stripes and flicker - because the copy that presents the
+        // window texture could start while the draws that fill it were still running.
+        VkSemaphore wait = VK_NULL_HANDLE;
+        uint64_t wait_value = 0;
     };
     // Runs the overlay hook, finishes and submits the command buffer (GPU timestamp 1), saves a requested screenshot and
     // presents.

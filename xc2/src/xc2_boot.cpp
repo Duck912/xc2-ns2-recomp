@@ -47,10 +47,13 @@
 #include <vector>
 
 #include "xc2ns2/xc2ns2_game.h"
+#include "xc2_modules.h"
 
 extern "C" {
 void xc2_opus301_install();    // x2_opus301.cpp: hardware Opus -> the sdk's software OpusDecoder (HANDOVER 90)
 void xc2_audio301_install();   // x2_audio301.cpp: nn::audio OutputStream -> the runtime's audio sink (HANDOVER 90)
+#ifndef XC2_RT_DLL
+// The lifted modules live in the player's exe, not in this DLL: see xc2_modules.h.
 extern const NxModule nxmod_main, nxmod_sdk, nxmod_subsdk0, nxmod_rtld;
 extern const uint32_t nxmod_main_abi, nxmod_sdk_abi, nxmod_subsdk0_abi, nxmod_rtld_abi;
 #ifdef XC2_MODULES_7
@@ -60,6 +63,7 @@ extern const uint32_t nxmod_main_abi, nxmod_sdk_abi, nxmod_subsdk0_abi, nxmod_rt
 extern const NxModule nxmod_subsdk1, nxmod_subsdk2, nxmod_subsdk3;
 extern const uint32_t nxmod_subsdk1_abi, nxmod_subsdk2_abi, nxmod_subsdk3_abi;
 #endif
+#endif  // XC2_RT_DLL
 }
 
 namespace {
@@ -68,12 +72,28 @@ static uint32_t g_main_handle = 0;   // set after main_thread_adopt; the SDK boo
 
 constexpr uint64_t kMainBase = 0x7100000000ull;
 
-struct ModEntry {
-    const char *file;
-    const NxModule *nx;
-    const uint32_t *abi;
+// Module bases, filled from the table the exe hands over. File scope because the hook callbacks below are plain
+// function pointers and cannot capture anything.
+static uint64_t g_main_base = 0, g_sdk_base = 0, g_rtld_base = 0;
+
+// The module table: the exe owns it (it links the lifted libraries) and the DLL is handed it, so a small range
+// wrapper lets the loop below read the same in both builds.
+struct ModuleTable {
+    const ModEntry *first;
+    int count;
+    const ModEntry *begin() const { return first; }
+    const ModEntry *end() const { return first + count; }
 };
 
+#ifdef XC2_RT_DLL
+static const ModEntry *g_modules = nullptr;
+static int g_module_count = 0;
+extern "C" __declspec(dllexport) void xc2_rt_set_modules(const ModEntry *mods, int count) {
+    g_modules = mods;
+    g_module_count = count;
+}
+static ModuleTable module_table() { return ModuleTable{g_modules, g_module_count}; }
+#else
 // The console loader's order: rtld first (it is the entry), then main, the subsdks, sdk.
 #ifdef XC2_MODULES_7
 const ModEntry kModules[] = {
@@ -93,6 +113,8 @@ const ModEntry kModules[] = {
     {"sdk", &nxmod_sdk, &nxmod_sdk_abi},
 };
 #endif
+static ModuleTable module_table() { return ModuleTable{kModules, int(sizeof(kModules) / sizeof(kModules[0]))}; }
+#endif  // XC2_RT_DLL
 
 [[noreturn]] void die(const char *fmt, ...) {
     va_list ap;
@@ -142,21 +164,69 @@ nxrt::gfx::Renderer *g_renderer = nullptr;   // for the F12 screenshot hotkey
 //   gamepad   platform::gamepad_poll (SDL's cached pad state, refreshed here with SDL_UpdateGamepads)
 // XC2_PRESS presses stay on top of it, so a scripted run and a human can drive one process. XC2_NO_INPUT=1 turns the
 // live part off (a scripted run that must not see the keyboard).
+void route_record(const nxrt::hid::InputSnapshot &s);   // XC2_ROUTE_OUT (see "replay routes" below)
+
 class LiveInput final : public nxrt::hid::ManualInputSource {
 public:
     void poll(nxrt::hid::InputSnapshot &out) override {
         nxrt::hid::ManualInputSource::poll(out);   // scripted presses / connected pads from the harness
         live(out);
+        route_record(out);                         // what the game saw, for XC2_ROUTE_OUT
     }
 
 private:
     static bool down(int vk) { return (::GetAsyncKeyState(vk) & 0x8000) != 0; }
+    // A hotkey is polled once per presented frame, so a quick tap can fall between two polls (20-30 fps in the port). The low
+    // bit is set when the key went down since the previous call and is cleared by it, which catches that tap.
+    static bool tapped(int vk) { return (::GetAsyncKeyState(vk) & 0x0001) != 0; }
     void live(nxrt::hid::InputSnapshot &out);
 
     unsigned shots = 0;
+    int f12_left = 0;              // frames still to write from one F12 press (NXRT_SHOT_BURST)
+    std::vector<uint8_t> shot_raw_buf;     // NXRT_SHOT_RAW: the last captured frame, RGBA
+    uint32_t shot_raw_w = 0, shot_raw_h = 0;
+    bool shot_raw_have = false;
+    unsigned shot_raw_idx = 0;
+    void write_raw_frame();
     bool f12_was_down = false;
     bool f11_was_down = false;
 };
+
+// Half resolution, raw RGBA, header of two uint32 (w, h): a burst that comes out in order and consecutive.
+void LiveInput::write_raw_frame() {
+    if (shot_raw_w < 2 || shot_raw_h < 2) return;
+    // The capture fills the vector and the dimensions together; anything else means a frame was skipped and the two no
+    // longer describe each other. Reading it without this check faulted at once (2026-11-21).
+    const size_t want = static_cast<size_t>(shot_raw_w) * shot_raw_h * 4;
+    if (shot_raw_buf.size() != want) {
+        static bool said = false;
+        if (!said) {
+            said = true;
+            NXLOG_E("input", "raw burst: buffer %zu bytes, but %ux%u needs %zu: skipped", shot_raw_buf.size(), shot_raw_w, shot_raw_h, want);
+        }
+        return;
+    }
+    const uint32_t w = shot_raw_w / 2, h = shot_raw_h / 2;
+    std::vector<uint8_t> half(static_cast<size_t>(w) * h * 4);
+    for (uint32_t y = 0; y < h; ++y) {
+        const uint8_t* r0 = shot_raw_buf.data() + static_cast<size_t>(2 * y) * shot_raw_w * 4;
+        const uint8_t* r1 = r0 + static_cast<size_t>(shot_raw_w) * 4;
+        uint8_t* o = half.data() + static_cast<size_t>(y) * w * 4;
+        for (uint32_t x = 0; x < w; ++x)
+            for (int c = 0; c < 4; ++c)
+                o[x * 4 + c] = static_cast<uint8_t>((r0[static_cast<size_t>(2 * x) * 4 + c] + r0[static_cast<size_t>(2 * x + 1) * 4 + c] +
+                                                     r1[static_cast<size_t>(2 * x) * 4 + c] + r1[static_cast<size_t>(2 * x + 1) * 4 + c]) / 4);
+    }
+    CreateDirectoryA("shots_raw", nullptr);
+    char path[64];
+    std::snprintf(path, sizeof path, "shots_raw\\frame_%04u.bin", shot_raw_idx++);
+    if (FILE* f = std::fopen(path, "wb")) {
+        const uint32_t head[2] = {w, h};
+        std::fwrite(head, sizeof head, 1, f);
+        std::fwrite(half.data(), 1, half.size(), f);
+        std::fclose(f);
+    }
+}
 
 void LiveInput::live(nxrt::hid::InputSnapshot &out) {
     using namespace nxrt::hid;
@@ -203,22 +273,56 @@ void LiveInput::live(nxrt::hid::InputSnapshot &out) {
     }
     if (focused) {
         // F12: write the next presented frame as shots_manual/shot_NNNN.png (RGBA8). Works any time, also mid-cutscene.
-        const bool f12 = down(VK_F12);
+        // NXRT_SHOT_BURST=N makes one press take the next N frames: a flicker that lasts a few frames cannot be caught by
+        // hand, and a run of consecutive PNGs shows whether a part vanishes, moves or tears.
+        static const int shot_burst = [] {
+            const char* s = std::getenv("NXRT_SHOT_BURST");
+            const int n = s ? std::atoi(s) : 1;
+            return n > 0 ? n : 1;
+        }();
+        // NXRT_SHOT_RAW=1: the burst writes half-resolution raw RGBA instead of PNG. A 1440p PNG takes 200-300 ms to encode
+        // and the capture is one slot, so at 60 fps only every tenth frame of a burst survives; raw frames come out in order
+        // and consecutive, which is what a flicker that alternates per frame needs.
+        static const bool shot_raw = std::getenv("NXRT_SHOT_RAW") != nullptr;
+        const bool f12 = down(VK_F12) || tapped(VK_F12);
         if (f12 && !f12_was_down) {
+            f12_left = shot_burst;
+            shot_raw_have = false;
+            shot_raw_idx = 0;
+            NXLOG_I("input", "F12: %d frame(s) into %s", shot_burst, shot_raw ? "shots_raw" : "shots_manual");
+        }
+        f12_was_down = f12;
+        if (shot_raw) {
+            if (f12_left > 0 && shot_raw_have) {
+                write_raw_frame();     // the buffer filled at the end of the previous frame
+                --f12_left;
+            }
+            if (f12_left > 0 && g_renderer) {
+                g_renderer->capture_next_frame(&shot_raw_buf, &shot_raw_w, &shot_raw_h);
+                shot_raw_have = true;
+                if (f12_left == 1) NXLOG_I("input", "F12: %d raw frame(s) written", shot_raw_idx);
+            }
+        } else if (f12_left > 0 && g_renderer) {
             char path[64];
             std::snprintf(path, sizeof path, "shots_manual\\shot_%04u.png", ++shots);
             CreateDirectoryA("shots_manual", nullptr);
-            if (g_renderer) {
-                g_renderer->request_screenshot(path);
-                NXLOG_I("input", "F12: screenshot %s", path);
-            }
+            g_renderer->request_screenshot(path);
+            if (--f12_left == 0) NXLOG_I("input", "F12: %u screenshots written", shots);
         }
-        f12_was_down = f12;
         // Ctrl+F11: trace the next presented frame (plain F11 is fullscreen toggle in play mode).
-        const bool f11 = down(VK_CONTROL) && down(VK_F11);
+        const bool f11 = down(VK_CONTROL) && (down(VK_F11) || tapped(VK_F11));
         if (f11 && !f11_was_down) {
-            nxrt::nvn::backend_trace_next_frame();
-            NXLOG_I("input", "Ctrl+F11: tracing the next frame (render targets -> trace_t<id>_<fmt>.png here)");
+            static const int trace_span = [] {
+                const char* s = std::getenv("NXRT_TRACE_SPAN");
+                return s ? std::atoi(s) : 0;
+            }();
+            if (trace_span > 0) {
+                nxrt::nvn::backend_trace_frames(trace_span);
+                NXLOG_I("input", "Ctrl+F11: tracing the next %d frames", trace_span);
+            } else {
+                nxrt::nvn::backend_trace_next_frame();
+                NXLOG_I("input", "Ctrl+F11: tracing the next frame (render targets -> trace_t<id>_<fmt>.png here)");
+            }
         }
         f11_was_down = f11;
     } else if (down(VK_F12)) {
@@ -398,370 +502,124 @@ void LiveInput::live(nxrt::hid::InputSnapshot &out) {
     }
 }
 
-// ---- frame-counter census (the recorder half of nxrecomp/fps.py) ------------------------------------------------
-// A build lifted with --census-sites (xc2\scripts\build-census.ps1, the list in xc2\build\fps_sites.txt) calls
-// fps_census() immediately before the store of every counter site: the site's guest address, the field's address, the
-// value the store is about to write and the field's kind (1/2/4/8 = an integer of that size, 0 = a float32).
-// [xc2] fps_census = <file> turns the recorder on: per site it counts the visits, the (site, field) records, whether a
-// visit lands in the update after the previous one of the same field (consec: a frame counter), in the same update (same:
-// a loop), or later (later: a slower clock), and how much one visit adds (the value - the field's value: mean |d|, least,
-// largest). The clock is the game's own limiter (main+0x722a04, ml::DevGraphNx::renderSyncSys: it spins interval x period x
-// 0.997 before every update, so its entry is one logic frame; the step getter main+0x713754 is NOT called per frame - it has
-// nine callers, none in the frame loop). A second counter (main+0x658, apps::FrameworkLauncher::update) is only logged, to
-// tell a wrong clock from a real 30/60 Hz rate in one run. Every [xc2] fps_census_every updates the file is rewritten whole (a .tmp and a rename,
-// so a reader never sees half a file) - a forced Stop-Process leaves no atexit to write it. Off (the default) the probe is
-// one atomic load and a return.
-// The mean |d| is what the census is for: a frame-locked counter moves by the same amount per visit at 30 Hz and at 60 fps,
-// a time-scaled one (x += step) by half as much when the frames are shorter. xc2\scripts\fps_census.py compares two runs.
-typedef struct { uint64_t site, field, last; } FcRec;                       // keyed by (site, field)
-typedef struct { uint64_t site, visits, fields, consec, same, later, off, upds, last;
-                 double dsum, dmin, dmax; } FcSite;                         // keyed by site
-constexpr uint32_t FC_RECS = 1u << 21;      // 2M (site, field) pairs, 24 B each: ~48 MB
-constexpr uint32_t FC_SITES = 1u << 17;     // 128k sites
-static FcRec *fc_rec = nullptr;
-static FcSite *fc_site = nullptr;
-static std::atomic_flag fc_lock = ATOMIC_FLAG_INIT;
-static std::atomic<int> fc_on{0};           // 0 = off (the default); 1 = recording
-static std::string fc_path;                 // where the table is written
-static int64_t fc_every = 600;              // updates between two writes
-static std::atomic<uint64_t> g_fc_upd{0};   // the game's logic frames so far
-static std::atomic<uint64_t> g_fc_alt{0};   // the same count at another entry hooked at lift time: a diagnostic only
-static std::atomic<unsigned long> fc_clock_tid{0};   // the host thread that runs the frame clock (the limiter's)
-static std::atomic<double> g_fc_g{0.0};             // native frames of game time due so far (the clock's G)
-static std::atomic<double> g_step_native{1.0};      // native frames one update is worth: 1.0 at 30 Hz, 0.5 at 60 fps
-static std::atomic<int> g_clock_armed{0};           // the clock's entry hook is registered once
-static std::chrono::steady_clock::time_point fc_t0;  // for the updates/s of the log line
 
-static uint64_t fc_hash(uint64_t a) {
-    a ^= a >> 33;
-    a *= 0xff51afd7ed558ccdull;
-    a ^= a >> 33;
-    return a;
+// ---- replay routes (tools/run/route.ps1) ---------------------------------------------------------------
+// A route is the input of one run written down: XC2_ROUTE_OUT=<file> records what the game saw (one line per change,
+// milliseconds since the recorder started), XC2_ROUTE=<file> plays it back. Comparing two builds needs the same scene,
+// and the same buttons at the same milliseconds is what gets there: two runs of the same XC2_PRESS script landed 4100
+// and 736 draws/frame apart on 2026-11-20 (HANDOVER 228).
+//
+//   +1200 A            press A at 1.2 s
+//   -1450 A            release A at 1.45 s
+//   L3000 0 32767      left stick to (0, 32767) at 3.0 s, held until the next L/R line
+namespace route {
+struct Bit { const char *name; uint64_t bit; };
+const Bit kBits[] = {{"A", nxrt::hid::btn(nxrt::hid::kBtnA)},     {"B", nxrt::hid::btn(nxrt::hid::kBtnB)},
+                     {"X", nxrt::hid::btn(nxrt::hid::kBtnX)},     {"Y", nxrt::hid::btn(nxrt::hid::kBtnY)},
+                     {"PLUS", nxrt::hid::btn(nxrt::hid::kBtnPlus)}, {"MINUS", nxrt::hid::btn(nxrt::hid::kBtnMinus)},
+                     {"L", nxrt::hid::btn(nxrt::hid::kBtnL)},     {"R", nxrt::hid::btn(nxrt::hid::kBtnR)},
+                     {"ZL", nxrt::hid::btn(nxrt::hid::kBtnZL)},   {"ZR", nxrt::hid::btn(nxrt::hid::kBtnZR)},
+                     {"DPD", nxrt::hid::btn(nxrt::hid::kBtnDown)}, {"DPU", nxrt::hid::btn(nxrt::hid::kBtnUp)},
+                     {"DPL", nxrt::hid::btn(nxrt::hid::kBtnLeft)}, {"DPR", nxrt::hid::btn(nxrt::hid::kBtnRight)}};
+struct Rec {
+    std::mutex mu;
+    FILE *f = nullptr;
+    bool init = false;
+    std::chrono::steady_clock::time_point t0;
+    uint64_t btn = 0;
+    int32_t lx = 0, ly = 0, rx = 0, ry = 0;
+};
+Rec &rec() {
+    static Rec r;
+    return r;
 }
-
-static void fc_write(std::FILE *f, uint64_t *nsites, uint64_t *nrecs) {
-    std::fprintf(f, "updates %llu\n", static_cast<unsigned long long>(g_fc_upd.load(std::memory_order_relaxed)));
-    uint64_t sites = 0;
-    for (uint32_t i = 0; i < FC_SITES; ++i) {
-        const FcSite *t = &fc_site[i];
-        if (!t->site) continue;
-        ++sites;
-        std::fprintf(f, "%llx %llu %llu %llu %llu %llu %llu %llu %.6g %.6g %.6g\n",
-                     static_cast<unsigned long long>(t->site), static_cast<unsigned long long>(t->visits),
-                     static_cast<unsigned long long>(t->fields), static_cast<unsigned long long>(t->consec),
-                     static_cast<unsigned long long>(t->same), static_cast<unsigned long long>(t->later),
-                     static_cast<unsigned long long>(t->off), static_cast<unsigned long long>(t->upds),
-                     t->dsum / static_cast<double>(t->visits ? t->visits : 1), t->dmin, t->dmax);
-    }
-    uint64_t recs = 0;
-    for (uint32_t i = 0; i < FC_RECS; ++i) if (fc_rec[i].site) ++recs;
-    *nsites = sites;
-    *nrecs = recs;
+// One origin for recording and playback, set when the input source goes live in main: the hid service only samples
+// the source once the game asks for input (about 6 s in), so a recorder that started its own clock at the first
+// sample wrote +880 for a press scheduled at 7 s, and a playback that started at its thread's start fired 6 s early.
+std::chrono::steady_clock::time_point g_route_t0;
+long long ms_since(std::chrono::steady_clock::time_point t0) {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
 }
+struct Ev { long long ms = 0; char kind = 'B'; bool down = false; uint64_t bit = 0; int32_t x = 0, y = 0; };
+}  // namespace route
 
-// one write: <path>.tmp, then a rename over <path>. The caller holds fc_lock (the table must not move under the writer).
-static void fc_dump() {
-    const std::string tmp = fc_path + ".tmp";
-    std::FILE *f = std::fopen(tmp.c_str(), "w");
-    if (!f) return;
-    uint64_t sites = 0, recs = 0;
-    fc_write(f, &sites, &recs);
-    std::fclose(f);
-    if (!MoveFileExA(tmp.c_str(), fc_path.c_str(), MOVEFILE_REPLACE_EXISTING)) std::remove(tmp.c_str());
-    const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - fc_t0).count();
-    const uint64_t up = g_fc_upd.load(std::memory_order_relaxed);
-    const uint64_t alt = g_fc_alt.load(std::memory_order_relaxed);
-    NXLOG_I("xc2", "fps census: %llu updates (%.1f/s), alt %llu (%.1f/s), %llu sites, %llu (site,field) records -> %s",
-            static_cast<unsigned long long>(up), secs > 0.0 ? static_cast<double>(up) / secs : 0.0,
-            static_cast<unsigned long long>(alt), secs > 0.0 ? static_cast<double>(alt) / secs : 0.0,
-            static_cast<unsigned long long>(sites), static_cast<unsigned long long>(recs), fc_path.c_str());
-}
-
-// The writer thread: every second, when fc_every more updates have passed, rewrite the file.
-static void fc_writer() {
-    uint64_t last = 0;
-    for (;;) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-        const uint64_t now = g_fc_upd.load(std::memory_order_acquire);
-        if (now - last < static_cast<uint64_t>(fc_every)) continue;
-        last = now;
-        while (fc_lock.test_and_set(std::memory_order_acquire)) {}
-        fc_dump();
-        fc_lock.clear(std::memory_order_release);
-    }
-}
-
-// The frame clock: one hook at the game's own limiter (main+0x722a04, ml::DevGraphNx::renderSyncSys: it spins interval x
-// period x 0.997 before every update, so its entry is one game frame), which counts the updates and adds the step to G.
-// Registered once, by whichever of the census and the frame counters is on.
-static void arm_frame_clock(uint64_t main_base, uint64_t tick) {
-    if (g_clock_armed.exchange(1)) return;
-    nxrt::hook_add_entry(main_base + tick, [](Ctx *, uint64_t, void *) -> int {
-        if (!fc_clock_tid.load(std::memory_order_relaxed)) fc_clock_tid.store(GetCurrentThreadId(), std::memory_order_relaxed);
-        g_fc_upd.fetch_add(1, std::memory_order_acq_rel);
-        const double g = g_fc_g.load(std::memory_order_relaxed) + g_step_native.load(std::memory_order_relaxed);
-        g_fc_g.store(g, std::memory_order_release);
-        return 0;                                // 0 = let the hooked lifted function run
-    });
-}
-
-// [xc2] shared_step = <float> (diagnostic): write this into the engine's "one 30 Hz frame in seconds" float, rodata
-// main+0xf6569c (0x3D088889). The 66 functions that read it convert frame counts to seconds and clamp time steps
-// (frames x 1/30), so changing it HALVES durations - it is a units constant, not a clock. The census is used to check
-// whether any counter site follows it: a probe build only.
-static void arm_shared_step(uint64_t main_base) {
-    const double v = std::strtod(nxrt::config_get_str("xc2", "shared_step", "").c_str(), nullptr);
-    if (!(v > 0.0)) return;
-    const uint64_t addr = main_base + 0xf6569c;
-    if (!nxrt::mem::is_mapped(addr, 4) || !nxrt::mem::protect(addr, 4, nxrt::mem::Prot::RW)) {
-        NXLOG_W("xc2", "shared step: cannot write 0x%llx", static_cast<unsigned long long>(addr));
+void route_record(const nxrt::hid::InputSnapshot &s) {
+    static const char *path = [] {
+        const char *p = std::getenv("XC2_ROUTE_OUT");
+        return (p && *p) ? p : nullptr;
+    }();
+    if (!path) return;
+    route::Rec &r = route::rec();
+    std::lock_guard<std::mutex> lk(r.mu);
+    const uint64_t buttons = s.npad[0].buttons;
+    const int32_t lx = s.npad[0].left.x, ly = s.npad[0].left.y, rx = s.npad[0].right.x, ry = s.npad[0].right.y;
+    if (!r.init) {
+        r.init = true;
+        r.t0 = std::chrono::steady_clock::now();
+        r.f = std::fopen(path, "wb");
+        if (r.f) std::fprintf(r.f, "# xc2 route v1, recorded by XC2_ROUTE_OUT; play it with XC2_ROUTE\n");
+        r.btn = buttons;
+        r.lx = lx; r.ly = ly; r.rx = rx; r.ry = ry;
         return;
     }
-    const float f = static_cast<float>(v);
-    std::memcpy(reinterpret_cast<void*>(addr), &f, 4);
-    NXLOG_W("xc2", "shared step: the engine's 1/30 constant at 0x%llx is now %.6f (diagnostic: durations halve!)",
-            static_cast<unsigned long long>(addr), static_cast<double>(f));
+    if (!r.f) return;
+    const long long ms = route::ms_since(route::g_route_t0);
+    for (const route::Bit &b : route::kBits)
+        if ((buttons ^ r.btn) & b.bit) std::fprintf(r.f, "%c%lld %s\n", (buttons & b.bit) ? '+' : '-', ms, b.name);
+    r.btn = buttons;
+    if (lx != r.lx || ly != r.ly) { std::fprintf(r.f, "L%lld %d %d\n", ms, lx, ly); r.lx = lx; r.ly = ly; }
+    if (rx != r.rx || ry != r.ry) { std::fprintf(r.f, "R%lld %d %d\n", ms, rx, ry); r.rx = rx; r.ry = ry; }
+    std::fflush(r.f);   // a route whose run ends with the window closed still has its tail on disk
 }
 
-// [xc2] fps_census = <file>: allocate the two tables, count the game's updates at the step getter, start the writer.
-static void arm_fps_census(uint64_t main_base) {
-    const std::string path = nxrt::config_get_str("xc2", "fps_census", "");
-    if (path.empty()) return;                    // off: the probes stay one atomic load and a return
-    const int64_t tick = nxrt::config_get_int("xc2", "fps_census_tick", 0x722a04);
-    const int64_t alt = nxrt::config_get_int("xc2", "fps_census_alt", 0x658);
-    fc_every = nxrt::config_get_int("xc2", "fps_census_every", 600);
-    if (fc_every <= 0) fc_every = 600;
-    fc_path = path;
-    fc_rec = static_cast<FcRec*>(std::calloc(FC_RECS, sizeof(FcRec)));
-    fc_site = static_cast<FcSite*>(std::calloc(FC_SITES, sizeof(FcSite)));
-    if (!fc_rec || !fc_site) {
-        NXLOG_W("xc2", "fps census: cannot allocate the tables: the census stays off");
-        std::free(fc_rec);
-        std::free(fc_site);
-        fc_rec = nullptr;
-        fc_site = nullptr;
+// Reads the file and drives the source on its own thread. Unknown lines are skipped (a route is data, not a program).
+static void route_start(const std::shared_ptr<nxrt::hid::ManualInputSource> &src, const char *path) {
+    FILE *f = std::fopen(path, "rb");
+    if (!f) {
+        std::fprintf(stderr, "route: cannot open %s\n", path);
         return;
     }
-    fc_t0 = std::chrono::steady_clock::now();
-    arm_frame_clock(main_base, static_cast<uint64_t>(tick));
-    if (alt > 0) {
-        nxrt::hook_add_entry(main_base + static_cast<uint64_t>(alt), [](Ctx *, uint64_t, void *) -> int {
-            g_fc_alt.fetch_add(1, std::memory_order_relaxed);
-            return 0;
-        });
-    }
-    fc_on.store(1, std::memory_order_release);
-    NXLOG_I("xc2", "fps census: recording every counter site to %s (clock main+0x%llx, alt main+0x%llx, a write every %lld updates)",
-            fc_path.c_str(), static_cast<unsigned long long>(tick), static_cast<unsigned long long>(alt),
-            static_cast<long long>(fc_every));
-    std::thread(fc_writer).detach();
-}
-
-// ---- frame counters in the game's time (the runtime half of --fps-counters) -------------------------------------
-// A build lifted with --fps-counters calls fps_ci / fps_cf / fps_fs just before the store of every listed site; each
-// returns the value to store. At the game's own 30 Hz every call returns the game's own value, so the patch is inert
-// there; above 30 Hz a countdown moves by the frames due instead of 1, a +/-1.0 float counter by the same count, and a
-// float accumulator by its increment x the step (fractional: motion stays smooth). Off unless [xc2] fps > 0.
-typedef struct { uint64_t site, field; double s; } FpsCnt;   // keyed by (site, field); s = the frames owed to it
-constexpr uint32_t PC_N = 8192;                 // 8192 x 40 B = 320 KB; a site's fields take a few entries each
-static FpsCnt *pc_tab = nullptr;
-static std::atomic_flag pc_lock = ATOMIC_FLAG_INIT;
-static std::atomic<int> pc_on{0};
-static std::atomic<int> pc_kind{7};            // bit 0 fs, bit 1 cf, bit 2 ci ([xc2] fps_counter_kinds: fs,cf,ci)
-static std::vector<uint64_t> pc_skip;          // [xc2] fps_counter_skip: sites that stay the game's (a bisect switch)
-static uint64_t pc_dbg = 0;                    // [xc2] fps_counter_debug: log the first visits of this site
-static std::atomic<int> pc_dbg_n{0};
-
-// The game frames this visit of the field is worth. The fraction is accumulated per VISIT (not per update): a counter
-// that is only decremented while its object is in some state is visited on some frames and not others, and its own
-// cadence is the visit - one visit is one frame of that counter's clock, so at 60 fps every second visit is worth one.
-// (An update-based rule gave such sites the stock 1 on every visit: the first integer batch showed mean60 1.00 on three
-// of seven sites, i.e. no conversion at all. HANDOVER 59.5.) The caller holds pc_lock.
-static int64_t pc_due(uint64_t site, uint64_t field) {
-    FpsCnt *r = nullptr;
-    for (uint32_t i = static_cast<uint32_t>(fc_hash(site * 31 + field)) & (PC_N - 1), k = 0; k < 64;
-         i = (i + 1) & (PC_N - 1), ++k) {
-        FpsCnt *t = &pc_tab[i];
-        if ((t->site == site && t->field == field) || !t->site) { r = t; break; }
-    }
-    if (!r) return 1;
-    if (!r->site) { r->site = site; r->field = field; r->s = 0.0; }
-    r->s += g_step_native.load(std::memory_order_relaxed);
-    int64_t de = static_cast<int64_t>(r->s);
-    if (de > 4) de = 4;                             // at most 4 native frames a visit (a long stall does not burst)
-    r->s -= static_cast<double>(de);
-    if (r->s < 0.0) r->s = 0.0;
-    if (site == pc_dbg && pc_dbg_n.load() < 40)
-        NXLOG_I("xc2", "fps_ci %llx: de=%lld owed=%.3f", static_cast<unsigned long long>(site),
-                static_cast<long long>(de), r->s);
-    return de;
-}
-
-// [xc2] fps_counters (default on) with [xc2] fps > 0: arm the clock and the table. The clock's address must be an
-// entryhook of the site list this build was lifted with (buildsites-main-census.txt carries main+0x722a04).
-static void arm_fps_counters(uint64_t main_base) {
-    const int64_t fps = nxrt::config_get_int("xc2", "fps", 0);
-    if (fps <= 0) return;                                      // native 30 Hz: the game's counters are already right
-    if (!nxrt::config_get_bool("xc2", "fps_counters", true)) return;
-    pc_tab = static_cast<FpsCnt*>(std::calloc(PC_N, sizeof(FpsCnt)));
-    if (!pc_tab) {
-        NXLOG_W("xc2", "frame counters: cannot allocate the table: the game's counters stay as they are");
-        return;
-    }
-    const std::string kinds = nxrt::config_get_str("xc2", "fps_counter_kinds", "fs,cf,ci");
-    int mask = 0;
-    if (kinds.find("fs") != std::string::npos) mask |= 1;
-    if (kinds.find("cf") != std::string::npos) mask |= 2;
-    if (kinds.find("ci") != std::string::npos) mask |= 4;
-    pc_kind.store(mask, std::memory_order_release);
-    {
-        const std::string d = nxrt::config_get_str("xc2", "fps_counter_debug", "");
-        if (!d.empty()) pc_dbg = std::strtoull(d.c_str(), nullptr, 16);
-    }
-    pc_skip.clear();
-    {
-        std::string list = nxrt::config_get_str("xc2", "fps_counter_skip", "");
-        size_t i = 0;
-        while (i < list.size()) {
-            size_t j = list.find(',', i);
-            if (j == std::string::npos) j = list.size();
-            const std::string item = list.substr(i, j - i);
-            if (!item.empty()) pc_skip.push_back(std::strtoull(item.c_str(), nullptr, 16));
-            i = j + 1;
+    std::vector<route::Ev> evs;
+    char line[512];
+    while (std::fgets(line, sizeof line, f)) {
+        char *p = line;
+        while (*p == ' ' || *p == '\t') ++p;
+        if (!*p || *p == '#' || *p == '\r' || *p == '\n') continue;
+        route::Ev e;
+        if (*p == '+' || *p == '-') {          // a button edge
+            e.down = *p == '+';
+            char name[32] = {};
+            if (std::sscanf(p + 1, "%lld %31s", &e.ms, name) != 2) continue;
+            for (const route::Bit &b : route::kBits)
+                if (!std::strcmp(b.name, name)) e.bit = b.bit;
+            if (!e.bit) continue;
+        } else if (*p == 'L' || *p == 'R') {   // a stick position
+            e.kind = *p;
+            if (std::sscanf(p + 1, "%lld %d %d", &e.ms, &e.x, &e.y) != 3) continue;
+        } else {
+            continue;
         }
-        std::sort(pc_skip.begin(), pc_skip.end());
-        pc_skip.erase(std::unique(pc_skip.begin(), pc_skip.end()), pc_skip.end());
+        evs.push_back(e);
     }
-    const int64_t tick = nxrt::config_get_int("xc2", "fps_census_tick", 0x722a04);
-    arm_frame_clock(main_base, static_cast<uint64_t>(tick));
-    pc_on.store(1, std::memory_order_release);
-    NXLOG_I("xc2", "frame counters: the listed sites follow the game's time (clock main+0x%llx, %.3f native frames per "
-            "update, kinds %s)", static_cast<unsigned long long>(tick),
-            g_step_native.load(std::memory_order_relaxed), kinds.c_str());
+    std::fclose(f);
+    long long delay = 0;
+    if (const char *d = std::getenv("XC2_ROUTE_DELAY")) delay = std::atoll(d);
+    std::fprintf(stderr, "route: %zu events from %s, starting at +%lld ms\n", evs.size(), path, delay);
+    std::thread([src, evs, delay] {
+        const auto start = route::g_route_t0;
+        for (const route::Ev &e : evs) {
+            std::this_thread::sleep_until(start + std::chrono::milliseconds(delay + e.ms));
+            if (e.kind == 'B') {
+                if (e.down) src->press(0, e.bit);
+                else src->release(0, e.bit);
+            } else {
+                src->stick(0, e.kind == 'R', e.x, e.y);
+            }
+        }
+    }).detach();
 }
 
 }  // namespace
-
-// The probe the lifted code calls before a counter site's store (ctx.h). Off unless [xc2] fps_census named a file: one
-// atomic load and a return. The spinlock keeps the two tables consistent; open addressing over fc_hash (the site table to
-// the end of the table, the (site, field) table 64 steps), as Bayonetta 3's census does.
-extern "C" void fps_census(uint64_t site, uint64_t field, uint64_t v, int code) {
-    if (!fc_on.load(std::memory_order_acquire)) return;
-    const uint64_t u = g_fc_upd.load(std::memory_order_acquire);
-    double d;
-    if (code) {
-        uint64_t o = 0;
-        std::memcpy(&o, reinterpret_cast<const void*>(static_cast<uintptr_t>(field)), static_cast<size_t>(code));
-        const int sh = 64 - 8 * code;            // sign-extend the stored and the old value from the field's width
-        d = static_cast<double>((static_cast<int64_t>(v << sh) >> sh) - (static_cast<int64_t>(o << sh) >> sh));
-    } else {
-        float a, b;
-        const uint32_t w = static_cast<uint32_t>(v);
-        std::memcpy(&a, reinterpret_cast<const void*>(static_cast<uintptr_t>(field)), 4);
-        std::memcpy(&b, &w, 4);
-        d = static_cast<double>(b) - static_cast<double>(a);
-        if (d != d) d = 0.0;                     // NaN: a field not written yet, not a step
-    }
-    while (fc_lock.test_and_set(std::memory_order_acquire)) {}
-    FcSite *t = nullptr;
-    for (uint32_t i = static_cast<uint32_t>(fc_hash(site)) & (FC_SITES - 1), n = 0; n < FC_SITES;
-         i = (i + 1) & (FC_SITES - 1), ++n)
-        if (fc_site[i].site == site || !fc_site[i].site) { t = &fc_site[i]; break; }
-    FcRec *r = nullptr;
-    for (uint32_t i = static_cast<uint32_t>(fc_hash(site * 31 + field)) & (FC_RECS - 1), n = 0; n < 64;
-         i = (i + 1) & (FC_RECS - 1), ++n)
-        if ((fc_rec[i].site == site && fc_rec[i].field == field) || !fc_rec[i].site) { r = &fc_rec[i]; break; }
-    if (t) {
-        if (!t->site) { t->site = site; t->last = ~0ull; t->dmin = t->dmax = d; }
-        ++t->visits;
-        t->dsum += d < 0 ? -d : d;
-        if (d < t->dmin) t->dmin = d;
-        if (d > t->dmax) t->dmax = d;
-        if (t->last != u) { ++t->upds; t->last = u; }
-        if (GetCurrentThreadId() != fc_clock_tid.load(std::memory_order_relaxed)) ++t->off;
-        if (r && !r->site) { r->site = site; r->field = field; ++t->fields; }
-        else if (r) { if (r->last == u) ++t->same; else if (r->last + 1 == u) ++t->consec; else ++t->later; }
-        if (r) r->last = u;
-    }
-    fc_lock.clear(std::memory_order_release);
-}
-
-// The frame counters (ctx.h): each returns the value the lifted code stores, in the game's own time. Off: the game's.
-static inline int64_t pc_signed(uint64_t v, int size) {
-    const int sh = 64 - 8 * size;
-    return static_cast<int64_t>(v << sh) >> sh;
-}
-
-// A site switched off from the command line ([xc2] fps_counter_skip = 0x...,0x...): the game's own value is stored.
-static bool pc_skipped(uint64_t site) {
-    return !pc_skip.empty() && std::binary_search(pc_skip.begin(), pc_skip.end(), site);
-}
-
-extern "C" uint64_t fps_ci(uint64_t site, uint64_t field, uint64_t v, int k, int sign, int size) {
-    if (!pc_on.load(std::memory_order_acquire) || !(pc_kind.load(std::memory_order_relaxed) & 4) || k <= 0 ||
-        pc_skipped(site) ||
-        (size != 1 && size != 2 && size != 4 && size != 8))
-        return v;
-    uint64_t raw = 0;
-    std::memcpy(&raw, reinterpret_cast<const void*>(static_cast<uintptr_t>(field)), static_cast<size_t>(size));
-    const int64_t old = pc_signed(raw, size);
-    if (site == pc_dbg && pc_dbg_n.fetch_add(1) < 40)
-        NXLOG_I("xc2", "fps_ci %llx: old=%lld game=%llu size=%d step=%.3f", static_cast<unsigned long long>(site),
-                static_cast<long long>(old), static_cast<unsigned long long>(v), size,
-                g_step_native.load(std::memory_order_relaxed));
-    if (sign < 0 && old == 0) return v;                 // at 0 a countdown takes the stock step and owes nothing
-    int64_t de;
-    while (pc_lock.test_and_set(std::memory_order_acquire)) {}
-    de = pc_due(site, field);
-    pc_lock.clear(std::memory_order_release);
-    if (sign < 0) {                                     // a countdown never passes 0 in one visit
-        const int64_t keep = old > k ? 1 + (old - k) / k : 1;
-        if (de > keep) de = keep;
-    } else if (de > 1) {
-        de = 1;                                         // an up-counter moves at most 1: a test for an exact value holds
-    }
-    uint64_t out = static_cast<uint64_t>(old + static_cast<int64_t>(sign) * static_cast<int64_t>(k) * de);
-    if (size < 8) out &= (1ull << (8 * size)) - 1;      // the same zero-extension the lifted code produces, not a sign
-    return out;
-}
-
-extern "C" uint32_t fps_cf(uint64_t site, uint64_t field, uint32_t v, int sign) {
-    if (!pc_on.load(std::memory_order_acquire) || !(pc_kind.load(std::memory_order_relaxed) & 2) || pc_skipped(site)) return v;
-    float old;
-    std::memcpy(&old, reinterpret_cast<const void*>(static_cast<uintptr_t>(field)), 4);
-    int64_t de;
-    while (pc_lock.test_and_set(std::memory_order_acquire)) {}
-    de = pc_due(site, field);
-    pc_lock.clear(std::memory_order_release);
-    if (sign < 0) {
-        const int64_t keep = old >= 2.0f ? 1 + static_cast<int64_t>(old - 1.0f) : 1;
-        if (de > keep) de = keep;
-    } else if (de > 1) {
-        de = 1;
-    }
-    const float nv = old + static_cast<float>(sign) * static_cast<float>(de);
-    uint32_t out;
-    std::memcpy(&out, &nv, 4);
-    return out;
-}
-
-// A float the game adds a per-frame amount to: the increment x the step (fractional, so motion stays smooth). No table:
-// the same scaling for every visit.
-extern "C" uint32_t fps_fs(uint64_t site, uint64_t field, uint32_t v) {
-    (void)site;
-    (void)field;
-    if (!pc_on.load(std::memory_order_acquire) || !(pc_kind.load(std::memory_order_relaxed) & 1) || pc_skipped(site)) return v;
-    float old, nw;
-    std::memcpy(&old, reinterpret_cast<const void*>(static_cast<uintptr_t>(field)), 4);
-    std::memcpy(&nw, &v, 4);
-    const float d = nw - old;
-    if (!(d == d)) return v;                            // NaN: a field not written yet
-    const float step = static_cast<float>(g_step_native.load(std::memory_order_relaxed));
-    const float res = old + d * step;
-    uint32_t out;
-    std::memcpy(&out, &res, 4);
-    return out;
-}
 
 // Model-spawn probe (XC2_MODEL_PROBE=1): log the engine's model creation and resource loading with their raw arguments, and
 // for every argument that points into the guest's memory the first bytes as hex text. A model that never appears in the
@@ -849,7 +707,6 @@ static void arm_frame_rate(uint64_t main_base) {
         return;
     }
     std::memcpy(reinterpret_cast<void*>(period_addr), &period, 4);
-    g_step_native.store(static_cast<double>(period) * static_cast<double>(nvsync) * 30.0);   // frames of the game's own 30 Hz
     NXLOG_I("xc2", "frame rate: vsync period %.6f -> %.6f s, %lld vsync(s) a frame, step %.2f ms (target %lld fps)",
             static_cast<double>(old), static_cast<double>(period), static_cast<long long>(nvsync),
             static_cast<double>(period) * static_cast<double>(nvsync) * 1000.0, static_cast<long long>(fps));
@@ -887,7 +744,6 @@ static void arm_frame_rate(uint64_t main_base) {
             if (st.frames < 2 || st.mean_ms <= 0.0) continue;
             double step = (std::max)(target, st.mean_ms / 1000.0);   // a late frame raises the step; a faster one does not lower it below the target
             step = (std::min)(step, 1.0 / 15.0);
-            g_step_native.store(step * 30.0);
             const float p = static_cast<float>(step / static_cast<double>(nvsync));
             if (p != last) {
                 last = p;
@@ -1268,6 +1124,178 @@ struct Ns1Site {
     std::atomic<int> seen{0};
 };
 
+
+// ---- write watch on the dynamic-resolution record (HANDOVER 172, 189) --------------------------------------------------
+// The live 3D size is a pair of int32 at [*(this+8)+0x5E0] + 24/+28. The read-point pin (XC2_RENDER_SIZE_PIN) writes that
+// pair back just before the frame reads it, so the game's own switch bookkeeping never ran with the new value and the scene
+// came out black (HANDOVER 189). This watches the store instead: the page holding the record is made read-only, the first
+// write faults, the handler logs the store's host instruction pointer and single-steps the store, and - when a pin is
+// configured - clamps what landed in the record. The game's handlers then run with the value the experiment asked for,
+// which is exactly the case 189 could not test.
+namespace rswatch {
+
+struct Entry {
+    uint64_t rip = 0;            // the host instruction that stored (x2_boot.exe + offset; the map file names it)
+    uint64_t addr = 0;           // the address the store targeted
+    uint32_t before[2] = {0, 0};
+    uint32_t after[2] = {0, 0};
+};
+
+struct State {
+    std::atomic<uint64_t> record{0};    // p: the struct that holds +24/+28
+    uint64_t page[2] = {0, 0};
+    int pages = 0;
+    std::atomic<bool> armed{false};
+    std::atomic<uint32_t> arms{0};
+    std::atomic<uint32_t> other{0};     // faults on the page that were not the record
+    bool pin = false;
+    bool pin_checked = false;
+    uint32_t pin_w = 0, pin_h = 0;
+    std::atomic<uint32_t> head{0};
+    Entry ring[32]{};
+    bool started = false;
+};
+
+State& state() { static State s; return s; }
+
+thread_local bool stepping = false;
+thread_local Entry pending{};
+
+bool watched(const State& st, uint64_t addr) {
+    for (int i = 0; i < st.pages; ++i)
+        if (addr >= st.page[i] && addr < st.page[i] + 0x1000) return true;
+    return false;
+}
+
+void set_protect(const State& st, DWORD prot) {
+    for (int i = 0; i < st.pages; ++i) {
+        DWORD old = 0;
+        if (!VirtualProtect(reinterpret_cast<void*>(st.page[i]), 0x1000, prot, &old)) {
+            MEMORY_BASIC_INFORMATION mbi{};
+            VirtualQuery(reinterpret_cast<void*>(st.page[i]), &mbi, sizeof mbi);
+            NXLOG_W("rsize", "protect %llx -> %lx failed (state %lx protect %lx, error %lu)",
+                    static_cast<unsigned long long>(st.page[i]), prot, mbi.State, mbi.Protect, GetLastError());
+        }
+    }
+}
+
+void push(const Entry& e) {
+    State& st = state();
+    const uint32_t i = st.head.fetch_add(1) % 32;
+    st.ring[i] = e;
+}
+
+LONG CALLBACK veh(EXCEPTION_POINTERS* ep) {
+    State& st = state();
+    if (!st.started) return EXCEPTION_CONTINUE_SEARCH;
+    EXCEPTION_RECORD* er = ep->ExceptionRecord;
+    if (er->ExceptionCode == EXCEPTION_SINGLE_STEP) {
+        if (!stepping) return EXCEPTION_CONTINUE_SEARCH;
+        stepping = false;
+        ep->ContextRecord->ContextFlags |= CONTEXT_CONTROL;
+        ep->ContextRecord->EFlags &= ~0x100u;
+        const uint64_t p = st.record.load();
+        const void* q = reinterpret_cast<const void*>(p + 24);
+        std::memcpy(pending.after, q, 8);
+        if (st.pin && pending.after[0] <= 1920 && pending.after[1] <= 1080 &&
+            (pending.after[0] < st.pin_w || pending.after[1] < st.pin_h)) {
+            const uint32_t clamped[2] = {st.pin_w, st.pin_h};
+            std::memcpy(reinterpret_cast<void*>(p + 24), clamped, 8);
+            pending.after[0] = st.pin_w;
+            pending.after[1] = st.pin_h;
+        }
+        push(pending);
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+    if (er->ExceptionCode != EXCEPTION_ACCESS_VIOLATION || er->NumberParameters < 2 || er->ExceptionInformation[0] != 1)
+        return EXCEPTION_CONTINUE_SEARCH;
+    const uint64_t addr = er->ExceptionInformation[1];
+    if (!watched(st, addr)) return EXCEPTION_CONTINUE_SEARCH;
+    st.armed.store(false);
+    set_protect(st, PAGE_READWRITE);
+    const uint64_t p = st.record.load();
+    if (addr >= p + 24 && addr < p + 32) {
+        pending = Entry{};
+        pending.rip = reinterpret_cast<uint64_t>(er->ExceptionAddress);
+        pending.addr = addr;
+        std::memcpy(pending.before, reinterpret_cast<const void*>(p + 24), 8);
+        stepping = true;
+        ep->ContextRecord->ContextFlags |= CONTEXT_CONTROL;
+        ep->ContextRecord->EFlags |= 0x100u;    // trap flag: the store completes, then SINGLE_STEP fires
+    } else {
+        st.other.fetch_add(1);
+    }
+    return EXCEPTION_CONTINUE_EXECUTION;
+}
+
+// Called from the frame hook once per frame: arm the page again after the previous frame's fault, and print what the last
+// writes did. Logging here (not in the handler) keeps the vectored handler out of the logger's locks.
+void frame(uint64_t p) {
+    State& st = state();
+    if (!st.started) {
+        st.started = true;
+        st.record.store(p);
+        for (int i = 0; i < 2; ++i) {
+            const uint64_t pg = (p + 24 + i * 4) & ~0xFFFULL;
+            if (st.pages == 0 || st.page[st.pages - 1] != pg) {
+                if (st.pages < 2) st.page[st.pages++] = pg;
+            }
+        }
+        if (const char* s = std::getenv("XC2_RENDER_SIZE_WRITE_PIN")) {
+            unsigned a = 0, b = 0;
+            if (std::sscanf(s, "%ux%u", &a, &b) == 2 && a && b) { st.pin = true; st.pin_w = a; st.pin_h = b; }
+        }
+        AddVectoredExceptionHandler(1, veh);
+        NXLOG_I("rsize", "write watch: record %llx, %d page(s), pin %s",
+                static_cast<unsigned long long>(p), st.pages,
+                st.pin ? "on" : "off");
+    }
+    static uint32_t printed = 0;
+    const uint32_t head = st.head.load();
+    while (printed != head) {
+        const Entry& e = st.ring[printed % 32];
+        ++printed;
+        NXLOG_I("rsize", "write %llx at %llx+%llx: %u x %u -> %u x %u%s", static_cast<unsigned long long>(e.addr),
+                static_cast<unsigned long long>(reinterpret_cast<uint64_t>(GetModuleHandleW(nullptr))),
+                static_cast<unsigned long long>(e.rip), e.before[0], e.before[1], e.after[0], e.after[1],
+                st.pin ? " (clamped)" : "");
+    }
+    // Re-arm every frame, not only after our own fault: something else in the runtime protects heap pages as it needs
+    // them (the GPU back end before a texture upload, memory.cpp's page bookkeeping), and a single VirtualProtect there
+    // silently undoes ours. Asking on every frame tells us which it is.
+    if (st.arms.load() < 20000) {
+        MEMORY_BASIC_INFORMATION mbi{};
+        VirtualQuery(reinterpret_cast<void*>(st.page[0]), &mbi, sizeof mbi);
+        if (!st.armed.load() || mbi.Protect != PAGE_READONLY) {
+            if (st.armed.load() && st.other.load() == 0 && !st.pin_checked) {
+                st.pin_checked = true;
+                NXLOG_I("rsize", "page %llx was %lx, not read-only: something else re-protected it",
+                        static_cast<unsigned long long>(st.page[0]), mbi.Protect);
+            }
+            st.arms.fetch_add(1);
+            set_protect(st, PAGE_READONLY);
+            st.armed.store(true);
+        }
+        if (st.arms.load() == 1) {
+            MEMORY_BASIC_INFORMATION mbi{};
+            VirtualQuery(reinterpret_cast<void*>(st.page[0]), &mbi, sizeof mbi);
+            NXLOG_I("rsize", "armed page %llx: state %lx protect %lx", static_cast<unsigned long long>(st.page[0]), mbi.State,
+                    mbi.Protect);
+            if (std::getenv("XC2_RENDER_SIZE_WATCH_SELFTEST")) {   // does a write we make fault at all?
+                const uint64_t q = st.record.load() + 24;
+                uint32_t v[2] = {0, 0};
+                std::memcpy(v, reinterpret_cast<const void*>(q), 8);
+                NXLOG_I("rsize", "selftest: writing %u x %u to %llx", v[0], v[1], static_cast<unsigned long long>(q));
+                std::memcpy(reinterpret_cast<void*>(q), v, 8);
+                NXLOG_I("rsize", "selftest: write returned");
+            }
+        }
+    }
+}
+
+
+}  // namespace rswatch
+
 static void arm_ns1_probe(uint64_t main_base) {
     // XC2_NS1_PROBE turns on the logging sites; the two memory overrides below have their own switches and run without it.
     static const bool probe = std::getenv("XC2_NS1_PROBE") != nullptr;
@@ -1480,6 +1508,130 @@ static void arm_ns1_probe(uint64_t main_base) {
                 }
             }
             last_out = c->x[1];
+            return 0;
+        }, nullptr);
+    }
+    // XC2_RENDER_SIZE_PROBE=1: where the dynamic resolution actually lives. f_7100844120 (main+0x844120) reads four int32 at
+    // [*(this+8) + 0x5E0] + 24..39, converts them to float and hands them to main+0x8442E0, which multiplies them by 1.0 or
+    // 0.5 to size the twenty render targets. Those four are the live 3D size - not the lib_nx.ini settings object, which was
+    // searched and came up empty (HANDOVER 95.16). Logging them (and, once they match the ladder, writing 1280x720 back) is
+    // the host-side equivalent of what the NS1 quality mods do with one branch instruction.
+    // Registered for the lock as well as the probe: [upscale] lock_render_size is what the launcher writes, and the hook
+    // is the only place the pin can run. With the lock alone the hook stays quiet (no per-frame logging).
+    static const bool rs_probe = std::getenv("XC2_RENDER_SIZE_PROBE") != nullptr;   // static: the hook is a plain fn pointer
+    static const bool rs_watch = std::getenv("XC2_RENDER_SIZE_WATCH") != nullptr ||
+                                 std::getenv("XC2_RENDER_SIZE_WRITE_PIN") != nullptr;
+    const bool rs_lock = nxrt::config_get_bool("upscale", "lock_render_size", false);
+    if (rs_probe || rs_lock || rs_watch) {
+        static int shown = 0;
+        static uint32_t last0 = 0xFFFFFFFFu, last1 = 0xFFFFFFFFu;
+        nxrt::hook_add_entry(main_base + 0x844120, [](Ctx* c, uint64_t, void*) -> int {
+            const uint64_t self = c->x[0];
+            if (!nxrt::mem::is_mapped(self + 8, 8)) return 0;
+            uint64_t obj = 0;
+            std::memcpy(&obj, reinterpret_cast<const void*>(self + 8), 8);
+            if (!obj || !nxrt::mem::is_mapped(obj + 0x5E0, 8)) return 0;
+            uint64_t p = 0;
+            std::memcpy(&p, reinterpret_cast<const void*>(obj + 0x5E0), 8);
+            if (!p || !nxrt::mem::is_mapped(p + 24, 16)) return 0;
+            uint32_t v[4] = {};
+            std::memcpy(v, reinterpret_cast<const void*>(p + 24), 16);
+            // XC2_RENDER_SIZE_PIN=1280x720: pin the 3D render size instead of only logging it. The ladder only ever goes
+            // down from 1280x720 (the console saves time, a desktop does not need to), and this record is what the twenty
+            // render targets below are sized from. Pin only while the game is inside the 3D range: the first calls carry
+            // the 4K output size, which must not be touched.
+            static uint32_t pin_w = 0, pin_h = 0;
+            static bool pin_read = false;
+            if (!pin_read) {
+                pin_read = true;
+                if (const char* s = std::getenv("XC2_RENDER_SIZE_PIN")) {
+                    unsigned a = 0, b = 0;
+                    if (std::sscanf(s, "%ux%u", &a, &b) == 2 && a && b) { pin_w = a; pin_h = b; }
+                }
+                // The launcher's Picture page writes this: lock the ladder at its top rung (the game's fixed 1280x720).
+                if (!pin_w && nxrt::config_get_bool("upscale", "lock_render_size", false)) { pin_w = 1280; pin_h = 720; }
+            }
+            if (pin_w && v[0] <= 1920 && v[1] <= 1080 && (v[0] < pin_w || v[1] < pin_h)) {
+                const uint32_t pinned[2] = {pin_w, pin_h};
+                std::memcpy(reinterpret_cast<void*>(p + 24), pinned, 8);
+                v[0] = pin_w;
+                v[1] = pin_h;
+            }
+            // XC2_RENDER_SIZE_WATCH=1 (log) or XC2_RENDER_SIZE_WRITE_PIN=WxH (clamp): watch the store that sets the record
+            // instead of writing the record back here, so the game's own switch handling runs with the pinned value (189).
+            if (rs_watch && v[0] && v[1] && v[0] <= 1920 && v[1] <= 1080) rswatch::frame(p);
+            // XC2_TAA_SHARP=2.0: the game's own per-rung TAA sharpening (tmaaSharpness_0..5, found at +0x3114 by
+            // matching the lib_nx.ini defaults 0.4/0.6/0.6/0.72/0.8/0.9). Raising all six to one value answers the
+            // question the values cannot: is that pass still in the chain when our FSR replaces the DLSS step? Written
+            // every call, because the settings object is re-read each frame.
+            static float taa_sharp = -1.0f;
+            static bool taa_read = false;
+            if (!taa_read) {
+                taa_read = true;
+                if (const char* s = std::getenv("XC2_TAA_SHARP")) taa_sharp = static_cast<float>(std::atof(s));
+            }
+            if (taa_sharp >= 0.0f && nxrt::mem::is_mapped(obj + 0x3114, 24)) {
+                const float six[6] = {taa_sharp, taa_sharp, taa_sharp, taa_sharp, taa_sharp, taa_sharp};
+                std::memcpy(reinterpret_cast<void*>(obj + 0x3114), six, sizeof six);
+            }
+            if (std::getenv("XC2_SETTINGS_DUMP")) {
+                static bool dumped = false;
+                if (!dumped) {
+                    dumped = true;
+                    // One contiguous window around the block the value scan pointed at (tmaa +0x3114, AA_Sharpness
+                    // +0x3100), printed as offset: value so the keys can be matched by hand against lib_nx.ini order.
+                    const uint32_t lo = 0x2F80, hi = 0x3180;
+                    if (nxrt::mem::is_mapped(obj + lo, hi - lo)) {
+                        for (uint32_t off = lo; off < hi; off += 16) {
+                            float f[4];
+                            std::memcpy(f, reinterpret_cast<const void*>(obj + off), 16);
+                            NXLOG_I("settings", "+0x%04x  %11.6g %11.6g %11.6g %11.6g", off, static_cast<double>(f[0]),
+                                    static_cast<double>(f[1]), static_cast<double>(f[2]), static_cast<double>(f[3]));
+                        }
+                    }
+                }
+            }
+            if (std::getenv("XC2_SETTINGS_SCAN")) {
+                static bool scanned = false;
+                if (!scanned) {
+                    scanned = true;
+                    // The lib_nx.ini defaults are known from the archive itself (work/tmp/lib_nx.ini), so the settings
+                    // object can be matched by value instead of by disassembling the parser: six consecutive sharpness
+                    // rungs, the red_* block, and a few values nothing else uses. Offsets are from the object base.
+                    const uint64_t base = obj;
+                    const uint32_t span = 0x4000;
+                    if (nxrt::mem::is_mapped(base, span)) {
+                        std::vector<float> f(span / 4);
+                        std::memcpy(f.data(), reinterpret_cast<const void*>(base), span);
+                        auto dump = [&](uint32_t off, const char* what) {
+                            NXLOG_I("settings", "%s at +0x%x (%.6g)", what, off, static_cast<double>(f[off / 4]));
+                        };
+                        for (uint32_t off = 0; off + 40 <= span; off += 4) {
+                            const float* q = &f[off / 4];
+                            if (q[0] == 0.4f && q[1] == 0.6f && q[2] == 0.6f && q[3] == 0.72f && q[4] == 0.8f && q[5] == 0.9f)
+                                dump(off, "tmaaSharpness_0..5 run");
+                            if (q[0] == 1.0f && q[1] == 1.0f && q[2] == 1.0f && q[3] == 1.0f && q[5] == 1.0f && q[6] == 1.0f &&
+                                q[7] == 0.7f && q[8] == 0.7f && q[9] == 97.0f)
+                                dump(off, "red_sclX..red_AtRate block");
+                        }
+                        for (uint32_t off = 0; off + 4 <= span; off += 4) {
+                            const float x = f[off / 4];
+                            if (x == 80000.0f) dump(off, "cam_far");
+                            else if (x == 8.0f) dump(off, "AA_Sharpness");
+                            else if (x == 0.75f) dump(off, "ao_blurScale");
+                            else if (x == 0.35f) dump(off, "tssaoOutputAO");
+                            else if (x == 0.2f) dump(off, "blurStr / godray-ish");
+                        }
+                    }
+                }
+            }
+            if (rs_probe && (v[0] != last0 || v[1] != last1) && shown < 40) {
+                ++shown;
+                last0 = v[0];
+                last1 = v[1];
+                NXLOG_I("rsize", "render size: %u x %u (v2 %u v3 %u) obj %llx +5E0 %llx", v[0], v[1], v[2], v[3],
+                        static_cast<unsigned long long>(obj), static_cast<unsigned long long>(p));
+            }
             return 0;
         }, nullptr);
     }
@@ -1769,7 +1921,14 @@ static void arm_ns2_mem_probe(uint64_t main_base) {
             static_cast<unsigned long long>(scale), probe ? 1 : 0, root_set ? std::getenv("XC2_NS2_ROOT") : "-");
 }
 
+// The release split (upstream's fefw_rt.dll / fefw_stub.cpp): the runtime and this boot code live in a DLL and
+// the player's exe only hands it the process. Built with XC2_RT_DLL the entry is exported under a C name so the
+// stub can find it; without the define this is still the exe entry it always was.
+#ifdef XC2_RT_DLL
+extern "C" __declspec(dllexport) int xc2_rt_main(int argc, char **argv) {
+#else
 int main(int argc, char **argv) {
+#endif
     std::string exefs;
     std::string link = "host";
     std::string entry_mode = "rtld";
@@ -1809,10 +1968,20 @@ int main(int argc, char **argv) {
         nxrt::platform::init();
         nxrt::platform::WindowDesc wd;
         wd.title = nxrt::game::info().title;
-        const int ini_w = static_cast<int>(nxrt::config_get_int("gfx", "window_width", 1280));
-        const int ini_h = static_cast<int>(nxrt::config_get_int("gfx", "window_height", 720));
-        wd.width = play_disp.width >= 320 ? play_disp.width : ini_w;
-        wd.height = play_disp.height >= 240 ? play_disp.height : ini_h;
+        int win_w = static_cast<int>(nxrt::config_get_int("gfx", "window_width", 0));
+        int win_h = static_cast<int>(nxrt::config_get_int("gfx", "window_height", 0));
+        if (play_disp.width >= 320 && play_disp.height >= 240) {
+            win_w = play_disp.width;
+            win_h = play_disp.height;
+        }
+        if (win_w <= 0 || win_h <= 0) {
+            win_w = ::GetSystemMetrics(SM_CXSCREEN);
+            win_h = ::GetSystemMetrics(SM_CYSCREEN);
+            if (win_w < 320 || win_h < 240) { win_w = 1280; win_h = 720; }   // no desktop mode to ask (session 0)
+        }
+        wd.width = win_w;
+        wd.height = win_h;
+        NXLOG_I("boot", "window %dx%d", win_w, win_h);
         if (!nxrt::platform::create_window(wd)) die("cannot create the window");
     }
     {
@@ -1854,6 +2023,7 @@ int main(int argc, char **argv) {
         snap.npad[9].connected = true;                     // handheld slot: keep it a valid pad too
         snap.npad[9].style = nxrt::hid::NpadStyle::Handheld;
         input_src->set(snap);
+        route::g_route_t0 = std::chrono::steady_clock::now();   // the origin XC2_ROUTE_OUT and XC2_ROUTE share
         nxrt::hid::set_input_source(input_src);
         std::fprintf(stderr,
                      "input: live keyboard/gamepad on (WASD or arrows = move, IJKL = camera, Space/Enter = A, "
@@ -1903,6 +2073,10 @@ int main(int argc, char **argv) {
                 else if (name == "R") bit = nxrt::hid::btn(nxrt::hid::kBtnR);
                 else if (name == "ZL") bit = nxrt::hid::btn(nxrt::hid::kBtnZL);
                 else if (name == "ZR") bit = nxrt::hid::btn(nxrt::hid::kBtnZR);
+                else if (name == "DPD") bit = nxrt::hid::btn(nxrt::hid::kBtnDown);
+                else if (name == "DPU") bit = nxrt::hid::btn(nxrt::hid::kBtnUp);
+                else if (name == "DPL") bit = nxrt::hid::btn(nxrt::hid::kBtnLeft);
+                else if (name == "DPR") bit = nxrt::hid::btn(nxrt::hid::kBtnRight);
                 if (bit != ~0ull) evs.push_back({ms, bit, -1, 0, 0, hold * 1000.0});
                 else if (stick >= 0) evs.push_back({ms, 0, stick, sx, sy, hold * 1000.0});
             }
@@ -1926,6 +2100,10 @@ int main(int argc, char **argv) {
             }
         }).detach();
         std::fprintf(stderr, "scripted input armed: %s\n", press);
+    }
+    if (const char *route = std::getenv("XC2_ROUTE")) {   // a recorded run replayed (tools/run/route.ps1)
+        std::shared_ptr<nxrt::hid::ManualInputSource> src = input_src;
+        route_start(src, route);
     }
     nxrt::config_set("boot", "link", link.c_str());
     // The guest rtld relocates the images itself; when we skip it (host link + direct entry) the host's relocation must stay.
@@ -1954,7 +2132,7 @@ int main(int argc, char **argv) {
     }
 
     // 1+2. map and register
-    for (const ModEntry &g : kModules) {
+    for (const ModEntry &g : module_table()) {
         const std::string path = exefs + "\\" + g.file;
         if (!file_exists(path)) die("module file not found: %s", path.c_str());
         nxrt::LoadOptions lo;
@@ -1970,18 +2148,29 @@ int main(int argc, char **argv) {
         NXLOG_I("boot", "module %s at 0x%llx", g.file, static_cast<unsigned long long>(m->base()));
     }
 
+    // In the DLL build the lifted modules come from the exe, so ask the table rather than naming nxmod_*.
+    const auto module_base = [&](const char *name) -> uint64_t {
+        for (const ModEntry &g : module_table())
+            if (!std::strcmp(g.file, name)) return g.nx->base;
+        die("the module table handed to the runtime has no %s", name);
+    };
+    const uint64_t main_base = module_base("main");
+    g_main_base = main_base;
+    g_sdk_base = module_base("sdk");
+    g_rtld_base = module_base("rtld");
+
     // Model-spawn probe (XC2_MODEL_PROBE=1): "did the engine ever create this model?", logged with its arguments. Works
     // without a re-lift: both site addresses are already in build\sites-main.txt (HANDOVER 19.9, step P3).
-    if (std::getenv("XC2_MODEL_PROBE")) arm_model_probe(nxmod_main.base);
-    arm_frame_rate(nxmod_main.base);
-    arm_native_res(nxmod_main.base);
+    if (std::getenv("XC2_MODEL_PROBE")) arm_model_probe(main_base);
+    arm_frame_rate(main_base);
+    arm_native_res(main_base);
     // XC2_BUMP_MENU_RESOURCE=<bytes>: raise the compiled-in MenuResource budget (HANDOVER 84, DIAGNOSTIC). The 3.0.0 content
     // needs more than the 76,800 KB this build was built with, and the 64 region budgets use only 5,440 MiB of the 10,642 MiB
     // heap, so there is ~5.1 GiB of slack. The midhook sits on the bl that creates the region: x1 is the size.
     if (const char* v = std::getenv("XC2_BUMP_MENU_RESOURCE")) {
         const uint64_t bytes = std::strtoull(v, nullptr, 0);
         if (bytes) {
-            nxrt::hook_add_mid(nxmod_main.base + 0x6fa790, [](Ctx* c, uint64_t, void* u) -> int {
+            nxrt::hook_add_mid(main_base + 0x6fa790, [](Ctx* c, uint64_t, void* u) -> int {
                 static bool logged = false;
                 const uint64_t want = reinterpret_cast<uint64_t>(u);
                 if (!logged) {
@@ -1994,14 +2183,11 @@ int main(int argc, char **argv) {
             }, reinterpret_cast<void*>(bytes));
         }
     }
-    arm_shared_step(nxmod_main.base);
-    arm_fps_counters(nxmod_main.base);
-    arm_fps_census(nxmod_main.base);
-    arm_delta_scan(nxmod_main.base);
-    arm_period_probe(nxmod_main.base);
-    arm_obj_scan(nxmod_main.base);
-    arm_ns1_probe(nxmod_main.base);
-    arm_ns2_mem_probe(nxmod_main.base);
+    arm_delta_scan(main_base);
+    arm_period_probe(main_base);
+    arm_obj_scan(main_base);
+    arm_ns1_probe(main_base);
+    arm_ns2_mem_probe(main_base);
 
     // Bring-up probe (XC2_TRACE_LAUNCHER=1): which apps::FrameworkLauncher work function runs each frame. The engine draws a
     // frame with no geometry; this tells a standby (waiting for the applet/user) apart from a scene that failed to build.
@@ -2022,7 +2208,7 @@ int main(int argc, char **argv) {
             {"App::wkRender", 0x1fc4, new unsigned(0)},      {"App::wkUpdate", 0x1fc0, new unsigned(0)},
         };
         for (Site& s : sites) {
-            nxrt::hook_add_entry(nxmod_main.base + s.off, [](Ctx*, uint64_t, void* user) -> int {
+            nxrt::hook_add_entry(main_base + s.off, [](Ctx*, uint64_t, void* user) -> int {
                 ++*static_cast<unsigned*>(user);
                 return 0;
             }, s.n);
@@ -2032,7 +2218,7 @@ int main(int argc, char **argv) {
         static uint64_t g_groups[8] = {};
         static int g_group_n = 0;
         static uint64_t g_mt_this = 0, g_mt_group = 0;
-        nxrt::hook_add_entry(nxmod_main.base + 0x7570d4, [](Ctx* c, uint64_t, void*) -> int {
+        nxrt::hook_add_entry(main_base + 0x7570d4, [](Ctx* c, uint64_t, void*) -> int {
             const uint64_t g = c->x[1];
             g_mt_this = c->x[0];
             g_mt_group = g;
@@ -2044,7 +2230,7 @@ int main(int argc, char **argv) {
         // ml::MicroThread::createHandle(MLTHG*, unsigned int): the groups microthreads are actually created in.
         static uint64_t g_handles[8] = {};
         static int g_handle_n = 0;
-        nxrt::hook_add_entry(nxmod_main.base + 0x756908, [](Ctx* c, uint64_t, void*) -> int {
+        nxrt::hook_add_entry(main_base + 0x756908, [](Ctx* c, uint64_t, void*) -> int {
             const uint64_t g = c->x[0];
             for (int i = 0; i < g_handle_n; i++)
                 if (g_handles[i] == g) return 0;
@@ -2053,14 +2239,14 @@ int main(int argc, char **argv) {
         });
         // Was the sleeping microthread ever released (removed from its group) or destroyed?
         static unsigned g_rel = 0, g_dst = 0;
-        nxrt::hook_add_entry(nxmod_main.base + 0x756bdc, [](Ctx*, uint64_t, void*) -> int { ++g_rel; return 0; });
-        nxrt::hook_add_entry(nxmod_main.base + 0x756614, [](Ctx*, uint64_t, void*) -> int { ++g_dst; return 0; });
+        nxrt::hook_add_entry(main_base + 0x756bdc, [](Ctx*, uint64_t, void*) -> int { ++g_rel; return 0; });
+        nxrt::hook_add_entry(main_base + 0x756614, [](Ctx*, uint64_t, void*) -> int { ++g_dst; return 0; });
         // XC2_TRACE_MEMMGR=1: log the big requests into mtl::MemManager (HANDOVER 80/81). pkg7 dies because
         // FileHandleTh::setReadBuffer asks a 320 KB region for up to 1.79 MB, so the interesting datum is which ALLOC_HANDLE
         // (which named region) the request goes to and how big it is. mtl::MemManager::allocate(ALLOC_HANDLE handle, size,
         // align, bool, name, line): x0 points at the handle word, x1 = size, x2 = align.
         if (std::getenv("XC2_TRACE_MEMMGR")) {
-            nxrt::hook_add_entry(nxmod_main.base + 0x781798, [](Ctx* c, uint64_t, void*) -> int {
+            nxrt::hook_add_entry(main_base + 0x781798, [](Ctx* c, uint64_t, void*) -> int {
                 static std::atomic<int> n{0};
                 const uint64_t hp = c->x[0];
                 const uint64_t size = c->x[1], align = c->x[2];
@@ -2074,7 +2260,7 @@ int main(int argc, char **argv) {
             });
             // Every region the game creates, with its name: mtl::MemManager::create(void*/HANDLE, size, char const* name, bool)
             // keeps the size in x1 and the name in x2, so base and pkg7 can be compared region by region.
-            for (uint64_t a : {nxmod_main.base + 0x77fc6c, nxmod_main.base + 0x77ff84}) {
+            for (uint64_t a : {main_base + 0x77fc6c, main_base + 0x77ff84}) {
                 nxrt::hook_add_entry(a, [](Ctx* c, uint64_t, void*) -> int {
                     const uint64_t size = c->x[1];
                     const uint64_t np = c->x[2];
@@ -2108,7 +2294,7 @@ int main(int argc, char **argv) {
         // XC2_SKIP_MT_SLEEP=1: make ml::MicroThread::sleep a no-op. Experiment only: if the launcher's build thread then
         // reaches the applet, the microthread scheduler is the blocker; it does not prove the rest of the boot is right.
         if (std::getenv("XC2_SKIP_MT_SLEEP")) {
-            nxrt::hook_add_entry(nxmod_main.base + 0x756ef4, [](Ctx* c, uint64_t, void*) -> int {
+            nxrt::hook_add_entry(main_base + 0x756ef4, [](Ctx* c, uint64_t, void*) -> int {
                 c->x[0] = 0;
                 return 1;   // handled: the lifted function returns at once
             });
@@ -2117,16 +2303,16 @@ int main(int argc, char **argv) {
         // switchThread: after the "current fiber" call (x0 = its result, x19 = the target fiber) and at the bail target.
         static unsigned g_sw_bail = 0;
         static uint64_t g_sw_curfib = 0, g_sw_tgt = 0;
-        nxrt::hook_add_mid(nxmod_main.base + 0x75680c, [](Ctx* c, uint64_t, void*) -> int {
+        nxrt::hook_add_mid(main_base + 0x75680c, [](Ctx* c, uint64_t, void*) -> int {
             g_sw_curfib = c->x[0];
             g_sw_tgt = c->x[19];
             return 0;
         });
-        nxrt::hook_add_mid(nxmod_main.base + 0x756824, [](Ctx*, uint64_t, void*) -> int { ++g_sw_bail; return 0; });
+        nxrt::hook_add_mid(main_base + 0x756824, [](Ctx*, uint64_t, void*) -> int { ++g_sw_bail; return 0; });
         // ml::MicroThreadNx::switchThread(MTHREAD* cur, MTHREAD* next): what update() picked. x1 = cur, x2 = next.
         static uint64_t g_sw_last = 0, g_sw_cur = 0;
         static unsigned g_sw_n = 0;
-        nxrt::hook_add_entry(nxmod_main.base + 0x756728, [](Ctx* c, uint64_t, void*) -> int {
+        nxrt::hook_add_entry(main_base + 0x756728, [](Ctx* c, uint64_t, void*) -> int {
             g_sw_cur = c->x[1];
             g_sw_last = c->x[2];
             ++g_sw_n;
@@ -2135,14 +2321,14 @@ int main(int argc, char **argv) {
         // ml::MicroThreadNx::setupThread(MTHREAD*, entry): x1 is the MTHREAD the launcher's build thread lives in.
         // Watching its fields over time tells whether the sleep counter ever expires and whether the state changes.
         static uint64_t g_mt = 0;
-        nxrt::hook_add_entry(nxmod_main.base + 0x7564cc, [](Ctx* c, uint64_t, void*) -> int {
+        nxrt::hook_add_entry(main_base + 0x7564cc, [](Ctx* c, uint64_t, void*) -> int {
             if (!g_mt) g_mt = c->x[1];
             return 0;
         });
         // ml::MicroThread::createThread(MLTHG* group, entry, arg): the group the launcher's build thread is created in.
         static uint64_t g_cthreads[8] = {};
         static int g_cthread_n = 0;
-        nxrt::hook_add_entry(nxmod_main.base + 0x75749c, [](Ctx* c, uint64_t, void*) -> int {
+        nxrt::hook_add_entry(main_base + 0x75749c, [](Ctx* c, uint64_t, void*) -> int {
             const uint64_t g = c->x[1];   // member function: x0 = this (the manager), x1 = the MLTHG* group
             for (int i = 0; i < g_cthread_n; i++)
                 if (g_cthreads[i] == g) return 0;
@@ -2151,7 +2337,7 @@ int main(int argc, char **argv) {
         });
         // midhook inside ml::MicroThread::update (update+0x128, site `midhook 71007571fc`): x27 = the MTHREAD under
         // test, [x27+0x28] = sleep frames left, [sp+12] = elapsed time. Shows why a sleeping microthread is not picked.
-        nxrt::hook_add_mid(nxmod_main.base + 0x7571fc, [](Ctx* c, uint64_t, void*) -> int {
+        nxrt::hook_add_mid(main_base + 0x7571fc, [](Ctx* c, uint64_t, void*) -> int {
             static int n = 0;
             if (n++ < 40) {
                 const uint64_t mt = c->x[27];
@@ -2243,15 +2429,15 @@ int main(int argc, char **argv) {
     }
 
     // Debug: log the arguments of Monolith's allocator (the site is compiled in by --sites build\sites-main.txt).
-    nxrt::hook_add_entry(nxmod_sdk.base + 0x8f514, [](Ctx* c, uint64_t, void*) -> int {
+    nxrt::hook_add_entry(g_sdk_base + 0x8f514, [](Ctx* c, uint64_t, void*) -> int {
         std::fprintf(stderr, "heap impl: SetHeapSize(out=0x%llx size=0x%llx)\n", (unsigned long long)c->x[1], (unsigned long long)c->x[2]);
         return 0;
     });
-    nxrt::hook_add_mid(nxmod_sdk.base + 0x8f52c, [](Ctx* c, uint64_t, void*) -> int {
+    nxrt::hook_add_mid(g_sdk_base + 0x8f52c, [](Ctx* c, uint64_t, void*) -> int {
         std::fprintf(stderr, "heap impl: svcSetHeapSize result=0x%x\n", static_cast<uint32_t>(c->x[0]));
         return 0;
-    });    nxrt::hook_add_entry(nxmod_sdk.base + 0x8e514, [](Ctx*, uint64_t, void*) -> int {
-        *reinterpret_cast<uint32_t*>(static_cast<uintptr_t>(nxmod_sdk.base + 0x92ccf0)) = g_main_handle;
+    });    nxrt::hook_add_entry(g_sdk_base + 0x8e514, [](Ctx*, uint64_t, void*) -> int {
+        *reinterpret_cast<uint32_t*>(static_cast<uintptr_t>(g_sdk_base + 0x92ccf0)) = g_main_handle;
         std::fprintf(stderr, "boot: boot-parameter hook wrote g_OsBootParamter[0] = 0x%x\\n", g_main_handle);
         return 0;
     });
@@ -2263,8 +2449,8 @@ int main(int argc, char **argv) {
     // nn::diag::detail::AbortImpl runs (measured: the abort predicate resolves through import slot 0xe7cba0). Writing the handle
     // main_thread_adopt gave the main thread into the block before the ctor reads it makes both correct.
     if (std::getenv("XC2_301_BOOTPARAM")) {
-        nxrt::hook_add_entry(nxmod_sdk.base + 0x170030, [](Ctx*, uint64_t, void*) -> int {
-            const uint64_t pptr = nxmod_sdk.base + 0xe75408;
+        nxrt::hook_add_entry(g_sdk_base + 0x170030, [](Ctx*, uint64_t, void*) -> int {
+            const uint64_t pptr = g_sdk_base + 0xe75408;
             uint64_t block = 0;
             if (nxrt::mem::is_mapped(pptr, 8))
                 std::memcpy(&block, reinterpret_cast<const void*>(static_cast<uintptr_t>(pptr)), 8);
@@ -2286,7 +2472,7 @@ int main(int argc, char **argv) {
     // Call the initializer once, right before the first AllocateAddressRegion, with the manager that call was handed - what
     // nn::os::Initialize does on the console. The whole register context is put back afterwards.
     if (std::getenv("XC2_301_VAMM")) {
-        nxrt::hook_add_entry(nxmod_sdk.base + 0x16dcc0, [](Ctx* c, uint64_t, void*) -> int {
+        nxrt::hook_add_entry(g_sdk_base + 0x16dcc0, [](Ctx* c, uint64_t, void*) -> int {
             const uint64_t mgr = c->x[0];
             uint64_t inited = 0;
             if (nxrt::mem::is_mapped(mgr + 0x40, 8))
@@ -2302,7 +2488,7 @@ int main(int argc, char **argv) {
                 static std::atomic<int> n{0};
                 const Ctx saved = *c;
                 c->x[0] = mgr;
-                nxrt::dispatch_call(c, nxmod_sdk.base + 0x16daa0);
+                nxrt::dispatch_call(c, g_sdk_base + 0x16daa0);
                 *c = saved;
                 uint64_t after = 0;
                 if (nxrt::mem::is_mapped(mgr + 0x40, 8))
@@ -2317,22 +2503,22 @@ int main(int argc, char **argv) {
         NXLOG_W("boot", "VAMM init hook armed at sdk+0x16dcc0 (XC2_301_VAMM)");
     }
     // rtld 0x1470: flag-setting helper (writes 1 at rtld+0x3000, returns to its caller). Handled in the host.
-    nxrt::hook_add_entry(nxmod_rtld.base + 0x1470, [](Ctx*, uint64_t, void*) -> int {
-        *reinterpret_cast<uint32_t*>(static_cast<uintptr_t>(nxmod_rtld.base + 0x3000)) = 1;
+    nxrt::hook_add_entry(g_rtld_base + 0x1470, [](Ctx*, uint64_t, void*) -> int {
+        *reinterpret_cast<uint32_t*>(static_cast<uintptr_t>(g_rtld_base + 0x3000)) = 1;
         std::fprintf(stderr, "rtld: flag helper -> [rtld+0x3000] = 1\n");
         return 1;
-    });    nxrt::hook_add_entry(nxmod_main.base + 0x77ef28, [](Ctx* c, uint64_t, void*) -> int {
+    });    nxrt::hook_add_entry(main_base + 0x77ef28, [](Ctx* c, uint64_t, void*) -> int {
         std::fprintf(stderr, "MM: initialize(this=0x%llx)\n", (unsigned long long)c->x[0]); return 0; });
-    nxrt::hook_add_entry(nxmod_main.base + 0x77f770, [](Ctx* c, uint64_t, void*) -> int {
+    nxrt::hook_add_entry(main_base + 0x77f770, [](Ctx* c, uint64_t, void*) -> int {
         std::fprintf(stderr, "MM: create(name=0x%llx)\n", (unsigned long long)c->x[0]); return 0; });
-    nxrt::hook_add_entry(nxmod_main.base + 0x77ff84, [](Ctx* c, uint64_t, void*) -> int {
+    nxrt::hook_add_entry(main_base + 0x77ff84, [](Ctx* c, uint64_t, void*) -> int {
         std::fprintf(stderr, "MM: create(h=0x%x size=0x%llx name=0x%llx type=0x%llx)\n",
                      static_cast<uint32_t>(c->x[0]), (unsigned long long)c->x[1], (unsigned long long)c->x[2], (unsigned long long)c->x[5]); return 0; });
-    nxrt::hook_add_entry(nxmod_main.base + 0x77fc6c, [](Ctx* c, uint64_t, void*) -> int {
+    nxrt::hook_add_entry(main_base + 0x77fc6c, [](Ctx* c, uint64_t, void*) -> int {
         std::fprintf(stderr, "MM: create x0=0x%llx x1=0x%llx x2=0x%llx x3=0x%llx x4=0x%llx x5=0x%llx\n",
                      (unsigned long long)c->x[0], (unsigned long long)c->x[1], (unsigned long long)c->x[2],
                      (unsigned long long)c->x[3], (unsigned long long)c->x[4], (unsigned long long)c->x[5]); return 0; });
-    nxrt::hook_add_entry(nxmod_main.base + 0x77fb44, [](Ctx* c, uint64_t, void*) -> int {
+    nxrt::hook_add_entry(main_base + 0x77fb44, [](Ctx* c, uint64_t, void*) -> int {
         std::fprintf(stderr, "MM: Region::initialize x0=0x%llx x1=0x%llx x2=0x%llx x3=0x%llx x4=0x%llx x5=0x%llx\n",
                      (unsigned long long)c->x[0], (unsigned long long)c->x[1], (unsigned long long)c->x[2],
                      (unsigned long long)c->x[3], (unsigned long long)c->x[4], (unsigned long long)c->x[5]); return 0; });    nxrt::hook_add_entry(0x7100781798ull, [](Ctx* c, uint64_t, void*) -> int {
@@ -2363,17 +2549,17 @@ int main(int argc, char **argv) {
     Ctx *ctx = nxrt::kernel::current_ctx();
 
     // 5. The console path enters rtld at 0x7700000000; the experiments below skip rtld.
-    uint64_t entry = entry_mode == "main" ? (nxmod_main.base + 0x69fb7c) : kModules[0].nx->base;
+    uint64_t entry = entry_mode == "main" ? (main_base + 0x69fb7c) : module_base("rtld");
     if (addr_override) entry = addr_override;
     g_main_handle = h;   // the SDK boot-parameter hook (ThreadManagerImplByHorizon) needs it
     uint64_t a0 = 0, a1 = 0, a2 = 0, a3 = 0;
     if (entry_mode == "start") {
         // What the console loader does after relocation: run main's DT_INIT (the C++ constructors), then
         // nn::init::Start(0, main thread handle, nnMain, UserExceptionHandler).
-        entry = nxmod_sdk.base + 0x68668;                 // nn::init::Start
+        entry = module_base("sdk") + 0x68668;             // nn::init::Start
         a1 = h;
-        a2 = nxmod_main.base + 0x69fb7c;                  // nnMain
-        a3 = nxmod_sdk.base + 0x8fea4;                    // nn::os::detail::UserExceptionHandler
+        a2 = main_base + 0x69fb7c;                  // nnMain
+        a3 = module_base("sdk") + 0x8fea4;                // nn::os::detail::UserExceptionHandler
     }
     if (!nxrt::fn_lookup(entry)) die("the lifted module has no function at 0x%llx", (unsigned long long)entry);
     ctx->x[0] = a0;

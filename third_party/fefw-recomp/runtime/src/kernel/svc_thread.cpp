@@ -6,9 +6,12 @@
 
 #include <algorithm>
 #include <cstring>
+#include <mutex>
 #include <string>
+#include <vector>
 
 #include <cstdio>
+#include "nxrt/config.h"
 #include "nxrt/diag.h"
 #include "nxrt/dispatch.h"
 #include "nxrt/kernel.h"
@@ -204,7 +207,34 @@ void svc_wait_synchronization(::Ctx* c) {      // x1 handles*, w2 count, x3 time
 void svc_cancel_synchronization(::Ctx* c) { svc_ret(c, cancel_synchronization(static_cast<uint32_t>(X(c, 0)))); }
 void svc_arbitrate_lock(::Ctx* c) { svc_ret(c, arbitrate_lock(static_cast<uint32_t>(X(c, 0)), X(c, 1), static_cast<uint32_t>(X(c, 2)))); }
 void svc_arbitrate_unlock(::Ctx* c) { svc_ret(c, arbitrate_unlock(X(c, 0))); }
-void svc_wait_pwk(::Ctx* c) { svc_ret(c, wait_process_wide_key(X(c, 0), X(c, 1), static_cast<uint32_t>(X(c, 2)), static_cast<int64_t>(X(c, 3)))); }
+// [kernel] pwk_log = 1: for each process-wide key a thread parks on, the guest return address it waits from - the only way to name
+// the guest code behind a stuck thread without symbols (the freeze dump gives the key, this gives who sleeps on it).
+void svc_wait_pwk(::Ctx* c) {
+    static const bool log = ::nxrt::config_get_bool("kernel", "pwk_log", false);
+    if (log) {
+        struct Seen { uint64_t key; };
+        static std::mutex mu;
+        static std::vector<uint64_t> seen;
+        const uint64_t key = X(c, 1);
+        bool fresh = false;
+        {
+            std::lock_guard<std::mutex> lk(mu);
+            if (seen.size() < 400 && std::find(seen.begin(), seen.end(), key) == seen.end()) {
+                seen.push_back(key);
+                fresh = true;
+            }
+        }
+        // An event type of 0 or 1 marks a SystemEventType: its futex sits at +0x20 of the type, so a waiter on it is worth waking
+        // when a movie frame is handed over (the player waits on one of its own; see work/MOVIE-FREEZE-NOTES.md).
+        if (key >= 0x20) {
+            const uint8_t type = *reinterpret_cast<const uint8_t*>(static_cast<uintptr_t>(key - 0x20 + 0x28));
+            if (type <= 1) kernel::watch_system_event(key - 0x20);
+        }
+        if (fresh) NXLOG_I("kernel", "WaitProcessWideKey at %llx from lr %llx (tag %llx)", static_cast<unsigned long long>(key),
+                           static_cast<unsigned long long>(X(c, 30)), static_cast<unsigned long long>(X(c, 2)));
+    }
+    svc_ret(c, wait_process_wide_key(X(c, 0), X(c, 1), static_cast<uint32_t>(X(c, 2)), static_cast<int64_t>(X(c, 3))));
+}
 void svc_signal_pwk(::Ctx* c) { signal_process_wide_key(X(c, 0), static_cast<int32_t>(X(c, 1))); }   // returns void on Horizon: x0 untouched
 void svc_get_system_tick(::Ctx* c) { X(c, 0) = system_tick(); }
 void svc_wait_for_address(::Ctx* c) { svc_ret(c, wait_for_address(X(c, 0), static_cast<uint32_t>(X(c, 1)), static_cast<int32_t>(X(c, 2)), static_cast<int64_t>(X(c, 3)))); }

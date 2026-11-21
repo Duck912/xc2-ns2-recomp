@@ -76,6 +76,7 @@ if defined PROBE echo probes:  on (XC2_NS1_PROBE=1)
 if defined SWAP echo pad:     face buttons also act as the D-pad (A=up B=down X=left Y=right)
 echo log:     %ROOT%\work\logs\ns1-%STAMP%.log
 cd /d "%ROOT%\xc2\build\boot"
-"%ROOT%\xc2\build\boot-ns1\xc2_boot.exe" --exefs "<game dump>\Xenoblade Chronicles 2\exefs" --link host --gfx window --log "%ROOT%\work\logs\ns1-%STAMP%.log"
+if not defined XC2_LEGACY_BUILD set XC2_LEGACY_BUILD=%ROOT%\..\XC2\archive\build-legacy-2026-11-19
+"%XC2_LEGACY_BUILD%\boot-ns1\xc2_boot.exe" --exefs "<game dump>\Xenoblade Chronicles 2\exefs" --link host --gfx window --log "%ROOT%\work\logs\ns1-%STAMP%.log"
 echo exit=%ERRORLEVEL%
 pause

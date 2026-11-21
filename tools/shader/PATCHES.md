@@ -48,7 +48,7 @@ just above the horizon when looking up (HANDOVER 05 section 39.1, 06 section 40.
 
 **Removed on 2026-11-17**: with the module back to the game's own, the band does not appear. Something between
 2026-11-12 and now fixed the cause, so the workaround is dead weight. The patched module is kept in
-`E:\XC2-maintenance\backup\shader-patch-retired\` in case a scene turns up where it still matters — it was
+`E:\XC2\maintenance\backup\shader-patch-retired\` in case a scene turns up where it still matters — it was
 verified at one place, not everywhere.
 
 That is the rule for every entry above: a workaround outlives its reason silently unless someone puts the original

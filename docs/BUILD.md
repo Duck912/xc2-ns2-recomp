@@ -129,9 +129,9 @@ defaults (`build\lift`, `build\obj`, `build\lib`) are the four-module developmen
 keeps its own `-301` directories so the two never overwrite each other.
 
 ```powershell
-.\xc2\scripts\build.ps1 -Exefs xc2\game\xc2ns301 -Run:$false `
+.\tools\build\build.ps1 -Exefs xc2\game\xc2ns301 -Run:$false `
     -Modules 'main,sdk,subsdk0,subsdk1,subsdk2,subsdk3,rtld' `
-    -LiftDir xc2\build\lift-301 -ObjDir xc2\build\obj-301 -LibDir xc2\build\lib-301
+    -LiftDir xc2\build\301\lift -ObjDir xc2\build\301\obj -LibDir xc2\build\301\lib
 ```
 
 The stub link at the end of `build.ps1` always fails — that is expected, `build-boot.ps1` does the real link.
@@ -139,34 +139,62 @@ The stub link at the end of `build.ps1` always fails — that is expected, `buil
 ### 4.3 the boot executable (~50 s)
 
 ```powershell
-.\xc2\scripts\build-boot.ps1 -Exefs xc2\game\xc2ns301 -OutDir xc2\build\boot-301 `
-    -LibDir xc2\build\lib-301 -MainLib xc2\build\lib-301\main.lib -Defines XC2_MODULES_7
+.\tools\build\build-boot.ps1 -Exefs xc2\game\xc2ns301 -OutDir xc2\build\301\boot `
+    -LibDir xc2\build\301\lib -MainLib xc2\build\301\lib\main.lib -Defines XC2_MODULES_7
 ```
 
-Produces `xc2\build\boot-301\xc2_boot.exe`, which is what `tools\run\play-301.cmd` runs. Without the flags the
+Produces `xc2\build\301\boot\xc2_boot.exe`, which is what `tools\run\play-301.cmd` runs. Without the flags the
 script links the older four-module route into `xc2\build\boot\`.
+
+One library comes from outside the tree: **libvpx** (BSD-3, the host VP9/VP8 decoders) is compiled into `nxrt` and
+therefore linked into this executable even though nothing in the boot stub mentions it. The script finds it through
+`VCPKG_ROOT` and the usual vcpkg install roots (`vcpkg install libvpx:x64-windows-static`); set `VCPKG_ROOT` if
+yours lives elsewhere. A runtime configured without libvpx still links, but leaves VP9 movies out.
 
 ### 4.4 shaders
 
 Shaders are translated offline into `xc2\build\boot\shader_cache\spirv` (SPIR-V keyed by the shader hash).
-You do not have to manage this: the launcher fills the cache for you.
 
-**First launch.** The cache starts empty, so the launcher runs the game **headless for about 24 seconds** to collect
-every shader the game asks for, translates them, and only then opens the window. Progress is printed as `PREFILL:`
-lines and written to `work\prefill.status` (`phase`, `elapsed`, `budget`, `collected`, `note`) so a front end
-can show it. Collection runs once per cache (`work\.prefilled`); `-noprefill` skips it, and a collector that dies
-early leaves the marker unwritten so the next launch tries again.
+**The cache has two sources, and a fresh install ends at 12,137.** Scanning the romfs alone is not enough, and the
+number to remember is **12,137** = 12,132 translated from the archive + 5 that exist in no file:
+
+| source | count | tool |
+|---|---|---|
+| the embedded groups in `bf2.ard` (12,126) plus `ndsr.pck`'s 28 = 12,154 archive blocks | **12,132** translated | `tools\shader\cache\extract_embedded.py` |
+| blocks that exist in **no file at all** (the game builds them at run time) | +5 = **12,137** | only `NXRT_NVN_DUMP_MISSING` |
+
+The 22-block gap between 12,154 and 12,132 is misaligned slices the translator rejects; the scan missed nothing. A
+cache with only the embedded groups (12,104) renders a **black title screen** — that is the failure this section
+exists to prevent. Measured on the portable package: the archive scan yields 12,132 `.spv` in 187 s at 10 jobs.
+
+**12,154 is an upper bound, not the target** (corrected 2026-11-19, handover 163). `ndsr.pck` is the game's own
+tensor-core upscaler (NDSR) container. Its control table names 12 further compute variants that the retail title
+**never dispatches**: 0 hits across 8,502 recorded requests on the docked machine and 2,184 on a fresh handheld
+session (234 s, 60 fps, 0 missing-shader lines). They are deliberately **not** installed — adding them would put
+dead entries in the cache, and the four NDSR kernels the game does run every frame are already in 12,132. A shipped
+setup therefore stops at 12,137, and that is a complete cache.
+
+```powershell
+<python> tools\shader\cache\build_cache.py --ard <romfs>\bf2.ard --cache <install>\shader_cache\spirv `
+    --harness <tools>\spirv_harness\spirv_harness.exe --work <install>\build\shader-cache --jobs 10
+```
+
+**First launch.** Whatever the archive cannot name is collected by running the game **headless for about 24 seconds**
+(`NXRT_NVN_DUMP_MISSING`), translating those blocks, and only then opening the window. Progress is printed as
+`PREFILL:` lines and written to `work\prefill.status` (`phase`, `elapsed`, `budget`, `collected`, `note`) so a
+front end can show it. Collection runs once per cache (`work\.prefilled`); `-noprefill` skips it, and a collector
+that dies early leaves the marker unwritten so the next launch tries again.
 
 **Later launches** need nothing. New areas keep asking for shaders the cache has never seen: those are collected when
 the game exits and translated, so the *next* launch is complete. The first time you enter an area with unseen
 shaders, that area renders with gaps until you restart.
 
-**Rebuilding offline.** `tools\shader-cache\` walks your own dump and needs nothing else:
+**Rebuilding offline.** `tools\shader\cache\` walks your own dump and needs nothing else:
 
 ```powershell
-python tools\shader-cache\ard_index.py        --ard <romfs>\bf2.ard --out work\files.tsv
-python tools\shader-cache\extract_embedded.py --ard <romfs>\bf2.ard --tsv work\files.tsv --out work\blocks
-python tools\shader-cache\build_cache.py      --blocks work\blocks `
+python tools\shader\cache\ard_index.py        --ard <romfs>\bf2.ard --out work\files.tsv
+python tools\shader\cache\extract_embedded.py --ard <romfs>\bf2.ard --tsv work\files.tsv --out work\blocks
+python tools\shader\cache\build_cache.py      --blocks work\blocks `
        --cache xc2\build\boot\shader_cache\spirv --harness <spirv_harness.exe>
 ```
 
@@ -177,7 +205,9 @@ path alone is complete.
 **Stencil samplers.** `format-07753` (a float sampler reading a stencil plane as an integer) is undefined behaviour
 on NVIDIA and can end in a lost device. `tools\shader\patch_ds_samplers.py` retypes the affected samplers; the
 launcher runs it automatically after a session that reported them, using your own log, so nothing derived from the
-game is distributed.
+game is distributed. The runtime names each of them once per (shader, binding) as `ds_debug: fs <hash> ...` in every
+log — the `[nvn] ds_debug` switch used to gate that, which meant the one run that mattered, the one that lost the
+device, recorded nothing to patch from (issue #10, 2026-11-19).
 
 ## 5. Run
 

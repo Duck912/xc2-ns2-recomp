@@ -187,6 +187,16 @@ void sleep_ns(int64_t ns);               // high-resolution sleep; <= 0 yields
 uint32_t arbitrate_lock(uint32_t owner_handle, uint64_t addr, uint32_t tag);
 uint32_t arbitrate_unlock(uint64_t addr);
 uint32_t wait_process_wide_key(uint64_t mutex, uint64_t key, uint32_t tag, int64_t timeout_ns);
+// Wakes a guest nn::os::SystemEvent from the host: its futex word (a process-wide key at +0x20 of the type) is where
+// TimedWaitSystemEvent parks, and the handle alone leaves that waiter asleep.
+void signal_system_event(uint64_t ev);
+// True while a guest thread is parked on this process-wide key (used to retry a signal a waiter may have missed).
+bool any_waiter_on(uint64_t key);
+// SystemEventTypes a guest thread parked on (its futex said so): the movie player waits on one of its own, and the library that
+// should signal it is the one this port replaces, so deliveries wake them here.
+void watch_system_event(uint64_t ev);
+void clear_watched_system_events();   // a movie starting: only what parks after it belongs to the player
+size_t watched_system_events(uint64_t* out, size_t max);
 uint32_t signal_process_wide_key(uint64_t key, int32_t count);
 uint32_t wait_for_address(uint64_t addr, uint32_t arb_type, int32_t value, int64_t timeout_ns);     // 0 less, 1 dec+less, 2 equal
 uint32_t signal_to_address(uint64_t addr, uint32_t signal_type, int32_t value, int32_t count);     // 0 signal, 1 +1 if equal, 2 modify by waiting

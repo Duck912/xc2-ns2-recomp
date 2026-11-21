@@ -90,7 +90,7 @@ Save-Section 'device-lost.txt' $lost
 
 # 4. what was running: the exe, the ini, the shader patches, the toolchain
 $env_lines = @()
-$exe = Join-Path $root 'xc2\build\boot-301\xc2_boot.exe'
+$exe = Join-Path $root 'xc2\build\301\boot\xc2_boot.exe'
 if (Test-Path $exe) { $i = Get-Item $exe; $env_lines += ('exe        {0}  {1:N1} MB  {2}' -f $i.LastWriteTime, ($i.Length / 1MB), $i.FullName) }
 $ini = Join-Path $root 'xc2\build\boot\nxrt.ini'
 if (Test-Path $ini) {

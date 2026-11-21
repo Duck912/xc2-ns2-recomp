@@ -265,6 +265,39 @@ VkDescriptorPool new_dpool() {
     return p;
 }
 
+// VK_EXT_device_fault (enabled in vk_device.cpp): the reason the driver gives when it drops the device, instead of only the
+// -4 vkQueueSubmit2 returned. Empty when the extension is not there, which is the case for every driver that has no support -
+// the entry point is only resolvable on a device that enabled it. Called once, from the first failed submit. Issue 10 and
+// issue 4 both end here with nothing but "-4", and the N card reports have cost three rounds of guessing.
+static std::string device_fault_text(VkDevice dev) {
+    auto pfn = reinterpret_cast<PFN_vkGetDeviceFaultInfoEXT>(vkGetDeviceProcAddr(dev, "vkGetDeviceFaultInfoEXT"));
+    if (!pfn) return {};
+    VkDeviceFaultCountsEXT counts = {VK_STRUCTURE_TYPE_DEVICE_FAULT_COUNTS_EXT};
+    if (pfn(dev, &counts, nullptr) != VK_SUCCESS) return {};
+    std::vector<VkDeviceFaultAddressInfoEXT> addrs(counts.addressInfoCount);
+    std::vector<VkDeviceFaultVendorInfoEXT> vendors(counts.vendorInfoCount);
+    VkDeviceFaultInfoEXT info = {VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_EXT};
+    info.pAddressInfos = addrs.empty() ? nullptr : addrs.data();
+    info.pVendorInfos = vendors.empty() ? nullptr : vendors.data();
+    if (pfn(dev, &counts, &info) != VK_SUCCESS) return {};
+    char buf[400];
+    std::string out;
+    std::snprintf(buf, sizeof buf, "description '%s'", info.description[0] ? info.description : "(none)");
+    out = buf;
+    for (const VkDeviceFaultAddressInfoEXT& a : addrs) {
+        std::snprintf(buf, sizeof buf, "; address 0x%llx (type %d, precision 0x%llx)",
+                      static_cast<unsigned long long>(a.reportedAddress), static_cast<int>(a.addressType),
+                      static_cast<unsigned long long>(a.addressPrecision));
+        out += buf;
+    }
+    for (const VkDeviceFaultVendorInfoEXT& v : vendors) {
+        std::snprintf(buf, sizeof buf, "; vendor '%s' code 0x%llx data 0x%llx", v.description,
+                      static_cast<unsigned long long>(v.vendorFaultCode), static_cast<unsigned long long>(v.vendorFaultData));
+        out += buf;
+    }
+    return out;
+}
+
 // Hands the recorded submissions of the batch to the GPU in one vkQueueSubmit2, in recording order, signalling the timeline with the last
 // serial (the earlier ones of the batch complete with it). Every kernel submission costs a pass over all memory the device holds: on Linux
 // (Proton, RADV) the multi-gigabyte host-memory pool imports are user pages the kernel looks up again on each one, about 2 ms a
@@ -300,6 +333,8 @@ void flush_batch() {
         static std::atomic<bool> told{false};
         if (!told.exchange(true)) {
             NXLOG_E(kTag, "vkQueueSubmit2 failed (%d): the device is lost or out of memory", static_cast<int>(r));
+            if (const std::string why = device_fault_text(g->dev->device()); !why.empty())
+                NXLOG_E(kTag, "device fault: %s", why.c_str());
             // A host signal used to "keep the timeline moving" here. It cannot: once the device is lost the semaphore
             // belongs to it, the signal fails too, and the attempt is a spec violation anyway - the value being
             // signalled is still pending on the queue (VUID-VkSemaphoreSignalInfo-value-03259). Report it once and
@@ -781,7 +816,11 @@ void submit_recorded() {
 
 bool take_batch_for_present(std::vector<VkCommandBuffer>* cmds, gfx::Renderer::SubmitPrefix* p) {
     if (!g || !g->frame_batch || g->batch.empty()) {
+        // The frame's draws go to the GPU on their own submission here. The present then copies the window texture they
+        // write, and nothing on the queue orders the two: hand the timeline value the flush signalled to the present, so
+        // its submit waits for the draws (issue: N card stripes/flicker, the copy overtaking the frame).
         submit_recorded();
+        if (g) { p->wait = g->timeline; p->wait_value = g->flushed; }
         return false;
     }
     cmds->clear();
@@ -1332,6 +1371,10 @@ void backend_flush_caches() {
 
 void backend_trace_next_frame() {
     if (be::gpu::active()) be::gpu::replay_request_trace();
+}
+
+void backend_trace_frames(int count) {
+    if (be::gpu::active()) be::gpu::replay_request_trace_span(count);
 }
 
 void set_keep_aspect(bool on) {

@@ -1,7 +1,7 @@
 # XC2 NS2 recomp - keep only what is needed to rebuild this project
 
 # ---- 构建产物（可重建） ----
-build/
+/build/
 xc2/build/
 third_party/fefw-recomp/build/
 *.obj
@@ -42,6 +42,11 @@ third_party/xc2-recomp-ref/
 
 # ---- 内部文档（过程日志、交接、事故记录）：本地保留，不进公开分支 ----
 docs/internal/
+
+# ---- 运行时生成的 Vulkan 缓存（机器相关，32 MB） ----
+pipeline_cache.bin
+pipeline_keys.bin
+shader_order.txt
 
 # ---- 杂项 ----
 *.bak-*

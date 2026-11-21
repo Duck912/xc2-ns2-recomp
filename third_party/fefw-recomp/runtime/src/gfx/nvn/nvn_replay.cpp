@@ -8,6 +8,8 @@
 // handles never dropped by count, deferred bind arrays read at record time.
 #include <atomic>
 #include <algorithm>
+#include <deque>
+#include <mutex>
 #include <cstdio>
 #include <chrono>
 #include <cstdlib>
@@ -23,6 +25,7 @@
 #include <intrin.h>
 
 #include "nxrt/config.h"
+#include "nxrt/diag.h"
 #include "nxrt/frame_limiter.h"
 #include "nxrt/ftrace.h"
 #include "nxrt/gauge.h"
@@ -484,6 +487,7 @@ bool g_trigger_read = false, g_trigger_seen = false, g_trigger_done = false;
 int64_t g_trigger_present = -1;
 int g_trace_n = 0;
 std::atomic<bool> g_trace_req{false};   // backend_trace_next_frame(): trace the first whole frame after this flag is seen
+std::atomic<int64_t> g_trace_span{0};    // backend_trace_frames(n): trace this many consecutive frames (no RT dumps unless asked)
 #define TRACE(...) do { if (g_trace) NXLOG_I("nvn.trace", __VA_ARGS__); } while (0)
 
 // [nvn] trace_compact = 0|1|2 (NXRT_NVN_TRACE_COMPACT, default 0 = auto): what a traced draw prints.
@@ -602,6 +606,7 @@ bool barrier_keeps_pass() {
 // one log line (nvn.rstats) gives the averages per frame and per draw, with the counts behind them. Render thread only.
 enum RsZone : int { kRsHead, kRsPrep, kRsFb, kRsPass, kRsPipe, kRsDyn, kRsSets, kRsVb, kRsCall, kRsOut, kRsDispatch, kRsAll, kRsAlloc,
                    kRsKey, kRsLookup, kRsBind,   // the three parts of the pipe zone (nested timers, they do not disturb the marks)
+                   kRsPrepAttach, kRsPrepTex, kRsPrepUpscale,   // the three parts of the prep zone: attachments, textures, upscale
                    kRsN };
 struct RStats {
     uint64_t cyc[kRsN] = {};
@@ -680,6 +685,9 @@ void rs_report() {
     NXLOG_I("nvn.rstats", "set 0 pushes/frame: full %.0f delta %.0f none %.0f, writes %.0f (lean_draws %s, push_uniforms %s, ubo_only_rebind %s)",
             static_cast<double>(g_lean_push_full) * pf, static_cast<double>(g_lean_push_delta) * pf, static_cast<double>(g_lean_push_none) * pf,
             static_cast<double>(g_lean_push_writes) * pf, lean_on() ? "on" : "off", push_uniforms_on() ? "on" : "off", ubo_only_rebind_on() ? "on" : "off");
+    // What the prep zone is made of: the attachment/stencil decisions, prepare_textures, and the upscale hookup.
+    NXLOG_I("nvn.rstats", "prep split: attach %.2f, textures %.2f, upscale %.2f us/draw (prep zone %.2f)",
+            dus(kRsPrepAttach), dus(kRsPrepTex), dus(kRsPrepUpscale), dus(kRsPrep));
     // [nvn] replay_stats (round 45): what the pipe zone is made of - the key build, the pipeline lookup and the bind.
     NXLOG_I("nvn.rstats", "pipe split: key %.2f lookup %.2f bind %.2f us/draw (pipe zone %.2f; %.0f keys/frame)",
             dus(kRsKey), dus(kRsLookup), dus(kRsBind), dus(kRsPipe), s.keys * pf);
@@ -1376,7 +1384,10 @@ bool g_fb_seen = false;                                    // the last check fou
 //   [nvn] fb_memo: 0 = off, 1 = on, 2 = check (recompute on a hit, report a mismatch; xc2-recomp calls this XC2_TEX_MEMO=2)
 uint64_t g_bind_gen = 1;
 int fb_memo_mode() {
-    static const int mode = static_cast<int>(std::clamp<int64_t>(nxrt::config_get_int("nvn", "fb_memo", 0), 0, 2));
+    // Default 1 since 2026-11-21: the scan costs 7.4 us per draw in the DLC's rainforest (11 ms a frame at 1543 draws) and
+    // the memo cuts it to 4.2; mode 1 recomputes the first 20,000 hits and then one in 256, so a wrong answer shows up in
+    // the log instead of silently binding the wrong copy.
+    static const int mode = static_cast<int>(std::clamp<int64_t>(nxrt::config_get_int("nvn", "fb_memo", 1), 0, 2));
     return mode;
 }
 struct FbMemoKey {
@@ -1446,13 +1457,22 @@ void feedback_prepare(const ProgLayout& pl) {
         if (b.nvn.source != NvnSource::SamplerBinding && b.nvn.source != NvnSource::HandleInUniform) continue;
         TexResolved tmp;
         const TexResolved& r = resolve_texture_ref(d, tmp);
-        // [nvn] fb_debug: why a binding of one fragment shader is or is not treated as a self-sampled attachment (HANDOVER 90).
+        // [nvn] fb_debug: why a binding of a fragment shader is or is not treated as a self-sampled attachment (HANDOVER 90).
+        // [nvn] fb_debug_hash: a shader hash prefix to watch ("17cdd28d" is the one HANDOVER 90 used). Empty reports every
+        // binding that IS a self-sampled attachment, which is what a "one material flickers" report needs (issue 15: the eyes
+        // during a blink, the mouth while it speaks); capped so a busy scene cannot flood the log.
         static const bool fb_debug = nxrt::config_get_bool("nvn", "fb_debug", false);   // once: the loop below runs per sampler binding
-        if (fb_debug && S.stage[kFragment] && S.stage[kFragment]->hash.compare(0, 8, "17cdd28d") == 0) {
-            NXLOG_I(kTag, "fb_debug: fs %s binding set%u b%u tex t%s gpu %d feedback %d samples %u used %d ncolor %u",
-                    S.stage[kFragment]->hash.c_str(), d.set, d.binding, r.tex ? std::to_string(r.tex->id).c_str() : "-",
-                    r.tex ? (tex_gpu(r.tex) ? 1 : 0) : -1, r.tex ? (is_color_feedback(r.tex) ? 1 : 0) : -1,
-                    r.tex ? r.tex->b.samples : 0u, r.tex ? (g_fb_use.count(r.tex) ? 1 : 0) : -1, S.ncolor);
+        static const std::string fb_debug_hash = nxrt::config_get_str("nvn", "fb_debug_hash", "");
+        if (fb_debug && S.stage[kFragment]) {
+            const bool feedback = r.tex && tex_gpu(r.tex) && is_color_feedback(r.tex);
+            const bool wanted = fb_debug_hash.empty() ? feedback : S.stage[kFragment]->hash.rfind(fb_debug_hash, 0) == 0;
+            static std::atomic<uint32_t> fb_logged{0};
+            if (wanted && (fb_debug_hash.size() || fb_logged.fetch_add(1) < 500)) {
+                NXLOG_I(kTag, "fb_debug: fs %s binding set%u b%u tex t%s gpu %d feedback %d samples %u used %d ncolor %u",
+                        S.stage[kFragment]->hash.c_str(), d.set, d.binding, r.tex ? std::to_string(r.tex->id).c_str() : "-",
+                        r.tex ? (tex_gpu(r.tex) ? 1 : 0) : -1, r.tex ? (is_color_feedback(r.tex) ? 1 : 0) : -1,
+                        r.tex ? r.tex->b.samples : 0u, r.tex ? (g_fb_use.count(r.tex) ? 1 : 0) : -1, S.ncolor);
+            }
         }
         if (!r.tex || !tex_gpu(r.tex) || !is_color_feedback(r.tex) || r.tex->b.samples > 1 || g_fb_use.count(r.tex)) continue;
         any = true;
@@ -2410,13 +2430,17 @@ VkDescriptorSet build_set(const ProgLayout& pl, uint32_t set) {
                     static const std::string list = nxrt::config_get_str("nvn", "ds_depth_shaders", "");
                     if (!list.empty() && list.find(S.stage[kFragment]->hash) != std::string::npos) vr.depth_aspect = true;
                 }
-                // [nvn] ds_debug: which fragment shaders read a depth-stencil texture's STENCIL plane through a float
-                // sampler. That descriptor is illegal in Vulkan (VUID-vkCmdDrawIndexed-format-07753, the view is
-                // S8_UINT and the shader declares float) but it is what reproduces Maxwell's "the integer lands in the
-                // float register unchanged". AMD tolerates it, NVIDIA is free to return anything. Each shader is
-                // reported once, so a short run names the whole set that would need a uint-sampling patch.
-                static const bool ds_debug = nxrt::config_get_bool("nvn", "ds_debug", false);
-                if (ds_debug && tex_is_depth(r.tex) && vr.component == 1 && !vr.depth_aspect && S.stage[kFragment]) {
+                // Which fragment shaders read a depth-stencil texture's STENCIL plane through a float sampler. That
+                // descriptor is illegal in Vulkan (VUID-vkCmdDrawIndexed-format-07753: the view is S8_UINT, the shader
+                // declares float) but it is what reproduces Maxwell's "the integer lands in the float register
+                // unchanged". AMD tolerates it; NVIDIA is free to return anything and does - it can lose the device,
+                // which reaches the player as a frozen "Loading" screen with the music still playing.
+                //
+                // Reported always, once per (shader, binding), because tools/shader/patch_ds_samplers.py can only
+                // rewrite modules a log names. This used to sit behind [nvn] ds_debug, which meant the one run that
+                // mattered - the one that died - was the one with nothing to patch it with (issue #10, 2026-11-19).
+                // The set is bounded by the title's own shaders and each entry costs one line.
+                if (tex_is_depth(r.tex) && vr.component == 1 && !vr.depth_aspect && S.stage[kFragment]) {
                     static std::set<std::string> told;
                     const std::string& h = S.stage[kFragment]->hash;
                     char key[96];
@@ -3109,6 +3133,18 @@ const int ff_mode = std::clamp(hot_int("front_face", ff_cfg), 0, 3);   // live: 
         VkFrontFace ff = vk_front_face(S.poly.front_face);
         const bool vp_flipped = S.window_origin != NVN_WINDOW_ORIGIN_MODE_LOWER_LEFT;
         const bool flip_ff = ff_mode == 3 || (ff_mode == 1 && vp_flipped) || (ff_mode == 0 && !vp_flipped);
+        // Which way front face is being decided, once per change: a culling disagreement shows up as a part of a model
+        // vanishing for a frame, and this line is what tells that apart from a texture or shader problem.
+        {
+            static int last_mode = -1, last_org = -1;
+            const int org = static_cast<int>(S.window_origin);
+            if (ff_mode != last_mode || org != last_org) {
+                last_mode = ff_mode;
+                last_org = org;
+                NXLOG_I(kTag, "front face: window origin %s, [nvn] front_face_mode %d -> flip %d",
+                        S.window_origin == NVN_WINDOW_ORIGIN_MODE_LOWER_LEFT ? "lower-left" : "upper-left", ff_mode, flip_ff ? 1 : 0);
+            }
+        }
         if (flip_ff) ff = ff == VK_FRONT_FACE_CLOCKWISE ? VK_FRONT_FACE_COUNTER_CLOCKWISE : VK_FRONT_FACE_CLOCKWISE;
         vkCmdSetFrontFace(cb, ff);
         vkCmdSetRasterizerDiscardEnable(cb, S.rasterizer_discard);
@@ -3780,6 +3816,7 @@ bool begin_draw(int mode, bool indexed, int index_type, VkPrimitiveTopology* top
         // sampled and stencil-written in the same pass: the attachment has to be GENERAL, or the sampler's layout and the
         // attachment's disagree (VUID-vkCmdDrawIndexed-imageLayout-00344). The stencil write itself is unaffected.
         g_depth_general = samples_depth && stencil_writes;
+        rs_mark(kRsPrepAttach);
         prepare_textures(*pl);
         // A colour attachment that this draw also writes through a storage image (image load/store to a render
         // target) cannot stay in the colour-attachment layout: the descriptor is GENERAL, so the attachment has to be
@@ -3788,6 +3825,7 @@ bool begin_draw(int mode, bool indexed, int index_type, VkPrimitiveTopology* top
         for (uint32_t i = 0; i < S.ncolor; ++i)
             for (Texture* st : g_storage_bound)
                 if (S.color_tex[i].get() == st) g_color_general |= 1u << i;
+        rs_mark(kRsPrepTex);
         // [nvn] fs_debug: a fragment output whose numeric type disagrees with the colour attachment it lands in, or
         // lands in nothing. Both are Undefined-Value warnings in Vulkan; the console stores the register bits
         // unchanged, so the fix is a shader variant - but which shader is not visible from the VUID, only from here.
@@ -3841,6 +3879,7 @@ bool begin_draw(int mode, bool indexed, int index_type, VkPrimitiveTopology* top
             }
         }
         scene_upscale_for_draw(*pl);
+        rs_mark(kRsPrepUpscale);
     }
     rs_mark(kRsPrep);
     if (S.ncolor && fg_hudless_candidate(S.color_tex[0].get(), (S.color.blend_enable_mask & 1u) != 0)) {   // frame generation: the scene before the UI
@@ -4486,9 +4525,54 @@ bool bind_u32_indices(const std::vector<uint32_t>& idx) {
     return true;
 }
 
+// [nvn] draw_ring = N (default 32, 0 = off): the last N draws the replay submitted, printed by the freeze watchdog. A GPU that
+// hangs gives no error of its own - the only thing left is which draws it was given just before it stopped, and that is what
+// this keeps (the freeze dump otherwise shows threads waiting on a fence and nothing else).
+struct RingDraw {
+    long long frame;
+    std::string vs, fs;
+    uint32_t count, instances;
+    bool indexed;
+};
+std::mutex g_ring_mu;
+std::deque<RingDraw> g_ring;
+size_t draw_ring_cap() {
+    static const size_t n = static_cast<size_t>(std::clamp<int64_t>(nxrt::config_get_int("nvn", "draw_ring", 32), 0, 256));
+    return n;
+}
+void draw_ring_note(uint32_t count, uint32_t instances, bool indexed) {
+    const size_t cap = draw_ring_cap();
+    if (!cap) return;
+    RingDraw d;
+    d.frame = static_cast<long long>(counters().presents.load());
+    d.vs = S.stage[kVertex] ? S.stage[kVertex]->hash : "-";
+    d.fs = S.stage[kFragment] ? S.stage[kFragment]->hash : "-";
+    d.count = count;
+    d.instances = instances;
+    d.indexed = indexed;
+    std::lock_guard<std::mutex> lk(g_ring_mu);
+    g_ring.push_back(std::move(d));
+    while (g_ring.size() > cap) g_ring.pop_front();
+}
+std::string draw_ring_report() {
+    if (!draw_ring_cap()) return "";
+    std::string out = "\n--- the last draws the replay submitted ([nvn] draw_ring, oldest first) ---\n";
+    std::lock_guard<std::mutex> lk(g_ring_mu);
+    if (g_ring.empty()) return out + "(none recorded)\n";
+    char line[512];
+    for (const RingDraw& d : g_ring) {
+        std::snprintf(line, sizeof line, "frame %lld  fs %s  vs %s  %s  count %u  instances %u\n", d.frame, d.fs.c_str(), d.vs.c_str(),
+                      d.indexed ? "indexed" : "arrays", d.count, d.instances);
+        out += line;
+    }
+    return out;
+}
+static const bool g_ring_registered = (nxrt::diag_add_report(draw_ring_report), true);
+
 // [nvn] draw_log_vs = <comma list of vertex shader hash prefixes> (debug, empty = off): every draw with one of them is logged at Info under
 // nvn.drawlog with the presented frame, the counts and the vertex stage's first four uniform blocks (notes/fps120.md, typewriter hunt).
 void draw_log(uint32_t count, uint32_t instances, bool indexed) {
+    draw_ring_note(count, instances, indexed);
     static const std::vector<std::string> prefixes = [] {
         std::vector<std::string> v;
         const std::string s = nxrt::config_get_str("nvn", "draw_log_vs", "");
@@ -6057,6 +6141,12 @@ void replay_begin_submit(Frame& f) {
     }
     if (g_trace_req.exchange(false)) g_trace_frame = static_cast<int64_t>(counters().presents.load()) + 1;   // armed from a script (@shot nvntrace_*)
     g_trace = g_trace_frame >= 0 && static_cast<int64_t>(counters().presents.load()) == g_trace_frame;
+    // A span from one key press: the frames a flicker alternates over cannot be hit by hand, and with trace_targets set to a
+    // target that is never drawn the cost is the draw list only.
+    if (const int64_t span = g_trace_span.load(std::memory_order_relaxed); span > 0) {
+        g_trace_span.store(span - 1, std::memory_order_relaxed);
+        g_trace = true;
+    }
     for (int64_t e : g_trace_extra) g_trace |= static_cast<int64_t>(counters().presents.load()) == e;
     if (g_trace) {
         g_trace_n = 0;
@@ -6151,6 +6241,7 @@ void replay_lists(Frame& f, const std::vector<Ref<CmdList>>& lists) {
 }
 
 void replay_request_trace() { g_trace_req.store(true); }
+void replay_request_trace_span(int count) { g_trace_span.store(count > 0 ? count : 1); }
 
 // [nvn] trace: the end-of-frame answer to "which blended draws ignore the scene's depth" (HANDOVER 42.3). One line per group of
 // (target, fragment shader, blend, effective depth state), with the draw numbers, sorted by how many draws the group has: a card

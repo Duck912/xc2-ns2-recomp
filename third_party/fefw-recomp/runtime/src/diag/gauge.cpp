@@ -34,6 +34,7 @@ Registry& reg() {
 // ---- frame times of the window -------------------------------------------------------------------------------------------
 constexpr size_t kRing = 1 << 16;           // frames kept between two samples (enough for 6,500 fps at a 10 s window)
 std::atomic<uint64_t> g_ring_n{0};
+std::atomic<uint64_t> g_film_end{0};   // QPC ticks of the last film end, 0 before the first: the summaries tag themselves with its age
 std::atomic<uint64_t> g_ring[kRing];        // QueryPerformanceCounter ticks of each presented frame
 
 uint64_t qpc() {
@@ -62,6 +63,7 @@ std::atomic<uint64_t> g_t0_ticks{0};
 
 // phase timers (HitchPhase): QPC ticks summed over all threads
 std::atomic<uint64_t> g_phase[kHpCount];
+uint64_t g_sum_phase[kHpCount] = {};                 // phase totals at the previous 10 s summary: the per-frame split
 uint64_t g_prev_phase[kHpCount];                  // at the previous frame; the presenting thread only
 std::atomic<uint64_t> g_game_present_last{0};     // QPC of the game's latest present call
 std::atomic<uint64_t> g_game_gap_max{0};          // longest gap between two game present calls since the last presented frame
@@ -248,8 +250,30 @@ void monitor_run(double summary_s) {
             if (n > 0) seen_frames = true;
             if (!dt.empty()) {
                 const FrameStats st = stats_of(dt);
-                NXLOG_I("hitch", "%llu frames in %.1f s: mean %.1f fps, 1%% low %.1f fps, worst %.1f ms, %zu over 2x the median (%.1f ms)",
-                        (unsigned long long)window_frames, st.span_s, st.mean_fps, st.low1_fps, st.worst_ms, st.over2x, st.median_ms);
+                char film[64] = "";
+                const uint64_t fe = g_film_end.load(std::memory_order_relaxed);
+                if (fe) {
+                    const double age = static_cast<double>(hitch_ticks() - fe) / static_cast<double>(qpc_freq());
+                    if (age >= 0.0 && age <= 120.0) snprintf(film, sizeof film, "  [film ended %.1f s before this window]", age);
+                }
+                NXLOG_I("hitch", "%llu frames in %.1f s: mean %.1f fps, 1%% low %.1f fps, worst %.1f ms, %zu over 2x the median (%.1f ms)%s",
+                        (unsigned long long)window_frames, st.span_s, st.mean_fps, st.low1_fps, st.worst_ms, st.over2x, st.median_ms, film);
+                // Where the average frame of the window went. The slow-frame lines above describe the tail; this is what an
+                // ordinary frame costs, which is what a steady 30 fps is made of.
+                if (window_frames) {
+                    const double per = 1000.0 / static_cast<double>(window_frames) / static_cast<double>(qpc_freq());
+                    auto d = [&](int p) {
+                        const uint64_t now_p = g_phase[p].load(std::memory_order_relaxed);
+                        const uint64_t was = g_sum_phase[p];
+                        g_sum_phase[p] = now_p;
+                        return now_p > was ? static_cast<double>(now_p - was) * per : 0.0;
+                    };
+                    NXLOG_I("hitch",
+                            "per frame: replay %.1f, idle %.1f, present %.1f, gpuWait %.1f, upload %.1f, pipe %.1f, poolImport %.1f, "
+                            "guestSvc %.1f, guestWait %.1f ms",
+                            d(kHpRenderReplay), d(kHpRenderIdle), d(kHpRenderPresent), d(kHpRenderGpuWait), d(kHpRenderUpload),
+                            d(kHpRenderPipeline), d(kHpPoolImport), d(kHpGameSvc), d(kHpGameWait));
+                }
             } else if (seen_frames) {
                 NXLOG_W("hitch", "no frame presented in the last %.1f s", summary_s);
             }
@@ -339,6 +363,8 @@ void run(double interval_s, double t0) {
 }
 
 }  // namespace
+
+void hitch_note_film_end() { g_film_end.store(hitch_ticks(), std::memory_order_relaxed); }
 
 void gauge_register(const char* name, std::function<int64_t()> fn) {
     Registry& r = reg();

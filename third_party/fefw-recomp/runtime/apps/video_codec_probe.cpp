@@ -26,6 +26,19 @@
 #include "nxrt/game.h"
 #include "nxrt/video_codec.h"
 
+// The probe links nxrt.lib without the graphics runtime: these are the few GPU-side symbols the media and game objects it pulls in
+// still reference. No GPU work happens here, so "everything the GPU was asked to do is done" is the honest answer.
+namespace nxrt::gfx {
+void wait_screenshot_writes() {}
+}
+namespace nxrt::nvn::be::gpu {
+uint64_t last_serial() { return 0; }
+bool serial_done(uint64_t) { return true; }
+}
+namespace nxrt::extras {
+void hdr_note_layer_luminance(bool, uint32_t, uint32_t) {}
+}
+
 using namespace nxrt;
 
 namespace {
@@ -47,6 +60,10 @@ uint64_t call(const char* name, std::initializer_list<uint64_t> regs, std::initi
 template <class T> uint64_t P(T* p) { return reinterpret_cast<uint64_t>(p); }
 
 constexpr const char* kMakePref = "_ZN2nn5codec25MakeDecodeImagePreferenceEttNS0_24VideoDecoderOutputFormatENS0_9CodecModeE";
+// SDK 3.0.1 (the movie library in Xenoblade 2's subsdk0): tiling mode instead of codec mode, no codec mode on the pool, and the
+// AV1 decoder under its ByTransferMemory name.
+constexpr const char* kMakePrefTs = "_ZN2nn5codec25MakeDecodeImagePreferenceEttNS0_24VideoDecoderOutputFormatENS0_15ImageTilingModeE";
+constexpr const char* kInitPoolTs = "_ZN2nn5codec26InitializeDecoderImagePoolEPNS0_25VideoDecoderImagePoolTypeEPvmRKNS0_27VideoDecoderImagePreferenceEj";
 constexpr const char* kCalcPool = "_ZN2nn5codec31CalculateDecoderImagePoolBufferEPmS1_RKNS0_27VideoDecoderImagePreferenceEj";
 constexpr const char* kInitPool = "_ZN2nn5codec26InitializeDecoderImagePoolEPNS0_25VideoDecoderImagePoolTypeEPvmRKNS0_27VideoDecoderImagePreferenceEjNS0_9CodecModeE";
 constexpr const char* kReadNv12 = "_ZN2nn5codec26ReadDecoderOutputImageNv12EPKNS0_25VideoDecoderImagePoolTypeEjttttPvmmS4_mm";
@@ -58,6 +75,15 @@ constexpr const char* kAcquire = "_ZN2nn5codec29AcquireVp9DecoderOutputBufferEPj
 constexpr const char* kRelease = "_ZN2nn5codec29ReleaseVp9DecoderOutputBufferEPNS0_14Vp9DecoderTypeEjNS_2gs16NativeSyncHandleE";
 constexpr const char* kProps = "_ZN2nn5codec35GetVp9DecoderOutputBufferPropertiesEPtS1_S1_S1_PNS_8TimeSpanEPbPNS0_14Vp9DecoderTypeEj";
 constexpr const char* kTryWait = "_ZN2nn2gs17TryWaitNativeSyncERKNS0_16NativeSyncHandleE";
+constexpr const char* kInitAv1 = "_ZN2nn5codec36InitializeAv1DecoderByTransferMemoryEPNS0_14Av1DecoderTypeEPvmmttjNS0_23VideoDecoderInputFormatENS0_24VideoDecoderOutputFormatENS0_22VideoDecoderOutputModeE";
+constexpr const char* kFiniAv1 = "_ZN2nn5codec18FinalizeAv1DecoderEPNS0_14Av1DecoderTypeE";
+constexpr const char* kRegisterAv1 = "_ZN2nn5codec24RegisterAv1DecoderBufferEPNS0_14Av1DecoderTypeEjPNS0_25VideoDecoderImagePoolTypeEj";
+constexpr const char* kSubmitAv1 = "_ZN2nn5codec27SubmitAv1DecoderInputBufferEPNS0_14Av1DecoderTypeEPKvmNS_8TimeSpanEb";
+constexpr const char* kAcquireAv1 = "_ZN2nn5codec29AcquireAv1DecoderOutputBufferEPjPNS_2gs16NativeSyncHandleEPNS0_14Av1DecoderTypeE";
+constexpr const char* kReleaseAv1 = "_ZN2nn5codec29ReleaseAv1DecoderOutputBufferEPNS0_14Av1DecoderTypeEjNS_2gs16NativeSyncHandleE";
+constexpr const char* kPropsAv1 = "_ZN2nn5codec35GetAv1DecoderOutputBufferPropertiesEPtS1_S1_S1_PNS_8TimeSpanEPbPNS0_14Av1DecoderTypeEj";
+constexpr const char* kEventAv1 = "_ZN2nn5codec33GetAv1DecoderSubmissionReadyEventEPNS0_14Av1DecoderTypeE";
+constexpr const char* kStartAv1 = "_ZN2nn5codec15StartAv1DecoderEPNS0_14Av1DecoderTypeE";
 
 // ---- a minimal Matroska reader --------------------------------------------------------------------------------------------------
 struct Packet {
@@ -70,6 +96,7 @@ struct Webm {
     uint64_t video_track = 0;
     uint32_t w = 0, h = 0;
     std::string codec;
+    std::vector<uint8_t> config;   // CodecPrivate: the AV1CodecConfigurationRecord (av1C) of an AV1 track
     std::vector<Packet> video;
 };
 bool vint(const std::vector<uint8_t>& b, size_t& o, uint64_t& v, bool keep_marker) {
@@ -95,6 +122,7 @@ bool parse(Webm& m, size_t max_frames) {
     int64_t cluster_ms = 0;
     uint64_t cur_track = 0;
     std::string cur_codec;
+    std::vector<uint8_t> cur_config;
     uint32_t cur_w = 0, cur_h = 0;
     while (o < b.size() && m.video.size() < max_frames) {
         uint64_t id, size;
@@ -105,21 +133,30 @@ bool parse(Webm& m, size_t max_frames) {
             continue;
         case 0xAE:   // TrackEntry: enter, the track is taken at its end (below) - entries are small, so parse its children here
         {
-            cur_track = 0; cur_codec.clear(); cur_w = cur_h = 0;
+            cur_track = 0; cur_codec.clear(); cur_w = cur_h = 0; cur_config.clear();
             const size_t end = body + size;
             size_t q = body;
             while (q < end) {
                 uint64_t cid, cs;
                 if (!vint(b, q, cid, true) || !vint(b, q, cs, false)) break;
+                const size_t cbody = q;
                 if (cid == 0xD7) cur_track = uint_be(&b[q], cs);
                 else if (cid == 0x86) cur_codec.assign(reinterpret_cast<const char*>(&b[q]), cs);
-                else if (cid == 0xE0) continue;   // Video: enter
-                else if (cid == 0xB0) cur_w = static_cast<uint32_t>(uint_be(&b[q], cs));
-                else if (cid == 0xBA) cur_h = static_cast<uint32_t>(uint_be(&b[q], cs));
-                q += cs;
+                else if (cid == 0x63A2) cur_config.assign(&b[q], &b[q] + cs);
+                else if (cid == 0xE0) {   // Video: its children are one level down (PixelWidth 0xB0, PixelHeight 0xBA)
+                    size_t vq = cbody, vend = cbody + cs;
+                    while (vq < vend) {
+                        uint64_t vid, vs;
+                        if (!vint(b, vq, vid, true) || !vint(b, vq, vs, false)) break;
+                        if (vid == 0xB0) cur_w = static_cast<uint32_t>(uint_be(&b[vq], vs));
+                        else if (vid == 0xBA) cur_h = static_cast<uint32_t>(uint_be(&b[vq], vs));
+                        vq += vs;
+                    }
+                }
+                q = cbody + cs;
             }
-            if (!m.video_track && cur_codec.rfind("V_VP", 0) == 0) {
-                m.video_track = cur_track; m.codec = cur_codec; m.w = cur_w; m.h = cur_h;
+            if (!m.video_track && (cur_codec.rfind("V_VP", 0) == 0 || cur_codec == "V_AV1")) {
+                m.video_track = cur_track; m.codec = cur_codec; m.w = cur_w; m.h = cur_h; m.config = cur_config;
             }
             o = end;
             continue;
@@ -212,30 +249,49 @@ int main(int argc, char** argv) {
         m.bytes.resize(n);
         f.read(reinterpret_cast<char*>(m.bytes.data()), static_cast<std::streamsize>(n));
     }
-    if (!parse(m, want + 16)) { std::fprintf(stderr, "no VP8/VP9 video track found\n"); return 5; }
-    std::printf("%s: track %llu %s %ux%u, %zu packets read\n", argv[1], (unsigned long long)m.video_track, m.codec.c_str(), m.w, m.h, m.video.size());
-    if (m.codec != "V_VP9") { std::fprintf(stderr, "only VP9 is driven here\n"); return 5; }
+    if (!parse(m, want + 16)) { std::fprintf(stderr, "no VP8/VP9/AV1 video track found\n"); return 5; }
+    std::printf("%s: track %llu %s %ux%u, %zu packets read, %zu bytes of codec configuration\n", argv[1], (unsigned long long)m.video_track,
+                m.codec.c_str(), m.w, m.h, m.video.size(), m.config.size());
+    const bool av1 = m.codec == "V_AV1";
+    if (!av1 && m.codec != "V_VP9") { std::fprintf(stderr, "only VP9 and AV1 are driven here\n"); return 5; }
+    if (!m.w || !m.h) { std::fprintf(stderr, "the track has no pixel size\n"); return 5; }
 
     // the player's setup: a preference for the size, one image pool per output buffer, the decoder, the buffers registered
     constexpr uint32_t kBuffers = 4, kNv12 = 3, kMode = 0;
+    const char* init_pool = av1 ? kInitPoolTs : kInitPool;
     alignas(16) uint8_t pref[64]{};
-    call(kMakePref, {m.w, m.h, kNv12, kMode}, {}, P(pref));
+    call(av1 ? kMakePrefTs : kMakePref, {m.w, m.h, kNv12, kMode}, {}, P(pref));
     uint64_t pool_size = 0, pool_align = 0;
     call(kCalcPool, {P(&pool_size), P(&pool_align), P(pref), 1});
     alignas(16) uint8_t pools[kBuffers][32]{};
     std::vector<uint8_t> pool_mem(pool_size * kBuffers + 0x1000);
-    for (uint32_t i = 0; i < kBuffers; i++) call(kInitPool, {P(pools[i]), P(pool_mem.data()) + i * pool_size, pool_size, P(pref), 1, kMode});
+    for (uint32_t i = 0; i < kBuffers; i++) {
+        if (av1) call(init_pool, {P(pools[i]), P(pool_mem.data()) + i * pool_size, pool_size, P(pref), 1});
+        else call(init_pool, {P(pools[i]), P(pool_mem.data()) + i * pool_size, pool_size, P(pref), 1, kMode});
+    }
     alignas(16) uint8_t dec[256]{};
-    if (call(kInitVp9, {P(dec), 0, m.w, m.h, 0, 0, kNv12}) != 0) { std::fprintf(stderr, "InitializeVp9Decoder failed\n"); return 6; }
-    for (uint32_t i = 0; i < kBuffers; i++) call(kRegister, {P(dec), i, P(pools[i]), 0});
+    const uint64_t init = av1 ? call(kInitAv1, {P(dec), 0, 0, 0, m.w, m.h, 0, 0, kNv12, kMode})
+                              : call(kInitVp9, {P(dec), 0, m.w, m.h, 0, 0, kNv12});
+    if (init != 0) { std::fprintf(stderr, "Initialize%sDecoder failed\n", av1 ? "Av1" : "Vp9"); return 6; }
+    for (uint32_t i = 0; i < kBuffers; i++) call(av1 ? kRegisterAv1 : kRegister, {P(dec), i, P(pools[i]), 0});
+    if (av1) {
+        const uint64_t ev = call(kEventAv1, {P(dec)});
+        std::printf("submission ready event: 0x%llx%s\n", (unsigned long long)ev, ev ? "" : " (NULL)");
+        call(kStartAv1, {P(dec)});
+    }
     struct Acq { uint32_t index; alignas(8) uint64_t fence[2]; };
     std::vector<Acq> acquired;
     auto acquire = [&] {
         Acq a{};
-        call(kAcquire, {P(&a.index), P(a.fence), P(dec)});
+        call(av1 ? kAcquireAv1 : kAcquire, {P(&a.index), P(a.fence), P(dec)});
         acquired.push_back(a);
     };
     for (uint32_t i = 0; i < kBuffers; i++) acquire();
+
+    // AV1: the track's av1C record (CodecPrivate after its 4-byte header) is a sequence-header OBU; the console library sends it
+    // ahead of the first sample (the samples themselves do not carry it), so the probe does the same.
+    if (av1 && m.config.size() > 4 && !std::getenv("PROBE_NO_CONFIG"))
+        call(kSubmitAv1, {P(dec), P(m.config.data() + 4), m.config.size() - 4, 0, 0});
 
     // pitch-linear NV12 destination with the stride a 256-byte aligned surface would have
     const uint32_t w = m.w, h = m.h, stride = (w + 255) & ~255u;
@@ -245,14 +301,16 @@ int main(int argc, char** argv) {
     for (size_t k = 0; k < m.video.size() && !written; k++) {
         uint64_t submitted = 0;
         const Packet& pk = m.video[k];
-        call(kSubmit, {P(&submitted), P(dec), P(pk.data), pk.size, static_cast<uint64_t>(pk.ms) * 1000000ull, 0});
+        const uint64_t pts = static_cast<uint64_t>(pk.ms) * 1000000ull;
+        if (av1) call(kSubmitAv1, {P(dec), P(pk.data), pk.size, pts, 0});
+        else call(kSubmit, {P(&submitted), P(dec), P(pk.data), pk.size, pts, 0});
         while (!acquired.empty() && (call(kTryWait, {P(acquired.front().fence)}) & 1)) {
             const Acq a = acquired.front();
             acquired.erase(acquired.begin());
             uint16_t pw = 0, ph = 0, aw = 0, ah = 0;
-            int64_t pts = 0;
+            int64_t out_pts = 0;
             uint8_t eos = 0;
-            call(kProps, {P(&pw), P(&ph), P(&aw), P(&ah), P(&pts), P(&eos), P(dec), a.index});
+            call(av1 ? kPropsAv1 : kProps, {P(&pw), P(&ph), P(&aw), P(&ah), P(&out_pts), P(&eos), P(dec), a.index});
             ++got;
             if (got == want) {
                 call(kReadNv12, {P(pools[a.index]), 0, 0, 0, w, h, P(ybuf.data()), stride}, {ybuf.size(), P(uvbuf.data()), stride, uvbuf.size()});
@@ -268,9 +326,9 @@ int main(int argc, char** argv) {
                         o[2] = clamp8((Y + 541 * U + 128) >> 8);
                     }
                 written = write_png(argv[2], rgb, w, h);
-                std::printf("frame %zu: buffer %u, %ux%u, pts %.3f s -> %s%s\n", got, a.index, pw, ph, pts / 1e9, argv[2], written ? "" : " (write FAILED)");
+                std::printf("frame %zu: buffer %u, %ux%u, pts %.3f s -> %s%s\n", got, a.index, pw, ph, out_pts / 1e9, argv[2], written ? "" : " (write FAILED)");
             }
-            call(kRelease, {P(dec), a.index, 0, 0});
+            call(av1 ? kReleaseAv1 : kRelease, {P(dec), a.index, 0, 0});
             acquire();
         }
     }
@@ -278,6 +336,6 @@ int main(int argc, char** argv) {
     std::printf("stats: packets %llu, decoded %llu, placed %llu, read %llu, errors %llu\n", (unsigned long long)st.packets_submitted,
                 (unsigned long long)st.frames_decoded, (unsigned long long)st.frames_delivered, (unsigned long long)st.frames_read,
                 (unsigned long long)st.decode_errors);
-    call(kFiniVp9, {P(dec)});
+    call(av1 ? kFiniAv1 : kFiniVp9, {P(dec)});
     return written ? 0 : 1;
 }

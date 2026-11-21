@@ -6,18 +6,33 @@ here should still be useful to the next person.
 All scripts resolve their paths relative to themselves (`os.path.dirname(__file__)`, `$PSScriptRoot`,
 `%~dp0`), so the whole directory can be copied to another machine.
 
-## env/
+## ci/
 
 | file | what |
 |---|---|
-| `check.ps1` | one command that reports whether the environment is complete: host toolchain, the Python packages the lifter needs, the ExeFS and romfs, the build outputs. `-CheckOnly` reports without changing anything. |
+| `check_invariants.py` | the project rules: no private paths, no game data, ASCII build inputs, CRLF in .cmd files |
+| `check_links.py` | every relative link in the tracked markdown resolves |
+| `config_table.py` | keeps `config/keys.tsv`, `docs/CONFIG.md` and the code in step: `--emit` writes the page, `--check` fails on a new undocumented key |
+| `install-git-hooks.ps1` | copies `hooks/pre-commit` into `.git/hooks`; the hook runs the two checks above on every commit |
+| `hooks/pre-commit` | the hook itself (needs `python` on PATH) |
+
+## setup/
+
+| file | what |
+|---|---|
+| `xc2_setup.py` | the first-run program: doctor, sources, runtime build, lift, link, ingest a `.nup` |
+| `doctor.ps1` | what this machine is missing, checked against `deps.lock.json`; `-Json` for the setup page |
+| `check-env.ps1` | whether the toolchain is complete, and repairs the Python packages it can copy locally |
+| `deps.lock.json` | the pinned external sources and their hashes |
 
 ## shader/
 
 | file | what |
 |---|---|
 | `spv_rename.py` | renames the UBO instance names a glslang round-trip produces back to `fp_c3`/`fp_c4`/`support_buffer`; NVN binds by name, so a shader installed without this does nothing |
-| `install_shaders.ps1` | the early manual installer; `xc2\scripts\patch-shaders.ps1` supersedes it |
+| `install_shaders.ps1` | the early manual installer; `tools\build\patch-shaders.ps1` supersedes it |
+| `patch_ds_samplers.py` | retypes the depth-stencil samplers the console leaves implicit (see `PATCHES.md`) |
+| `cache\` | the archive scan and the cache builder: `ard_index.py`, `extract_embedded.py`, `build_cache.py`, `pack.py`; `cache/README.md` has the numbers |
 
 The loop for a hand-patched shader:
 
@@ -30,19 +45,12 @@ copy x_r.spv xc2\build\boot\shader_cache\spirv\<hash>.spv
 With `NXRT_NVN_SPV_HOT` set (see `run\hot.cmd`) the replacement takes effect in about 0.25 s. Drop
 `spirv.preload.pack` first, or the pack keeps serving the old shader.
 
-## probe/
-
-Generators for the fog probes used while identifying the volumetric-fog path: each `mkprobeP*.py` reads a
-`.frag` template, substitutes the outputs and writes a probe shader. The `.spv` is built with the loop above.
-
-**The templates are not distributed.** `froxel.frag`, `froxel_fixC.frag`, `comp.frag`, `card_uvdiv.frag` and
-`or_const.frag` are derived from the game's own shaders, so they live outside the repository; the generators here
-are the author's own code and stay. To use them you have to produce the templates yourself from your own dump.
-
 ## run/
 
 | file | what |
 |---|---|
+| `play.ps1` | starts the game from `config/profiles/<name>.ini`: paths, switches and frame rate are data, not set lines. `-Headless`, `-Fps`, `-Dump`, `-Shots`, `-Seconds` for scripted runs |
+| `config/profiles/dev.ini` | the 3.0.1 development build: exe, working directory, romfs/dlc, save, cache and the 20 switches |
 | `play-301.cmd` | the 3.0.1 route: `-60` for 60 fps, `-headless`, `-dump` to collect shaders, language switches |
 | `play60-301.cmd` | the same at 60 fps, double-clickable |
 | `hot.cmd` | launch with shader hot-swap on |
@@ -92,6 +100,22 @@ The scale is `raw = PFM / 2.78`; a tonemapped PNG is not a number.
 | `ard_get.py` | extract a record from `bf2.ard` by name |
 | `nup_extract.py` | list, verify or unpack a `.nup` package |
 
-## Build entry points that stay in xc2/scripts
+## build/
 
-`build.ps1`, `build-boot.ps1`, `build-shaders.ps1`, `patch-shaders.ps1`, `play.ps1`, `make-portable.ps1`.
+| file | what |
+|---|---|
+| `make-package.ps1` | assembles the portable tree: launcher, `xc2_rt.dll` + import library, the tools that compile the lifted code (Python, Zig, spirv-val, harness), and the setup program. Contains no game file. |
+| `PACKAGE-README.txt` | the readme that ships inside that tree |
+
+## The rest of build/
+
+| file | what |
+|---|---|
+| `build.ps1` | lift + compile the modules (the lift is the long part) |
+| `build-boot.ps1` | link `xc2_boot.exe` against the lifted libraries |
+| `build-release.ps1` | the release split: `xc2_rt.dll` plus a Zig-linked exe |
+| `build-census.ps1` | the frame-counter census build, in directories of its own |
+| `build-shaders.ps1` | make the shader cache and the preload pack complete (`-Check` reports only) |
+| `patch-shaders.ps1` | check or install the hand-patched modules (`-Check` exits 0 when the cache is consistent) |
+| `make-portable.ps1` | copy a built tree somewhere else |
+| `verify-package.ps1` | check a package tree, or an install made from one: no debug leftovers, the files the release promises, the shader cache count (`-ExpectedSpirv`) |

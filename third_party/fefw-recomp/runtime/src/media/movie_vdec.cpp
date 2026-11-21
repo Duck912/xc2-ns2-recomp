@@ -40,6 +40,7 @@
 #include "nxrt/config.h"
 #include "nxrt/dispatch.h"
 #include "nxrt/game.h"
+#include "nxrt/kernel.h"
 #include "nxrt/log.h"
 #include "nxrt/module.h"
 #include "nxrt/movie_vdec.h"
@@ -118,7 +119,7 @@ uint64_t gcall(::Ctx* c, uint64_t fn, uint64_t a0, uint64_t a1 = 0, uint64_t a2 
 }
 
 struct Fns {
-    uint64_t create_event, attach_event, get_int32, set_int32, set_size;
+    uint64_t create_event, attach_event, get_int32, set_int32, set_size, signal_event;
 };
 const Fns& fns() {
     static const Fns f = [] {
@@ -128,6 +129,7 @@ const Fns& fns() {
         o.get_int32 = module_find_symbol("_ZNK2nn5movie13MediaProperty8GetInt32EPiPKc");
         o.set_int32 = module_find_symbol("_ZN2nn5movie13MediaProperty8SetInt32EPKci");
         o.set_size = module_find_symbol("_ZN2nn5movie13MediaProperty7SetSizeEPKcm");
+        o.signal_event = module_find_symbol("_ZN2nn2os17SignalSystemEventEPNS0_15SystemEventTypeE");
         if (!o.create_event || !o.attach_event || !o.get_int32 || !o.set_int32 || !o.set_size)
             NXLOG_E(kTag, "guest nn::os / nn::movie::MediaProperty functions missing: movies will not play");
         return o;
@@ -150,6 +152,7 @@ struct Picture {   // a decoded picture in host memory (NV12 at its width), or t
 
 struct Decoder {
     std::mutex mu;
+    std::atomic<bool> signal_pending{false};   // a picture became ready: signal out_ev once the lock is released
     std::condition_variable cv;              // the worker waits here for packets and for room in `decoded`
     std::thread worker;
     bool stop = false;
@@ -158,6 +161,7 @@ struct Decoder {
     std::vector<uint8_t> config;             // the track's av1C record (Configure): its OBUs go to dav1d ahead of the first packet
     int w = 1920, h = 1080, color[3] = {0, 0, 0};
     std::vector<uint64_t> frames, free_;     // registered VideoFrames; free_ is used as a stack
+    std::vector<uint64_t> owned;             // frames we made when the player registered only one (their buffers are ours too)
     std::deque<uint64_t> ready;              // frames with a picture, not acquired yet
     std::deque<Packet> queue;                // packets not decoded yet
     std::deque<Picture> decoded;             // pictures waiting for a free frame
@@ -171,6 +175,7 @@ struct Decoder {
     int64_t clk_ts0 = 0, clk_last = 0, last_time = 0;
     double clk_t0 = 0, unit = 0;
     uint64_t skipped = 0;
+    std::atomic<int64_t> last_call{0}, last_stall{0};   // ticks of the last guest call, of the last "it stopped moving" report
     bool warned_size = false, warned_format = false, warned_mime = false, warned_error = false;
     services::ServiceEvent in_ready, out_ready;   // attached to in_ev / out_ev: any thread can signal them
     alignas(16) uint8_t in_ev[0x100]{}, out_ev[0x100]{}, fmt_ev[0x100]{};
@@ -181,6 +186,10 @@ Decoder* dec_of(uint64_t self) {
     if (!self || rd64(self + 8) != kMarker) return nullptr;
     return reinterpret_cast<Decoder*>(rd64(self));
 }
+
+// Live decoders, so the present tick can reach them without a guest call (movie_tick).
+std::mutex g_reg_mu;
+std::vector<Decoder*> g_reg;
 
 // I420 to NV12, rows packed at the picture's width, chroma interleaved.
 void to_nv12(uint8_t* o, uint32_t w, uint32_t h, const uint8_t* py, ptrdiff_t sy, const uint8_t* pu, const uint8_t* pv, ptrdiff_t suv) {
@@ -254,7 +263,28 @@ void deliver(Decoder& d) {
             y = static_cast<uint64_t>(p.w) * p.h;
             uv = nv12_size(p.w, p.h) - y;
             const uint64_t buf = rd64(f + kVfBuf), cap = rd64(f + kVfSize);
-            if (buf && y + uv <= cap) std::memcpy(reinterpret_cast<void*>(buf), p.nv12.data(), y + uv);
+            if (buf && y + uv <= cap) {
+                std::memcpy(reinterpret_cast<void*>(buf), p.nv12.data(), y + uv);
+                // NXRT_FILM_DUMP: write the frame as the guest will read it back, so a difference between what the decoder
+                // produced and what sits in the game's buffer is visible (a green picture with correct decode data means the
+                // copy or the buffer layout is wrong, not the decoder).
+                static const std::string dump_path = [] {
+                    const char* s = std::getenv("NXRT_FILM_DUMP");
+                    return s ? std::string(s) + ".guest" : std::string();
+                }();
+                static bool dumped = false;
+                if (!dump_path.empty() && !dumped) {
+                    dumped = true;
+                    if (FILE* fo = std::fopen(dump_path.c_str(), "wb")) {
+                        const uint32_t head[2] = {p.w, p.h};
+                        std::fwrite(head, sizeof head, 1, fo);
+                        std::fwrite(reinterpret_cast<const void*>(buf), 1, y + uv, fo);
+                        std::fclose(fo);
+                        NXLOG_I(kTag, "guest frame dumped to %s (%ux%u, %llu bytes, buffer cap %llu)", dump_path.c_str(), p.w, p.h,
+                                static_cast<unsigned long long>(y + uv), static_cast<unsigned long long>(cap));
+                    }
+                }
+            }
             else {
                 if (!d.warned_size) NXLOG_W(kTag, "a %ux%u picture (%llu bytes) does not fit its frame's %llu-byte buffer: frames left empty", p.w, p.h,
                                             static_cast<unsigned long long>(y + uv), static_cast<unsigned long long>(cap));
@@ -271,9 +301,19 @@ void deliver(Decoder& d) {
         any = true;
     }
     if (any) {
-        d.out_ready.signal();
+        // Signalling happens after the caller drops the lock: a woken guest thread of higher priority runs the moment the event is
+        // signalled and waits for this decoder's lock, so a signal sent while holding it deadlocks the waker against the woken one
+        // (the Switch 1 ports record the same deadlock at the first released output; work/MOVIE-FREEZE-NOTES.md).
+        d.signal_pending.store(true, std::memory_order_relaxed);
         d.cv.notify_all();   // room in `decoded` again
     }
+}
+
+// Signals the player (caller must NOT hold the decoder lock).
+void flush_signal(Decoder& d) {
+    if (!d.signal_pending.exchange(false, std::memory_order_relaxed)) return;
+    d.out_ready.signal();
+    kernel::signal_system_event(reinterpret_cast<uint64_t>(d.out_ev));
 }
 
 // Decodes one packet into pictures (worker thread, without the lock). `av1` is the worker's own context.
@@ -463,6 +503,10 @@ void vd_initialize(::Ctx* c) {   // (self, void* mem, size_t size, MediaMimeType
     const int mime = static_cast<int>(A(3)), fmt = static_cast<int>(A(4)), mode = static_cast<int>(A(5));
     if (!self) { RET(0); return; }
     auto* d = new Decoder();
+    {
+        std::lock_guard<std::mutex> lk(g_reg_mu);
+        g_reg.push_back(d);
+    }
     d->mime = mime;
     wr64(self, reinterpret_cast<uint64_t>(d));
     wr64(self + 8, kMarker);
@@ -470,6 +514,9 @@ void vd_initialize(::Ctx* c) {   // (self, void* mem, size_t size, MediaMimeType
     attach_event(c, d->out_ev, d->out_ready);
     gcall(c, fns().create_event, reinterpret_cast<uint64_t>(d->fmt_ev), kAutoClear, 0);   // the format never changes
     d->worker = std::thread(worker_main, d);
+    // A movie starting: from here on, what guest threads park on belongs to the player (the engine's own condition variables
+    // registered before it would fill a short list).
+    kernel::clear_watched_system_events();
     NXLOG_I(kTag, "VideoDecoder: MIME type %d%s, output format %d, mode %d", mime, mime == kMimeAv1 ? " (AV1)" : "", fmt, mode);
     RET(0);
 }
@@ -519,7 +566,41 @@ void vd_register_frames(::Ctx* c) {   // (self, VideoFrame** frames, int n)
     d->pending_free.clear();
     d->ready.clear();
     for (int i = 0; i < n; ++i) d->frames.push_back(rd64(list + 8ull * i));
-    for (int i = n - 1; i >= 0; --i) d->free_.push_back(d->frames[i]);
+    // A 4K movie gets one frame: the player sizes its buffers from the picture, and with a single frame it cannot hold one while it
+    // asks for the next (measured 2026-11-18: it takes the only frame, then waits for ever). The console's player owns its frames;
+    // here they are the game's, so add frames of our own with buffers we allocate - the accessors read only the fields this writes
+    // (buffer at +0x08, size at +0x48). The Switch 1 port owns four output buffers for the same reason.
+    if (n == 1) {
+        const uint64_t bytes = nv12_size(static_cast<uint32_t>(d->w), static_cast<uint32_t>(d->h));
+        for (int i = 0; i < 3; ++i) {
+            void* frame = std::calloc(1, 0x100);
+            void* buf = std::malloc(static_cast<size_t>(bytes));
+            if (!frame || !buf) {
+                std::free(frame);
+                std::free(buf);
+                break;
+            }
+            wr64(reinterpret_cast<uint64_t>(frame) + kVfBuf, reinterpret_cast<uint64_t>(buf));
+            wr64(reinterpret_cast<uint64_t>(frame) + kVfSize, bytes);
+            d->owned.push_back(reinterpret_cast<uint64_t>(frame));
+            d->frames.push_back(reinterpret_cast<uint64_t>(frame));
+        }
+        if (!d->owned.empty())
+            NXLOG_I(kTag, "one frame registered: added %zu frames of our own (%llu bytes each)", d->owned.size(),
+                    static_cast<unsigned long long>(bytes));
+    }
+    // A frame that has not been written yet must not look like anything. NV12 zeroes are Y=0, U=0, V=0, and the player's
+    // YUV->RGB turns that into a green field: the film's first frames on the AMD machine were green because the overlay was
+    // drawn before the decoder had delivered anything (2026-11-21, issue: opening film). Neutral limited-range black is
+    // Y=16, U=V=128, and our own frames come from malloc, so they have to be set either way.
+    for (uint64_t fr : d->frames) {
+        const uint64_t buf = rd64(fr + kVfBuf), cap = rd64(fr + kVfSize);
+        if (!buf || cap < 8) continue;
+        const size_t yb = static_cast<size_t>(cap) * 2 / 3;   // NV12: 2/3 luma, 1/3 interleaved chroma
+        std::memset(reinterpret_cast<void*>(buf), 16, yb);
+        std::memset(reinterpret_cast<uint8_t*>(reinterpret_cast<void*>(buf)) + yb, 128, static_cast<size_t>(cap) - yb);
+    }
+    for (int i = static_cast<int>(d->frames.size()) - 1; i >= 0; --i) d->free_.push_back(d->frames[i]);
     deliver(*d);
     if (g_log) NXLOG_I(kTag, "VideoDecoder: %d frames registered", n);
     RET(0);
@@ -530,9 +611,17 @@ void vd_input_event(::Ctx* c) {   // (self, SystemEventType** out)
     if (A(1)) wr64(A(1), d ? reinterpret_cast<uint64_t>(d->in_ev) : 0);
     RET(0);
 }
-void vd_output_event(::Ctx* c) {
+void vd_output_event(::Ctx* c) {   // (self, SystemEventType** out)
     Decoder* d = dec_of(A(0));
     if (A(1)) wr64(A(1), d ? reinterpret_cast<uint64_t>(d->out_ev) : 0);
+    if (d && g_log) {
+        static bool told = false;
+        if (!told) {
+            told = true;
+            NXLOG_I(kTag, "output event at 0x%llx, its futex word at 0x%llx", static_cast<unsigned long long>(reinterpret_cast<uint64_t>(d->out_ev)),
+                    static_cast<unsigned long long>(reinterpret_cast<uint64_t>(d->out_ev) + 0x20));
+        }
+    }
     RET(0);
 }
 void vd_format_event(::Ctx* c) {   // the format never changes
@@ -550,6 +639,7 @@ void vd_stop(::Ctx* c) { RET(0); }
 
 void vd_decode_async(::Ctx* c) {   // (self, const nn::movie::Buffer*)
     Decoder* d = dec_of(A(0));
+    if (d) d->last_call = static_cast<int64_t>(GetTickCount64());
     const uint64_t buf = A(1);
     if (!d || !buf) { RET(0); return; }
     const uint64_t data = rd64(buf + kBufData), n = rd64(buf + kBufFilled);
@@ -579,14 +669,32 @@ void vd_decode_async(::Ctx* c) {   // (self, const nn::movie::Buffer*)
 }
 
 uint32_t acquire(Decoder* d, uint64_t* out, int* idx) {
-    std::lock_guard<std::mutex> lk(d->mu);
+    d->last_call = static_cast<int64_t>(GetTickCount64());
+    std::unique_lock<std::mutex> lk(d->mu);
+    // The library's Acquire waits for a picture: the player calls it when it needs one, and a "nothing ready" answer here sends it
+    // into a wait of its own that nothing ever wakes (measured 2026-11-18: it asked once, got 0x7b, and the movie stopped while four
+    // filled frames sat in ready). So wait here instead, and let deliver (its calls, the worker and the present tick) wake us.
+    if (d->ready.empty() && (!d->queue.empty() || !d->decoded.empty() || !d->pending_free.empty())) {
+        for (int waited = 0; waited < 2000 && d->ready.empty() && (!d->queue.empty() || !d->decoded.empty() || !d->pending_free.empty()); ++waited) {
+            d->cv.wait_for(lk, std::chrono::milliseconds(1));
+            deliver(*d);
+        }
+    }
     if (d->ready.empty()) {
         *out = 0;
+        if (g_log) {
+            static std::atomic<uint64_t> n{0};
+            const uint64_t k = n.fetch_add(1);
+            if (k < 40 || k % 200 == 0)
+                NXLOG_I(kTag, "AcquireVideoFrame: nothing ready after waiting (call %llu): frames %zu, free %zu, decoded %zu, pending %zu, queue %zu",
+                        static_cast<unsigned long long>(k), d->frames.size(), d->free_.size(), d->decoded.size(), d->pending_free.size(),
+                        d->queue.size());
+        }
         return kResultNoFrame;
     }
     *out = d->ready.front();
     d->ready.pop_front();
-    if (!d->ready.empty()) d->out_ready.signal();   // one signal per wait: the next ready frame needs its own
+    if (!d->ready.empty()) d->signal_pending.store(true, std::memory_order_relaxed);   // one signal per wait: the next ready frame needs its own
     if (idx) {
         *idx = -1;
         for (size_t i = 0; i < d->frames.size(); ++i)
@@ -623,6 +731,7 @@ void vd_acquire_index(::Ctx* c) {   // (self, VideoFrame** out, int* index)
 
 void vd_release(::Ctx* c) {   // (self, VideoFrame*)
     Decoder* d = dec_of(A(0));
+    if (d) d->last_call = static_cast<int64_t>(GetTickCount64());
     const uint64_t f = A(1);
     if (!d) { RET(0); return; }
     {
@@ -630,14 +739,37 @@ void vd_release(::Ctx* c) {   // (self, VideoFrame*)
         const bool known = std::find(d->frames.begin(), d->frames.end(), f) != d->frames.end();
         const bool already = std::find(d->free_.begin(), d->free_.end(), f) != d->free_.end();
         const bool pending = std::any_of(d->pending_free.begin(), d->pending_free.end(), [f](const auto& p) { return p.first == f; });
-        if (f && known && !already && !pending && d->free_.size() + d->pending_free.size() < kMaxFrames)
-            d->pending_free.emplace_back(f, nvn::be::gpu::last_serial());
+        if (f && known && !already && !pending && d->free_.size() + d->pending_free.size() < kMaxFrames) {
+            // One frame registered (a 4K movie: the player sizes its buffers from the picture, so 3840x2160 leaves it a single
+            // one): waiting for the copy's serial deadlocks the player - it cannot acquire a new frame until this one is free,
+            // and the copy is submitted with that next frame. Hand it back at once instead; the copy may still be in flight, so
+            // a frame that changes under it could tear, which is the lesser evil against a frozen picture (measured 2026-11-18).
+            if (d->frames.size() <= 1) {
+                d->free_.push_back(f);
+                static bool told = false;
+                if (!told) {
+                    told = true;
+                    NXLOG_W(kTag, "one video frame registered: handing it back without waiting for its copy (the movie may tear)");
+                }
+            } else {
+                d->pending_free.emplace_back(f, nvn::be::gpu::last_serial());
+            }
+        }
         s_released++;
+        if (g_log) {
+            static std::atomic<uint64_t> n{0};
+            const uint64_t k = n.fetch_add(1);
+            if (k < 80 || k % 120 == 0)
+                NXLOG_I(kTag, "ReleaseVideoFrame #%llu: %llx free %zu pending %zu ready %zu (known %d, already %d, pending %d)", static_cast<unsigned long long>(k),
+                        static_cast<unsigned long long>(f), d->free_.size(), d->pending_free.size(), d->ready.size(), known ? 1 : 0, already ? 1 : 0,
+                        pending ? 1 : 0);
+        }
         if (g_log) NXLOG_I(kTag, "ReleaseVideoFrame: %llx%s; queued %zu, decoded %zu, ready %zu, free %zu", static_cast<unsigned long long>(f),
                            known ? (already ? " (already free)" : "") : " (not registered)", d->queue.size(), d->decoded.size(), d->ready.size(),
                            d->free_.size());
         deliver(*d);
     }
+    flush_signal(*d);   // outside the lock: a woken player runs at once and calls straight back in
     RET(0);
 }
 
@@ -667,6 +799,37 @@ void vd_get_core_mask(::Ctx* c) { RET(1); }
 void vd_set_priority(::Ctx* c) { (void)c; }
 void vd_get_priority(::Ctx* c) { RET(16); }
 
+// [media] video_decoder_log also traces what the player does with the frames it holds: its accessors are the only way it reads a
+// picture, so this log says whether it consumes them at all (the player holds four frames, stops asking for more and stops giving
+// them back - measured 2026-11-18 - and this says which side of that it is on).
+void vf_get_buffer(::Ctx* c) {   // (self, void** data, size_t* size)
+    const uint64_t f = A(0);
+    const uint64_t buf = f ? rd64(f + kVfBuf) : 0, size = f ? rd64(f + kVfSize) : 0;
+    if (A(1)) wr64(A(1), buf);
+    if (A(2)) wr64(A(2), size);
+    if (g_log) {
+        static std::atomic<uint64_t> n{0};
+        const uint64_t k = n.fetch_add(1);
+        if (k < 40 || k % 120 == 0)
+            NXLOG_I(kTag, "VideoFrame::GetBuffer #%llu on %llx -> %llx (%llu bytes)", static_cast<unsigned long long>(k),
+                    static_cast<unsigned long long>(f), static_cast<unsigned long long>(buf), static_cast<unsigned long long>(size));
+    }
+    RET(0);
+}
+
+void vf_get_time(::Ctx* c) {   // (self, nn::TimeSpan* out): nanoseconds at +0x78
+    const uint64_t f = A(0);
+    if (A(1)) wr64(A(1), f ? rd64(f + kVfTime) : 0);
+    if (g_log) {
+        static std::atomic<uint64_t> n{0};
+        const uint64_t k = n.fetch_add(1);
+        if (k < 40 || k % 120 == 0)
+            NXLOG_I(kTag, "VideoFrame::GetTimeStamp #%llu on %llx -> %lld", static_cast<unsigned long long>(k),
+                    static_cast<unsigned long long>(f), static_cast<long long>(f ? rd64(f + kVfTime) : 0));
+    }
+    RET(0);
+}
+
 struct Import {
     const char* name;
     HleFn fn;
@@ -695,6 +858,8 @@ const Import kImports[] = {
     {"_ZN5movie12VideoDecoder17SetThreadCoreMaskEm", vd_set_core_mask},
     {"_ZN5movie12VideoDecoder17GetThreadCoreMaskEv", vd_get_core_mask},
     {"_ZN5movie12VideoDecoder17SetThreadPriorityEi", vd_set_priority},
+{"_ZN5movie10VideoFrame9GetBufferEPPvPm", vf_get_buffer},
+{"_ZN5movie10VideoFrame12GetTimeStampEPN2nn8TimeSpanE", vf_get_time},
     {"_ZN5movie12VideoDecoder17GetThreadPriorityEv", vd_get_priority},
 };
 
@@ -709,12 +874,32 @@ bool install_movie_decoder_hle() {
             NXLOG_I(kTag, "[media] movies = skip: every movie fails to open and is skipped");
             return;
         }
+        // [media] video_decoder = hle | guest: guest leaves every movie::VideoDecoder import to the library itself, which then drives
+        // nn::codec and NVDEC. That path cannot decode anything here, but it shows which layer the player really uses (log lines from
+        // the codec HLE, then the failure), which is what an implementation at the library's own level has to replace.
+        if (config_get_str("media", "video_decoder", "library") == "library") {
+            // The library's own movie::VideoDecoder does not go through movie::Decoder: its Configure drives nn::codec's AV1 decoder
+            // directly (subsdk0 VideoDecoder::Configure 0x1c6d0 -> detail::InitializeDecoderByTransferMemory 0x28df0 -> AbortImpl when
+            // the codec init fails). So what the library needs on the host is the nn::codec side (src/media/video_codec.cpp: AV1 on
+            // dav1d, SDK 3.0.1 names); a movie::Decoder layer would never be called. The sound stays on the host AudioDecoder, which
+            // already decodes the library's Vorbis configuration.
+            install_audio_decoder_hle();
+            NXLOG_I(kTag, "[media] video_decoder = library: the library's VideoDecoder on the host nn::codec (AV1 dav1d), sound on the host");
+            return;
+        }
+        if (config_get_str("media", "video_decoder", "library") == "guest") {
+            NXLOG_I(kTag, "[media] video_decoder = guest: movie::VideoDecoder left to the library (diagnostic)");
+            return;
+        }
         g_log = config_get_bool("media", "video_decoder_log", false);
-        g_threads = static_cast<int>(std::clamp<int64_t>(config_get_int("media", "video_decoder_threads", 4), 1, 16));
+        // Same default as video_codec.cpp: half the cores, 4 to 8, for the 4K AV1 films.
+    const int64_t def_threads = std::min<int64_t>(8, std::max<int64_t>(4, static_cast<int64_t>(std::thread::hardware_concurrency()) / 2));
+    g_threads = static_cast<int>(std::clamp<int64_t>(config_get_int("media", "video_decoder_threads", def_threads), 1, 16));
         for (const Import& im : kImports) {
             hle_register(im.name, im.fn);
             module_override_symbol(im.name);
         }
+        install_audio_decoder_hle();
         g_enabled = true;
         NXLOG_I(kTag, "movie::VideoDecoder on the host: AV1 through dav1d %s (%d threads), %zu imports routed", dav1d_version(), g_threads,
                 sizeof kImports / sizeof kImports[0]);
@@ -722,7 +907,113 @@ bool install_movie_decoder_hle() {
     return g_enabled;
 }
 
+
+// The same delivery, run on the guest thread that presents (nvnQueuePresentTexture): the console's player signals its events from
+// guest code, and the SDK's SignalSystemEvent takes the event's own critical section - a wake from a host thread can land in the
+// window between the waiter's check and its sleep and be lost (that is what the Switch 1 ports avoid by signalling on the
+// presenting guest thread).
+void movie_tick_guest(::Ctx* c) {
+    if (!g_enabled.load() || !c) return;
+    std::vector<Decoder*> live;
+    {
+        std::lock_guard<std::mutex> lk(g_reg_mu);
+        live = g_reg;
+    }
+    for (Decoder* d : live) {
+        if (!d) continue;
+        bool ready = false;
+        {
+            std::lock_guard<std::mutex> lk(d->mu);
+            if (d->frames.empty()) continue;
+            deliver(*d);
+            ready = !d->ready.empty();
+        }
+        // SignalSystemEvent asserts (svcBreak) on a type byte other than 0 or 1, and our event was attached with a host handle
+        // (nn::os::AttachReadableHandleToSystemEvent), which leaves the type the library's own: only those two go through guest code.
+        const uint8_t type = *reinterpret_cast<const uint8_t*>(reinterpret_cast<uintptr_t>(d->out_ev) + 0x28);
+        if (ready && fns().signal_event && type <= 1) {
+            gcall(c, fns().signal_event, reinterpret_cast<uint64_t>(d->out_ev));
+        } else if (ready) {
+            static bool told = false;
+            if (!told) {
+                told = true;
+                NXLOG_I(kTag, "output event type %d: signalled from the host instead of guest code", type);
+            }
+        }
+    }
+}
+
+// The present tick (nvn_present.cpp): hand decoded pictures over without waiting for the player to call in, and say so when a movie
+// stops moving. A player that waits on the output event, then finds nothing ready, waits for a signal that only a guest call would
+// have produced - with the game's frame loop driving the decoder instead, every present either delivers or reports.
+void movie_tick() {
+    if (!g_enabled.load()) return;
+    std::vector<Decoder*> live;
+    {
+        std::lock_guard<std::mutex> lk(g_reg_mu);
+        live = g_reg;
+    }
+    bool handed = false;
+    const int64_t now = static_cast<int64_t>(GetTickCount64());
+    for (Decoder* d : live) {
+        if (!d) continue;
+        {
+            std::lock_guard<std::mutex> lk(d->mu);
+            if (d->frames.empty()) continue;
+            deliver(*d);
+            if (!d->ready.empty()) handed = true;
+        }
+        flush_signal(*d);   // outside the lock (see deliver)
+        if (g_log) {
+            static std::atomic<uint64_t> ticks{0};
+            const uint64_t t = ticks.fetch_add(1);
+            if (t < 200 && (t % 20) == 0)
+                NXLOG_I(kTag, "tick %llu: frames %zu free %zu ready %zu decoded %zu pending %zu queue %zu, last call %lld ms ago",
+                        static_cast<unsigned long long>(t), d->frames.size(), d->free_.size(), d->ready.size(), d->decoded.size(),
+                        d->pending_free.size(), d->queue.size(),
+                        static_cast<long long>(d->last_call.load() ? GetTickCount64() - static_cast<uint64_t>(d->last_call.load()) : -1));
+        }
+        const bool work = !d->queue.empty() || !d->decoded.empty();
+        if (work && d->last_call.load() && now - d->last_call.load() > 2000) {
+            if (now - d->last_stall.load() > 5000) {
+                d->last_stall = now;
+                NXLOG_W(kTag, "no decoder call for %lld ms: queued %zu, decoded %zu, ready %zu, free %zu, held %zu",
+                        static_cast<long long>(now - d->last_call.load()), d->queue.size(), d->decoded.size(), d->ready.size(), d->free_.size(),
+                        d->pending_free.size());
+            }
+        }
+    }
+    // The player waits on a SystemEvent of its own (the library this port replaces would signal it). It is signalled on every
+    // presentation while a movie is playing, not only when a picture was handed over: the wait that parks it is between frames as
+    // well, and a missed wake there leaves it asleep with the event already flagged (measured 2026-11-18: its event held a pending
+    // signal and the thread still sat on the futex).
+    {
+        uint64_t evs[8];
+        const size_t n = kernel::watched_system_events(evs, 8);
+        for (size_t i = 0; i < n; ++i) kernel::signal_system_event(evs[i]);
+        if (g_log) {
+            static std::atomic<uint64_t> n_ticks{0};
+            const uint64_t t = n_ticks.fetch_add(1);
+            if (t % 60 == 0 && n) {
+                char line[400];
+                int used = 0;
+                for (size_t i = 0; i < n; ++i) {
+                    const uint64_t key = evs[i] + 0x20;
+                    const uint32_t word = *reinterpret_cast<const uint32_t*>(static_cast<uintptr_t>(key));
+                    const uint8_t flag = *reinterpret_cast<const uint8_t*>(static_cast<uintptr_t>(evs[i] + 0x10));
+                    used += std::snprintf(line + used, sizeof line - static_cast<size_t>(used), " [%llx flag %02x key %u waiter %d]", 
+                                          static_cast<unsigned long long>(evs[i]), flag, word, kernel::any_waiter_on(key) ? 1 : 0);
+                }
+                NXLOG_I(kTag, "watched events:%s", line);
+            }
+        }
+    }
+}
+
 #else   // built without dav1d
+
+void movie_tick() {}
+void movie_tick_guest(::Ctx*) {}
 
 bool install_movie_decoder_hle() {
     static bool logged = false;

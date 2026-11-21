@@ -13,11 +13,13 @@ and makes the descriptor legal. Doing it here rather than shipping patched modul
 data: this tool rewrites the player's own cache.
 
 Which samplers need it is not knowable statically (it depends on what the game binds at draw time), so the runtime
-reports it: run once with [nvn] ds_debug = 1 and it logs
+reports it, one line per (shader, binding):
 
     ds_debug: fs <hash> samples the stencil plane of texture <id> through a float sampler (s<set>b<binding>)
 
-One line per (shader, binding). This tool reads that log and rewrites those modules.
+The prefix is a leftover: the report is no longer a debug switch. Builds up to 0.1.2 only wrote it when [nvn] ds_debug
+was 1, which left the one run that actually lost the device with nothing to patch from (issue #10); the runtime now
+always writes it. This tool reads any play log and rewrites those modules.
 
 The transform, per sampled image type:
     OpTypeImage %float ...            ->  OpTypeImage %uint ...

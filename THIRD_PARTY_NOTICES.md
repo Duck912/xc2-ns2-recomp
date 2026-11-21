@@ -19,6 +19,19 @@ their path; components fetched at build time by CMake (`FetchContent`, see
 | Kenney input prompts | `third_party/fefw-recomp/runtime/assets/prompts` | CC0 |
 | nxnative Opus HLE (ported into `x2_opus301.cpp`) | `xc2/src/x2_opus301.cpp` | **MIT** (see `LICENSE.nxnative.MIT`) |
 
+## Shipped in the release package
+
+| component | where | licence |
+|---|---|---|
+| SPIRV-Tools `spirv-val.exe` (the harness validates every translated shader with it) | `tools\spirv-val\` | Apache-2.0 (see its `LICENSE.txt` there) |
+| FFmpeg, shared GPL build `avcodec-63 / avformat-63 / avutil-61 / swresample-7 / swscale-10` (the film's hardware decoders through libavcodec + D3D11VA) | `runtime\` next to `xc2_boot.exe` | GPL-3.0-or-later; full text in `licenses\FFMPEG-LICENSE.txt` |
+
+FFmpeg is executed as a library, unmodified, from the shared build published at
+<https://github.com/BtbN/FFmpeg-Builds> (`ffmpeg-master-latest-win64-gpl-shared`). The runtime that loads it is
+GPL-3.0-or-later, so the combination stays under the same licence. Corresponding source for the FFmpeg libraries: the
+same release tree (`ffmpeg-master-latest-win64-gpl-shared` publishes the matching sources next to the binaries), or on
+request — written offers are honoured for three years from the release date.
+
 ## Tool sources
 
 The tools under `third_party/fefw-recomp/tools/` keep their licence copies next to the material they cover:

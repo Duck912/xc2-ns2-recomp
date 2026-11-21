@@ -9,6 +9,9 @@
 // Packaged layout handling: smo-recomp runtime/gfx/nvn_gl.c (GPL-3.0), layout/defaults checked, no code copied.
 #include <algorithm>
 #include <atomic>
+#include <cstdio>
+#include <mutex>
+#include <set>
 
 #include "nxrt/config.h"
 #include "nxrt/kernel.h"
@@ -39,6 +42,48 @@ nxrt::GaugeCounter g_textures("nvn.textures");
 nxrt::GaugeCounter g_textures_created("nvn.textures_created");
 
 Texture* tex_of(const void* guest) { return be::host_of<Texture>(guest); }
+
+// [nvn] rt_size_bt = 1 (debug): log the guest frame-pointer backtrace of the texture the game creates at one of its
+// dynamic-resolution ladder sizes (1280x720 -> 1216x684 -> 1120x632 -> 1024x576 -> 960x540). These are the sizes the
+// upscaler receives, and there is no variable that holds them: HANDOVER 95.16 showed they are derived per frame, so
+// three attempts to find and clamp the field failed. The caller of the creation is the way in - its PC is the code that
+// decides the 3D render size (the NS1 quality mods patch exactly that branch with a single B instruction).
+// Once per size per session, twelve frames, nothing when the switch is off.
+void rt_size_backtrace(const TextureBuilderInfo& info) {
+    static const bool on = nxrt::config_get_bool("nvn", "rt_size_bt", false);
+    if (!on) return;
+    static const uint32_t kLadder[][2] = {{1280, 720}, {1216, 684}, {1120, 632}, {1024, 576}, {960, 540}};
+    bool hit = false;
+    for (const auto& l : kLadder)
+        if (info.width == l[0] && info.height == l[1]) hit = true;
+    if (!hit) return;
+    static std::mutex mu;
+    static std::set<uint64_t> told;
+    const uint64_t key = (static_cast<uint64_t>(info.width) << 32) | info.height;
+    {
+        std::lock_guard<std::mutex> lk(mu);
+        if (!told.insert(key).second) return;
+    }
+    ::Ctx* c = nxrt::kernel::current_ctx();
+    if (!c) return;
+    uint64_t lrs[12] = {};
+    int n = 0;
+    uint64_t fp = c->x[29];
+    for (int i = 0; i < 12 && fp && (fp & 7) == 0; ++i) {
+        uint64_t next = 0;
+        std::memcpy(&next, reinterpret_cast<const void*>(fp), 8);
+        std::memcpy(&lrs[n], reinterpret_cast<const void*>(fp + 8), 8);
+        ++n;
+        if (next <= fp) break;
+        fp = next;
+    }
+    char buf[512];
+    int off = snprintf(buf, sizeof buf, "rt %ux%u: lr %llx", info.width, info.height,
+                       static_cast<unsigned long long>(c->x[30]));
+    for (int i = 0; i < n && off > 0 && off < static_cast<int>(sizeof buf) - 24; ++i)
+        off += snprintf(buf + off, sizeof buf - static_cast<size_t>(off), " <- %llx", static_cast<unsigned long long>(lrs[i]));
+    NXLOG_I("nvn", "rt_size_bt: %s", buf);
+}
 
 uint64_t div_up(uint64_t a, uint64_t b) { return (a + b - 1) / b; }
 
@@ -228,6 +273,7 @@ void overflow_gone(const Texture* t) {
 NVNboolean nvnTextureInitialize(NVNtexture* texture, const NVNtextureBuilder* builder) {
     if (!texture || !builder) return 0;
     const TextureBuilderInfo info = decode(builder);
+    rt_size_backtrace(info);
     const TexLayout L = be::compute_texture_layout(info);
     static std::atomic<int> s_fail_logs{0};
     auto fail = [&](const char* why) -> NVNboolean {

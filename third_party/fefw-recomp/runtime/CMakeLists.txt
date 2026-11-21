@@ -52,6 +52,15 @@ if(EXISTS "${NXRT_RECOMP_INCLUDE}")
     target_include_directories(nxrt PUBLIC "${NXRT_RECOMP_INCLUDE}")
 endif()
 target_link_libraries(nxrt PUBLIC psapi)
+# FFmpeg as the hardware movie decoder (src/media/video_ffmpeg.cpp): the emulators do it this way - libavcodec with
+# D3D11VA on NVIDIA and Vulkan elsewhere. Off unless a build of FFmpeg is pointed at.
+set(NXRT_FFMPEG_DIR "" CACHE PATH "FFmpeg shared build (include/, lib/avcodec.lib) for the hardware movie decoder")
+if(NXRT_FFMPEG_DIR AND EXISTS "${NXRT_FFMPEG_DIR}/include/libavcodec/avcodec.h")
+    target_include_directories(nxrt PRIVATE "${NXRT_FFMPEG_DIR}/include")
+    target_compile_definitions(nxrt PRIVATE NXRT_HAVE_FFMPEG=1)
+    target_link_libraries(nxrt PUBLIC "${NXRT_FFMPEG_DIR}/lib/avcodec.lib" "${NXRT_FFMPEG_DIR}/lib/avutil.lib")
+    message(STATUS "nxrt: hardware movie decoder from FFmpeg at ${NXRT_FFMPEG_DIR}")
+endif()
 include(cmake/media_deps.cmake)   # libvpx for the Switch 2 video decoders (optional)
 
 if(NXRT_BUILD_TESTS)
@@ -129,3 +138,4 @@ if(NXRT_BUILD_TESTS AND NXRT_TEST_GAME)
         endif()
     endforeach()
 endif()
+

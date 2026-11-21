@@ -23,11 +23,45 @@ These are not style preferences. Each one exists because breaking it cost a sess
    obvious cases; `docs/INVARIANTS.md` has the reasoning.
 2. **The shader cache is append-only.** Never rebuild or delete it. It holds 21,171 translated programs, and
    `spirv.preload.pack` is read before the loose `.spv` files, so a stale pack silently wins over an edited
-   shader. If you change a shader patch, run `xc2\scripts\patch-shaders.ps1 -Check` and expect exit 0.
+   shader. If you change a shader patch, run `tools\build\patch-shaders.ps1 -Check` and expect exit 0.
+   **A cache built from the romfs alone is never complete:** the archive yields 12,154 blocks (12,126 embedded
+   groups + 28 in `ndsr.pck`), 12,132 of them translate, and 5 more exist in no file at all — the game builds
+   them at run time, so they only arrive through `NXRT_NVN_DUMP_MISSING`. A fresh install therefore ends at
+   **12,137**, which is what a complete cache has; a cache of 12,104 renders a black title screen. Any new build,
+   package or setup path must run the archive scan **and** the prefill; see handover 139 for the chain and the
+   checklist. `ndsr.pck` also names 12 compute variants in its control table — those are never dispatched (zero
+   hits in 8,502 docked and 2,184 handheld requests, measured 2026-11-19), so no setup path may add them; handover
+   163 has the numbers.
 3. **The game runs in one instance, started by the operator.** Automation must not terminate or restart it.
    Reading logs and snapshots at any time is fine. After it exits, the next launch waits about 25 seconds.
 4. **Absolute paths in scripts and commands.** Relative paths break as soon as the working directory moves,
    and several build scripts change directory part-way through.
+
+## Layout
+
+The checkout holds only what cannot be rebuilt elsewhere. Everything heavy has one home outside it, reached by a
+junction, so no script has to know about a second copy:
+
+| path | what |
+|---|---|
+| `xc2\` | the game-specific half: `src`, `sites`, `tests`, the release CMake project, the module table |
+| `tools\` | `build` (build and package), `run` (start the game), `shader` (cache and patches), `analysis`, `ci` (the gates), `setup` |
+| `launcher\` | the launcher sources; its built exe is what `make-package.ps1` copies |
+| `config\` | the machine-readable settings table (`keys.tsv`) and the undocumented backlog |
+| `docs\`, `licenses\`, `third_party\` | reference, licences, upstream code |
+| `work\` → `E:\XC2\dev\work` | logs, screenshots, scratch |
+| `xc2\game\` → `E:\XC2\data\exefs` | the user's own dump; `xc2\build\boot\game\*` likewise for romfs and DLC |
+
+`python tools/ci/check_invariants.py` fails when a new top-level entry appears, so the shape above is a rule and not
+a habit. The rules that go with it:
+
+1. **One entry point per intent**: `tools/build/build*.ps1`, `tools/run/play*.cmd`, `tools/build/make-package.ps1`.
+   A new script is a subcommand of one of them, not a new name at the root.
+2. **Directory names carry no date and no version.** Versions go in arguments, file names or `build.json`.
+3. **One-off scripts never go in `tools\`.** They live in `E:\XC2\archive\`; `tools\` is for what the next person uses.
+4. **Data has one physical copy.** The junctions above are the only second names for it.
+5. **Build outputs stay out of the checkout**: `xc2\build\` holds `boot` (runtime cwd and shader cache), `301`,
+   `census`, `release` — four directories, nothing else.
 
 ## Build and run
 
@@ -37,11 +71,11 @@ These are not style preferences. Each one exists because breaking it cost a sess
 ```powershell
 pwsh -File third_party\fefw-recomp\tools\textures\scripts\fetch_third_party.ps1   # once
 # two cmake configures, see QUICKSTART section 3
-.\xc2\scripts\build.ps1 -Exefs xc2\game\xc2ns301 -Run:$false `
+.\tools\build\build.ps1 -Exefs xc2\game\xc2ns301 -Run:$false `
     -Modules 'main,sdk,subsdk0,subsdk1,subsdk2,subsdk3,rtld' `
-    -LiftDir xc2\build\lift-301 -ObjDir xc2\build\obj-301 -LibDir xc2\build\lib-301
-.\xc2\scripts\build-boot.ps1 -Exefs xc2\game\xc2ns301 -OutDir xc2\build\boot-301 `
-    -LibDir xc2\build\lib-301 -MainLib xc2\build\lib-301\main.lib -Defines XC2_MODULES_7
+    -LiftDir xc2\build\301\lift -ObjDir xc2\build\301\obj -LibDir xc2\build\301\lib
+.\tools\build\build-boot.ps1 -Exefs xc2\game\xc2ns301 -OutDir xc2\build\301\boot `
+    -LibDir xc2\build\301\lib -MainLib xc2\build\301\lib\main.lib -Defines XC2_MODULES_7
 .\tools\run\play-301.cmd -60
 ```
 
@@ -60,11 +94,11 @@ pwsh -File third_party\fefw-recomp\tools\textures\scripts\fetch_third_party.ps1 
 ## Before you open a pull request
 
 ```powershell
-python tools/check_links.py          # every relative link resolves
-python tools/check_invariants.py     # no private paths, no game data, ASCII build inputs
+python tools/ci/check_links.py          # every relative link resolves
+python tools/ci/check_invariants.py     # no private paths, no game data, ASCII build inputs
 ```
 
-The second one also runs as a git hook (`pwsh -File tools/install-git-hooks.ps1` installs it) and in CI.
+The second one also runs as a git hook (`pwsh -File tools/ci/install-git-hooks.ps1` installs it) and in CI.
 If you change a file under `third_party/fefw-recomp/`, add the change to that directory's `MODIFICATIONS.md`
 — GPL-3.0 requires a modification notice.
 

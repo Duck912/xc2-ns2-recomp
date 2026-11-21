@@ -11,17 +11,14 @@ body:
   - type: input
     id: build
     attributes:
-      label: Build
-      description: Release tag or commit you ran.
-    validations:
-      required: true
+      label: Build (optional)
+      description: Release tag or commit you ran; the report zip carries it too.
   - type: input
     id: gpu
     attributes:
-      label: GPU, driver and Windows version
+      label: GPU, driver and Windows version (optional)
+      description: The report zip already records these; fill them in if you know them.
       placeholder: RX 6800 XT, Adrenalin 26.10.1, Windows 11 26200
-    validations:
-      required: true
   - type: textarea
     id: what
     attributes:
@@ -34,10 +31,11 @@ body:
     attributes:
       label: Report zip
       description: |
-        For anything about what the game draws, run this instead of sending a log by hand:
+        For anything about what the game draws, use the launcher: **About -> Record a report**. It starts the game with the
+        diagnostics on, and closing the window writes the zip. From a command prompt the same thing is:
 
         ```
-        pwsh -File tools/run/report.ps1
+        tools\python\python.exe tools\report.py
         ```
 
         Play until the problem shows, then close the game. It writes
@@ -54,14 +52,12 @@ body:
   - type: dropdown
     id: upscaler
     attributes:
-      label: Does it also happen with TAAU?
-      description: Set [upscale] upscaler = taau, restart, and try the same spot.
+      label: Does it also happen with TAAU? (optional)
+      description: Only if you feel like running it twice - set [dlss] upscaler = bilinear (or [upscale] mode = off for the spatial path), restart, and try the same spot.
       options:
-        - "Yes, it happens with TAAU too"
-        - "No, only with FSR"
         - "Not tried"
-    validations:
-      required: true
+        - "Yes, it happens without it too"
+        - "No, only with FSR / DLSS"
   - type: checkboxes
     id: confirm
     attributes:

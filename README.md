@@ -12,7 +12,7 @@ translator, driven by our offline harness.
 > It is the toolchain, the runtime and the project's documentation. You need your own legally acquired copy
 > of the game — see *What you must supply* below.
 
-## Status (2026-11-16)
+## Status (2026-11-18)
 
 | | |
 |---|---|
@@ -21,6 +21,7 @@ translator, driven by our offline harness.
 | Graphics | NVN 3.5 replay on Vulkan; Maxwell shaders translated offline; Ampere (Switch 2) shaders translated from SASS |
 | Upscaling | the game's DLSS/NDSR slot is served by the built-in **TAAU** by default; **FSR 4.1.2** and **FSR 3.1.6** are selectable at run time (`[dlss] upscaler = fsr3`) |
 | Audio | Opus (software decoder) + `nn::audio` OutputStream on the host sink |
+| Movies | **4K cutscenes play** (AV1 3840×2160, 30 fps) with lip sync; the retail build's BGM, effects and voices come out through a host XAudio2 sink |
 | Input | keyboard/mouse and gamepad |
 
 ### Known issues
@@ -32,6 +33,16 @@ translator, driven by our offline harness.
 * Residual shimmer in the cloud sea in-game (the game dithers its volumetric fog at 640×360; the console leans
   on its neural upscaler).
 * Slow frames on area transitions are dominated by texture uploads and guest/host lock waits.
+* A 4K cutscene waits while the game is still loading: 1–20 s of stalls at the start of a CG, and an occasional
+  audio drop in that window. The film is fine once the game has finished loading.
+* The first cutscene frame can flash green for a moment on some runs.
+
+### Something went wrong?
+
+Report it from the launcher: **About → Record a report**, or **Play → Record a report** right after a run that ended
+badly. It plays the game once more with the diagnostics on and writes `work\reports\report-<stamp>.zip` when you
+close the window; attach that zip to the issue. It holds the log, your settings and your driver's capability lines,
+and nothing in it is game data — which is why a report with the zip is worth ten without one.
 
 ## What you must supply
 
@@ -66,11 +77,11 @@ Vulkan SDK, Python 3.12), then
 
 ```powershell
 # once, after placing your 3.0.1 ExeFS in xc2\game\xc2ns301\
-.\xc2\scripts\build.ps1 -Exefs xc2\game\xc2ns301 -Run:$false `
+.\tools\build\build.ps1 -Exefs xc2\game\xc2ns301 -Run:$false `
     -Modules 'main,sdk,subsdk0,subsdk1,subsdk2,subsdk3,rtld' `
-    -LiftDir xc2\build\lift-301 -ObjDir xc2\build\obj-301 -LibDir xc2\build\lib-301
-.\xc2\scripts\build-boot.ps1 -Exefs xc2\game\xc2ns301 -OutDir xc2\build\boot-301 `
-    -LibDir xc2\build\lib-301 -MainLib xc2\build\lib-301\main.lib -Defines XC2_MODULES_7
+    -LiftDir xc2\build\301\lift -ObjDir xc2\build\301\obj -LibDir xc2\build\301\lib
+.\tools\build\build-boot.ps1 -Exefs xc2\game\xc2ns301 -OutDir xc2\build\301\boot `
+    -LibDir xc2\build\301\lib -MainLib xc2\build\301\lib\main.lib -Defines XC2_MODULES_7
 ```
 
 ## Documentation
@@ -86,18 +97,25 @@ Vulkan SDK, Python 3.12), then
 * The §-numbered working notes (one file per round, with every experiment and dead end) are kept outside this
 repository. Code comments and the reports refer to them as `HANDOVER N` or `§N`: those numbers are kept so the
 code and the notes stay cross-referenced, but the notes themselves are not published.
+* [docs/MODS.md](docs/MODS.md) — the mod interface: folder layout, order, conflicts, code patches (draft)
 * `docs/ENVIRONMENT.md` — toolchain, Python packages, build entries, data layout
 * `tools/README.md` — the analysis and run tools
 
 ## Credits
 
 * [nxrecomp](https://github.com/drakolordx7/nxrecomp) — the static recompiler used to lift the game
-* [fefw-recomp](third_party/fefw-recomp) — the Switch runtime (NVN/NVN2 → Vulkan) this build links against
+* **[Goldoire/fefw-recomp](https://github.com/Goldoire/fefw-recomp)** — the Switch runtime this project is built on,
+  and the reason it exists at all: the NVN/NVN2 replay layer, the service HLE, the shader pipeline and the
+  exe+DLL packaging split all started there. Our fork lives in [third_party/fefw-recomp](third_party/fefw-recomp)
+  and every change to it is listed in its `MODIFICATIONS.md`.
 * Ryujinx (MIT) — the Maxwell shader translator used by the offline shader harness
 * SDL3, Vulkan-Headers, VMA, and the other vendored dependencies (see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md))
 * [AksharDP/xc2-recomp](https://github.com/AksharDP/xc2-recomp) and the [Lichii](https://github.com/zortos293/Lichii) PRs — read for reference findings, no code copied
-* **DeepSeek V4.1 Flash** (build 1017) — pair-programmed this project with its author, from the first lift to this
-  release: the runtime work, the replay optimisation, the documentation and the review rounds
+* **DeepSeek V4.1 Flash** (build 1017, [@deepseek](https://github.com/deepseek)) — pair-programmed this project
+  with its author, from the first lift to this release: the runtime work, the replay optimisation, the
+  documentation and the review rounds
+* **[@capibawa](https://github.com/capibawa)** — [nxnative, branch `xc2-ns2-profile`](https://github.com/capibawa/nxnative/tree/xc2-ns2-profile):
+  the launch switches and the host-side movie/audio takeover that this project's film path follows
 
 ## Licence
 
@@ -125,5 +143,13 @@ code, no game assets and no keys, and gives no help in obtaining them.
 
 * **仓库里没有任何游戏代码、游戏资源或密钥**；需要你自己的游戏 dump（路径见上表），构建产物（含举升后的游戏代码）
   **不随仓库分发**，只能本地构建。
-* 当前状态：能启动、读 2022 通关存档、进游戏；港口与多数区域 **59–60 fps**，大平原 43–52 fps，4K 输出几乎零成本。已知问题见 `docs/COMPATIBILITY.md`。
+* 当前状态：能启动、读 2022 通关存档、进游戏；港口与多数区域 **59–60 fps**，大平原 43–52 fps，4K 输出几乎零成本；
+  **4K 过场 CG 30fps 正常播放、音画同步**。已知问题见 `docs/COMPATIBILITY.md`。
+* 遇到问题请**从启动器提交**：**关于 → 录制一份报告**，或者游戏异常退出后在 **开始游戏** 页点「录一份报告」。
+  它会用诊断模式再跑一次游戏，关掉窗口时把日志、设置、驱动能力行打包到 `work\reports\report-<时间>.zip`，
+  把这个 zip 附在 issue 里即可；里面没有任何游戏数据。带日志的问题几乎都能查，没有日志的大多只能猜。
 * 构建方法见 `docs/BUILD.md`；工具链见 `docs/ENVIRONMENT.md`；架构见 `docs/ARCHITECTURE.md`。
+* 影片/音频的宿主接管思路来自 [@capibawa 的 nxnative（`xc2-ns2-profile` 分支）](https://github.com/capibawa/nxnative/tree/xc2-ns2-profile)。
+* **本项目的运行时来自 [Goldoire 的 fefw-recomp](https://github.com/Goldoire/fefw-recomp)**：NVN/NVN2 重放层、
+  服务层 HLE、着色器管线、exe + DLL 的打包形态都奠基其上。没有那个项目，就没有这次重编译。我们的分支在
+  `third_party/fefw-recomp`，改动逐条记在它的 `MODIFICATIONS.md`。
