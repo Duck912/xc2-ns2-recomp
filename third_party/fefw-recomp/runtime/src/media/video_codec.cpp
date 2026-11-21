@@ -415,7 +415,8 @@ void decode_into(Decoder& d, const uint8_t* data, size_t size, int64_t pts, std:
             d.ff_tried = true;
             std::string why;
             d.ff = ffdec_create(d.codec, &why);
-            if (d.ff) NXLOG_I("vcodec", "decoder %u: %s on FFmpeg/D3D11VA (hardware)", d.id, d.codec == 10 ? "AV1" : d.codec == 9 ? "VP9" : "VP8");
+            if (d.ff) NXLOG_I("vcodec", "decoder %u: %s on FFmpeg hardware (%s)", d.id, d.codec == 10 ? "AV1" : d.codec == 9 ? "VP9" : "VP8",
+                              ffdec_hw_name());
             else NXLOG_I("vcodec", "decoder %u: no FFmpeg hardware decoder (%s)", d.id, why.c_str());
         }
         if (d.ff) {

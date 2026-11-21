@@ -309,3 +309,5 @@
 `aoc`	`dir`	`game/dlc`	`NXRT_AOC_DIR`	`third_party/fefw-recomp/runtime/src/services/aoc.cpp`	Add-on content root: one folder per title id, each with its own romfs.
 `nvn`	`int_tex_as_float`	`0`	`NXRT_NVN_INT_TEX_AS_FLOAT`	`src/gfx/nvn/nvn_gpu_texture.cpp`	Exercise only: an 8/16-bit integer colour format sampled by a float-declared shader binds its integer view instead of the zero dummy, the way the console leaves the bits in the register. Undefined by the Vulkan spec and off by default; tried for the eye/mouth flicker (issue #15) and it did not change it.
 
+`media`	`hwdec_backend`	`d3d11va`	`NXRT_MEDIA_HWDEC_BACKEND`	`src/media/video_ffmpeg.cpp`	Which hardware decode the film uses: `d3d11va` (the long-standing path) or `vulkan` (FFmpeg's Vulkan Video decode). Both hand back NV12 through `av_hwframe_transfer_data`; the CPU decoders stay the fallback. Added 2026-11-21 because D3D11VA hands back mosaic frames at 4K on an RX 6800 XT.
+

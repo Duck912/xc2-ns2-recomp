@@ -14,6 +14,7 @@ extern "C" {
 #include <cstring>
 #include <mutex>
 
+#include "nxrt/config.h"
 #include "nxrt/log.h"
 
 namespace nxrt::media {
@@ -28,6 +29,19 @@ AVCodecID codec_id(int codec) {
         default: return AV_CODEC_ID_AV1;
     }
 }
+// [media] hwdec_backend: which hardware decode the film uses. d3d11va is the long-standing path; vulkan goes through
+// FFmpeg's Vulkan Video decode, which on AMD avoids whatever makes D3D11VA hand back mosaic frames at 4K (2026-11-21).
+// Both end in the same av_hwframe_transfer_data -> NV12 copy; the CPU decoders stay the fallback for everything.
+AVHWDeviceType hw_device_type() {
+    static const AVHWDeviceType t = [] {
+        std::string b = config_get_str("media", "hwdec_backend", "d3d11va");
+        for (char& c : b)
+            if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+        return b == "vulkan" ? AV_HWDEVICE_TYPE_VULKAN : AV_HWDEVICE_TYPE_D3D11VA;
+    }();
+    return t;
+}
+
 // One D3D11VA device for the whole process. Creating it is the expensive part of the first frame: on 0.1.4 the
 // presenting thread sat 183 ms inside a 213 ms frame at the start of a film, waiting for the first picture while the
 // worker created the device under the decode. ffdec_prewarm() builds it during the loading screen instead, and every
@@ -40,10 +54,11 @@ AVBufferRef* shared_device() {
     if (g_dev) return g_dev;
     AVBufferRef* hw = nullptr;
     const auto t0 = std::chrono::steady_clock::now();
-    if (av_hwdevice_ctx_create(&hw, AV_HWDEVICE_TYPE_D3D11VA, nullptr, nullptr, 0) < 0) return nullptr;
+    if (av_hwdevice_ctx_create(&hw, hw_device_type(), nullptr, nullptr, 0) < 0) return nullptr;
     g_dev = hw;   // process lifetime: each decoder holds its own reference to it
     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
-    NXLOG_I(kTag, "D3D11VA device in %lld ms (shared by every stream)", static_cast<long long>(ms));
+    NXLOG_I(kTag, "%s device in %lld ms (shared by every stream)", hw_device_type() == AV_HWDEVICE_TYPE_VULKAN ? "Vulkan Video" : "D3D11VA",
+            static_cast<long long>(ms));
     return g_dev;
 }
 
@@ -103,11 +118,12 @@ FfDec* ffdec_create(int codec, std::string* why) {
     d->frame = av_frame_alloc();
     d->sw = av_frame_alloc();
     d->pkt = av_packet_alloc();
-    NXLOG_I(kTag, "libavcodec %s on D3D11VA", c->name);
+    NXLOG_I(kTag, "libavcodec %s on %s", c->name, hw_device_type() == AV_HWDEVICE_TYPE_VULKAN ? "Vulkan Video" : "D3D11VA");
     return d;
 }
 
 bool ffdec_prewarm() { return shared_device() != nullptr; }
+const char* ffdec_hw_name() { return hw_device_type() == AV_HWDEVICE_TYPE_VULKAN ? "Vulkan Video" : "D3D11VA"; }
 
 bool ffdec_decode(FfDec* d, const uint8_t* data, size_t size, int64_t pts, std::vector<FfDecPicture>* out) {
     if (!d || d->failed || !out) return false;
@@ -243,6 +259,7 @@ void ffdec_destroy(FfDec* d) {
 #else
 namespace nxrt::media {
 bool ffdec_prewarm() { return false; }
+const char* ffdec_hw_name() { return "none"; }
 bool ffdec_available(std::string* why) { if (why) *why = "built without FFmpeg"; return false; }
 FfDec* ffdec_create(int, std::string* why) { if (why) *why = "built without FFmpeg"; return nullptr; }
 bool ffdec_decode(FfDec*, const uint8_t*, size_t, int64_t, std::vector<FfDecPicture>*) { return false; }
