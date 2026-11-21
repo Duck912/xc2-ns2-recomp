@@ -614,10 +614,19 @@ bool range_valid(const Mirror& m, uint64_t first, uint64_t count) { return mem::
 Mirror* mirror_for(PoolGpu* pg, MemoryPool* mp) {
     if (pg->mirror || pg->mirror_tried) return pg->mirror;
     pg->mirror_tried = true;
-    if (!mp || mp->is_virtual || mp->is_shader_code || mp->dead.load() || pg->failed) return nullptr;
+    // [nvn] pool_mirror_shader_code (default on): pools flagged SHADER_CODE get a copy too. XC2 NS2 keeps its mesh vertex and index data
+    // in SHADER_CODE | GPU_CACHED | CPU_CACHED pools of 500-640 MiB; without a copy every vertex fetch of the depth and G-buffer passes
+    // crossed PCIe (16 of 20 GPU ms per frame on an RTX 5090).
+    static const bool code_ok = config_get_bool("nvn", "pool_mirror_shader_code", true);
+    if (!mp || mp->is_virtual || (mp->is_shader_code && !code_ok) || mp->dead.load() || pg->failed) return nullptr;
     // Tracked copies change the protection of the CPU's view of the pages. With [nvn] pool_view = false the GPU import is that same view;
     // that combination is not tried: no copy.
-    if (!pg->viewed) return nullptr;
+    // [nvn] pool_mirror_vamm (default on): a pool imported at its own address in the alias window (MapPhysicalMemory pages: XC2 NS2's
+    // big vertex/index pools) gets a copy too. Its pages are tracked by their write-watch record (write_watch.cpp), never by protection.
+    static const bool vamm = config_get_bool("nvn", "pool_mirror_vamm", true);
+    const uint64_t b0 = reinterpret_cast<uint64_t>(pg->base);
+    const bool in_alias = b0 >= mem::kAliasBase && b0 + pg->size <= mem::kAliasBase + mem::kAliasSize;
+    if (!pg->viewed && !(vamm && in_alias)) return nullptr;
     const uint64_t budget = mirror_cap_bytes();
     if (budget == 0) return nullptr;
 

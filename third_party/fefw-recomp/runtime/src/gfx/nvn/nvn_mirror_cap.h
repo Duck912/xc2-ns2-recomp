@@ -12,7 +12,7 @@ struct MirrorCap {
     const char* why = "";   // for the log line
 };
 
-constexpr uint64_t kMirrorCapMax = 2048ull << 20;      // the default cap on a large card
+constexpr uint64_t kMirrorCapMax = 8192ull << 20;      // the default cap on a large card
 constexpr uint64_t kMirrorMinVram = 4ull << 30;        // below this much video memory there are no copies by default
 
 // vram_bytes: the largest device-local heap (0 when unknown). explicit_mb >= 0: [nvn] pool_mirror_mb was set in the ini or the
@@ -22,7 +22,7 @@ inline MirrorCap mirror_cap(uint64_t vram_bytes, int64_t explicit_mb, bool share
     if (explicit_mb >= 0) return {static_cast<uint64_t>(explicit_mb) << 20, "[nvn] pool_mirror_mb"};
     if (shared_memory) return {0, "integrated GPU (shares system memory)"};
     if (vram_bytes < kMirrorMinVram) return {0, "under 4 GiB of video memory"};
-    return {std::min(kMirrorCapMax, vram_bytes / 4), vram_bytes / 4 < kMirrorCapMax ? "a quarter of the video memory" : "2048 MiB"};
+    return {std::min(kMirrorCapMax, vram_bytes / 4), vram_bytes / 4 < kMirrorCapMax ? "a quarter of the video memory" : "8192 MiB"};
 }
 
 }  // namespace nxrt::nvn
