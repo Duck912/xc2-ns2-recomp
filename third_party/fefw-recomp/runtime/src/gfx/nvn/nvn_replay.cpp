@@ -4676,7 +4676,9 @@ static void trace_dump_geometry(uint32_t mode, uint32_t count, bool indexed, uin
                                 int32_t base_vertex, uint32_t base_instance);
 
 bool snapshot_instances_on() {
-    static const bool on = nxrt::config_get_bool("nvn", "snapshot_instances", true);
+    // auto (XC2 NS2's default, xc2_boot.cpp): off when [nvn] mirror_capture is on (vertex streams already read the captured copy)
+    static const bool on = nxrt::config_get_str("nvn", "snapshot_instances", "1") == "auto" ? !mirror_capture_on()
+                                                                                          : nxrt::config_get_bool("nvn", "snapshot_instances", true);
     return on;
 }
 uint64_t g_snap_draws = 0, g_snap_bytes = 0, g_snap_big = 0;

@@ -1116,7 +1116,16 @@ void present(Window* window, int index) {
         g_frame_work[n & 3].store(g->reserved.load(), std::memory_order_relaxed);
         g_frame_count.store(n + 1, std::memory_order_release);
     }
-    static const int ahead = static_cast<int>(std::clamp<int64_t>(nxrt::config_get_int("nvn", "present_ahead", 1), 0, 3));
+    // auto (XC2 NS2's default, xc2_boot.cpp): lead by one frame only while [nvn] mirror_capture is on, which is what makes a guest that
+    // rewrites buffers for the next frame safe; without it 0, so the GPU never reads what the guest writes ahead (torn parts of the picture)
+    static const int ahead = [] {
+        if (nxrt::config_get_str("nvn", "present_ahead", "") == "auto") {
+            const int a = mirror_capture_on() ? 1 : 0;
+            NXLOG_I(kTag, "present_ahead: %d (auto: mirror_capture is %s)", a, a ? "on" : "off");
+            return a;
+        }
+        return static_cast<int>(std::clamp<int64_t>(nxrt::config_get_int("nvn", "present_ahead", 1), 0, 3));
+    }();
     if (ahead == 0 || on_render_thread()) {
         Ref<Window> keep = Ref<Window>::share(window);
         run_on_render_thread([&] { present_on_render_thread(window, index); });

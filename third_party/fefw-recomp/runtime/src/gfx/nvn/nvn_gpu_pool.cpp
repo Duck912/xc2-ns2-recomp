@@ -858,9 +858,17 @@ VkBuffer mirror_src(Mirror& m, uint64_t page, uint64_t* base) {
 //   the bytes of such write-backs still in flight (the copy has the newer bytes there).
 bool mirror_capture_on() {
     static const bool on = [] {
-        const bool v = config_get_bool("nvn", "mirror_capture", false);
+        // auto (XC2 NS2's default, xc2_boot.cpp): on when the copies' budget can hold whole-pool copies (kCaptureMinBudget), else off
+        const std::string s = config_get_str("nvn", "mirror_capture", "0");
+        const bool is_auto = s == "auto";
+        const uint64_t budget = is_auto ? mirror_cap_bytes() : 0;
+        const bool v = is_auto ? budget >= kCaptureMinBudget : config_get_bool("nvn", "mirror_capture", false);
         if (v) mem::ww::set_capture_owns_vamm(true);
-        NXLOG_I(kTag, "mirror_capture: %s", v ? "on (every GPU access to a mirrored pool goes through its copy)" : "off");
+        if (is_auto)
+            NXLOG_I(kTag, "mirror_capture: %s (auto: the copies may take %llu MiB, %llu needed)", v ? "on" : "off",
+                    static_cast<unsigned long long>(budget >> 20), static_cast<unsigned long long>(kCaptureMinBudget >> 20));
+        else
+            NXLOG_I(kTag, "mirror_capture: %s", v ? "on (every GPU access to a mirrored pool goes through its copy)" : "off");
         return v;
     }();
     return on;
