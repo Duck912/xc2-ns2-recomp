@@ -656,9 +656,71 @@ bool all_valid_or_armed(const Region* r, uint64_t first, uint64_t count, const s
 
 uint64_t guard_faults() { return g_guard_faults.load(std::memory_order_relaxed); }
 
+std::atomic<bool> g_capture_owns_vamm{false};
+std::atomic<uint64_t> g_cap_forgot{0}, g_cap_pollfail{0};
+void capture_stats(uint64_t* f, uint64_t* p) { *f = g_cap_forgot.exchange(0); *p = g_cap_pollfail.exchange(0); }
+void set_capture_owns_vamm(bool on) { g_capture_owns_vamm.store(on); }
+bool region_is_vamm(const Region* r) { return r && r->vamm; }
+
+void capture_poll(Region* r, std::vector<uint64_t>& out) {
+    if (!r || !r->vamm) return;
+    static thread_local std::vector<PVOID> addrs(16);
+    ExclusiveLock lk(r);
+    // One query per 64 KiB reservation (svc_memory.cpp reserves each granule on its own, aligned): a region need not start on a granule, and
+    // a query that spans two reservations fails.
+    const uint64_t end = r->base + r->npages * kPage;
+    uint64_t g = r->base & ~(kGranuleBytes - 1);
+    while (g < end) {
+        const uint64_t lo = std::max(g, r->base), hi = std::min(g + kGranuleBytes, end);
+        const uint64_t p0 = (lo - r->base) / kPage, p1 = (hi - r->base) / kPage;   // pages [p0, p1) of the region
+        bool armed = false;
+        for (uint64_t w = p0 >> 6; w <= (p1 - 1) >> 6 && !armed; ++w) {
+            uint64_t bits = r->prot[w].load(std::memory_order_acquire);
+            if (w == p0 >> 6) bits &= ~((uint64_t{1} << (p0 & 63)) - 1);
+            if (w == (p1 - 1) >> 6 && ((p1 - 1) & 63) != 63) bits &= (uint64_t{1} << (((p1 - 1) & 63) + 1)) - 1;
+            armed = bits != 0;
+        }
+        if (!armed) {   // skip ahead to the granule of the next armed page
+            uint64_t q = p1;
+            while (q < r->npages && !r->prot[q >> 6].load(std::memory_order_relaxed)) q = (q | 63) + 1;
+            if (q >= r->npages) break;
+            g = std::max(g + kGranuleBytes, (r->base + q * kPage) & ~(kGranuleBytes - 1));
+            continue;
+        }
+        ULONG_PTR count = addrs.size();
+        DWORD gran = 0;
+        const bool ok = GetWriteWatch(WRITE_WATCH_FLAG_RESET, reinterpret_cast<void*>(lo), static_cast<SIZE_T>(hi - lo), addrs.data(), &count, &gran) == 0;
+        if (!ok) {   // the reservation is gone: every armed page of it counts as written, the old way
+            g_cap_pollfail.fetch_add(1, std::memory_order_relaxed);
+            for (uint64_t pg = p0; pg < p1; ++pg) {
+                if (!test(r->prot.get(), pg)) continue;
+                const uint64_t b = bit(pg);
+                r->prot[pg >> 6].fetch_and(~b, std::memory_order_acq_rel);
+                r->valid[pg >> 6].fetch_and(~b, std::memory_order_acq_rel);
+                r->written[pg >> 6].fetch_or(b, std::memory_order_acq_rel);
+            }
+        } else {
+            for (ULONG_PTR i = 0; i < count; ++i) {
+                const uint64_t pg = (reinterpret_cast<uint64_t>(addrs[i]) - r->base) / kPage;
+                if (pg < r->npages && test(r->prot.get(), pg)) out.push_back(pg);
+            }
+        }
+        g += kGranuleBytes;
+    }
+}
+
+void release_written(Region* r, uint64_t pg) {
+    if (!r || pg >= r->npages) return;
+    ExclusiveLock lk(r);
+    const uint64_t b = bit(pg);
+    r->prot[pg >> 6].fetch_and(~b, std::memory_order_acq_rel);
+    r->valid[pg >> 6].fetch_and(~b, std::memory_order_acq_rel);
+    r->written[pg >> 6].fetch_or(b, std::memory_order_acq_rel);
+}
+
 void take_written(Region* r, std::vector<uint64_t>& out) {
     if (!r) return;
-    if (r->vamm) poll_write_watch(r);
+    if (r->vamm && !g_capture_owns_vamm.load(std::memory_order_relaxed)) poll_write_watch(r);
     for (uint64_t w = 0; w < r->nwords; ++w) {
         if (!r->written[w].load(std::memory_order_relaxed)) continue;
         uint64_t v = r->written[w].exchange(0, std::memory_order_acq_rel);
@@ -746,6 +808,8 @@ void forget(uint64_t addr, uint64_t size, bool ban) {
     for_regions(addr, size, [ban](Region* r, uint64_t first, uint64_t count) {
         if (ban) set_bits(r->ban.get(), first, count, true);
         if (!any_set(r->prot.get(), first, count) && !any_set(r->valid.get(), first, count)) return;
+        for (uint64_t q = first; q < first + count; ++q)
+            if (test(r->valid.get(), q)) g_cap_forgot.fetch_add(1, std::memory_order_relaxed);
         for (uint64_t q = first; q < first + count; ++q)           // guarded pages: read-only first (the owner's newer copy is dropped)
             if (test(r->guard.get(), q)) {              // protection first, then the bit (see unguard_locked)
                 DWORD was = 0;
