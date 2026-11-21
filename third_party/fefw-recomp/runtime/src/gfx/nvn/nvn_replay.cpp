@@ -4564,10 +4564,54 @@ void draw_log(uint32_t count, uint32_t instances, bool indexed) {
 static void trace_dump_geometry(uint32_t mode, uint32_t count, bool indexed, uint32_t index_type, uint64_t index_address,
                                 int32_t base_vertex, uint32_t base_instance);
 
+bool snapshot_instances_on() {
+    static const bool on = nxrt::config_get_bool("nvn", "snapshot_instances", true);
+    return on;
+}
+uint64_t g_snap_draws = 0, g_snap_bytes = 0, g_snap_big = 0;
+void snapshot_instances(uint32_t first_instance, uint32_t instances) {
+    if (!snapshot_instances_on() || !F) return;
+    bool done[16] = {}, any = false;
+    for (uint32_t i = 0; i < g_key_attr_count; ++i) {
+        const uint32_t b = g_key_binding[i];
+        if (b >= 16 || done[b]) continue;
+        done[b] = true;
+        if (g_key_dummy_binding && b == static_cast<uint32_t>(g_key_dummy_binding - 1)) continue;
+        const VertexStreamInfo& st = S.stream[b];
+        const GState::Bind& vb = S.vtx[b];
+        if (st.divisor <= 0 || !vb.addr) continue;
+        const uint8_t* host = static_cast<const uint8_t*>(host_ptr(vb.addr));
+        if (!host) continue;
+        const uint64_t div = static_cast<uint64_t>(st.divisor), stride = static_cast<uint64_t>(std::max<ptrdiff_t>(0, st.stride));
+        const uint64_t recs = (static_cast<uint64_t>(first_instance) + instances + div - 1) / div;
+        uint64_t bytes = (stride ? recs * stride : 0) + 256;            // + the attribute offsets inside the last record
+        if (vb.size) bytes = std::min<uint64_t>(bytes, vb.size);
+        if (bytes > (4ull << 20)) { ++g_snap_big; continue; }
+        UploadAlloc u = F->upload(bytes, 16);
+        if (!u) continue;
+        std::memcpy(u.ptr, host, static_cast<size_t>(bytes));
+        const VkDeviceSize off = u.offset, size = bytes, vstride = stride;
+        vkCmdBindVertexBuffers2(F->cb, b, 1, &u.buffer, &off, &size, &vstride);
+        g_snap_bytes += bytes;
+        any = true;
+    }
+    if (any) {
+        ++g_snap_draws;
+        g_dirty |= kVb;   // the next draw binds the game's own buffers again
+        static uint64_t next = 20000;
+        if (g_snap_draws >= next) {
+            next += 200000;
+            NXLOG_I(kTag, "snapshot_instances: %llu draws, %llu MiB of per-instance data copied at replay, %llu ranges over 4 MiB left in place",
+                    (unsigned long long)g_snap_draws, (unsigned long long)(g_snap_bytes >> 20), (unsigned long long)g_snap_big);
+        }
+    }
+}
+
 void do_draw_arrays(const P_DrawArrays& p) {
     count_primitives(p.mode, p.count, p.instance_count);
     VkPrimitiveTopology topo;
     if (!begin_draw(static_cast<int>(p.mode), false, 0, &topo)) { counters().draws_skipped.fetch_add(1); return; }
+    snapshot_instances(p.base_instance, std::max<uint32_t>(1, p.instance_count));
     draw_log(p.count, p.instance_count, false);
     quad_split_candidate(p.mode, p.count, std::max<uint32_t>(1, p.instance_count));   // [nvn] quad_split: does this draw qualify?
     const PrimConversion conv = prim_conversion(static_cast<int>(p.mode));
@@ -4723,6 +4767,7 @@ void do_draw_elements(const P_DrawElements& p) {
     count_primitives(p.mode, p.count, p.instance_count);
     VkPrimitiveTopology topo;
     if (!begin_draw(static_cast<int>(p.mode), true, static_cast<int>(p.type), &topo)) { counters().draws_skipped.fetch_add(1); return; }
+    snapshot_instances(p.base_instance, std::max<uint32_t>(1, p.instance_count));
     draw_log(p.count, p.instance_count, true);
     if (g_trace) {   // the indices and the first attributes of the first vertices
         const uint32_t isz0 = index_size_bytes(static_cast<int>(p.type));
