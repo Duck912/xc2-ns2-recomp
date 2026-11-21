@@ -973,12 +973,14 @@ void acquire_output(::Ctx* c) {   // (u32* index, NativeSyncHandle* fence, dec)
             // can ever complete. Fences are only completed on guest calls, and a player waiting in that fence makes no call,
             // so the film stayed on its empty texture - a green picture with zero reads, one run in three (2026-11-21). It
             // reads the pool's neutral image instead and comes back once packets exist.
+            // Always queue it: a buffer that is not queued can never be paired, and the picture then has nowhere to go
+            // (placed stayed 0 for a whole film, 2026-11-21). When nothing exists yet, the fence is completed now as well, so
+            // the player reads the pool's neutral image and keeps going instead of waiting for a fence no call will complete.
+            d->waiting.emplace_back(index, seq);
             if (d->ready.empty() && d->pending.empty()) {
                 d->done_seq.store(seq);
                 fences = true;
                 ++d->completed_early;
-            } else {
-                d->waiting.emplace_back(index, seq);
             }
             // Usually the worker already has the picture. If it does not within a moment, decode here: the library arms its fence
             // right after this call and waits for it, so handing out an incomplete fence and hoping a later submit completes it
@@ -1000,9 +1002,10 @@ void acquire_output(::Ctx* c) {   // (u32* index, NativeSyncHandle* fence, dec)
     }
     if (g_log && d) {
         static std::atomic<uint32_t> n{0};
-        if (n.fetch_add(1, std::memory_order_relaxed) < 12)
-            NXLOG_I("vcodec", "decoder %u: acquire -> index %u, fence %llu (ready %zu, free %zu)", d->id, index, (unsigned long long)seq,
-                    d->ready.size(), d->free.size());
+        if (n.fetch_add(1, std::memory_order_relaxed) < 24)
+            NXLOG_I("vcodec", "decoder %u: acquire -> index %u, fence %llu (ready %zu, pending %zu, waiting %zu, free %zu, early %llu)", d->id,
+                    index, (unsigned long long)seq, d->ready.size(), d->pending.size(), d->waiting.size(), d->free.size(),
+                    static_cast<unsigned long long>(d->completed_early.load()));
     }
     if (d) after_change(c, *d, fences);
     RET(0);
