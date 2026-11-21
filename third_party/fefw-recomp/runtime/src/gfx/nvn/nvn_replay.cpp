@@ -348,6 +348,7 @@ bool g_want_depth_ro = false;         // some texture this draw samples is the c
 bool g_depth_general = false;         // ... and the draw writes that attachment's stencil too, so it needs GENERAL
 uint32_t g_color_general = 0;         // bit i: colour attachment i is also a storage image of this draw (image load/store to a render target)
 std::vector<Texture*> g_storage_bound;   // the storage images prepare_textures moved to GENERAL for this draw
+std::vector<Texture*> g_storage_unscale; // of those, the ones that must be unscaled ([gfx] render_scale: written, or bound to compute)
 
 // The layout the depth-stencil attachment has for a pass. A pass that only samples it can leave it read-only; one that
 // samples it AND writes its stencil cannot, because Vulkan has no "sampled and writable" depth layout - the descriptor
@@ -1614,13 +1615,21 @@ void prepare_textures(const ProgLayout& pl) {
     need.clear();
     need_storage.clear();
     g_storage_bound.clear();
+    g_storage_unscale.clear();
+    bool written_gfx = false;   // a draw (not a dispatch) writes a storage image, which stays unscaled
     for (const BindingDesc& d : pl.bindings) {
         TexResolved tmp;
         if (d.type == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE) {
             const TexResolved& r = resolve_image_ref(d, tmp);
             if (!r.tex || !tex_gpu(r.tex) || !tex_has_storage(r.tex)) continue;
             g_storage_bound.push_back(r.tex);
-            if (r.tex->cpu_dirty.load() || tex_layout(r.tex) != VK_IMAGE_LAYOUT_GENERAL || tex_scale(r.tex) != 1.0f) need_storage.push_back(r.tex);
+            // [gfx] render_scale: an image a fragment shader only reads (imageLoad at its own pixel, XC2 NS2's decals reading the G-buffer
+            // normals) keeps its scale: the translator scales imageLoad coordinates like texelFetch (TexelFetchScale), and support_for_draw
+            // hands it the scale. Written images (imageStore coordinates are not scaled) and compute bindings still go back to 1.
+            const bool keep = d.nvn_stage == kFragment && !d.shader->refl.bindings[d.index].written;
+            if (r.tex->cpu_dirty.load() || tex_layout(r.tex) != VK_IMAGE_LAYOUT_GENERAL || (tex_scale(r.tex) != 1.0f && !keep)) need_storage.push_back(r.tex);
+            if (!keep) g_storage_unscale.push_back(r.tex);
+            if (!keep && d.nvn_stage != kCompute) written_gfx = true;
             continue;
         }
         if (d.type != VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER) continue;
@@ -1660,6 +1669,23 @@ void prepare_textures(const ProgLayout& pl) {
     need.erase(std::remove_if(need.begin(), need.end(),
                               [&](Texture* t) { return std::any_of(g_storage_bound.begin(), g_storage_bound.end(), [&](Texture* s) { return shares_image(t, s); }); }),
                need.end());
+    // [gfx] render_scale: a draw that writes an unscaled storage image writes it at its own pixel (imageStore coordinates are not scaled),
+    // so its render targets go back to 1 as well and the two stay texel for texel. XC2 NS2's light list: the list (RG32UI, a colour
+    // target) and the registration mask (R32UI, a storage image) are rebuilt into each other (earlyz_mask) and read together; a list at
+    // 2x beside a mask at 1x put every other tile's lights in the wrong place (a dot grid over the shadows).
+    if (written_gfx && render_scale() != 1.0f) {
+        Texture* ts[9];
+        uint32_t n = 0;
+        for (uint32_t i = 0; i < S.ncolor && i < 8; ++i) if (S.color_tex[i]) ts[n++] = S.color_tex[i].get();
+        if (S.depth_tex) ts[n++] = S.depth_tex.get();
+        bool any = false;
+        for (uint32_t i = 0; i < n; ++i) any |= tex_gpu(ts[i]) && tex_scale(ts[i]) != 1.0f;
+        if (any) {
+            end_pass(true);
+            for (uint32_t i = 0; i < n; ++i)
+                if (tex_gpu(ts[i]) && tex_scale(ts[i]) != 1.0f) tex_rescale(ts[i], *F, 1.0f, "a render target of a draw that writes an unscaled storage image");
+        }
+    }
     if (need.empty() && need_storage.empty()) return;
     {   // [nvn] tex_prologue (default on): a texture no command has touched yet (its image is still UNDEFINED) gets its first upload in the
         // submission's prologue, a command buffer that runs before everything recorded for it, so the pass need not end. An area load drew
@@ -1709,7 +1735,8 @@ void prepare_textures(const ProgLayout& pl) {
         tex_transition(t, *F, tex_sampled_layout(t));
     }
     for (Texture* t : need_storage) {
-        if (tex_scale(t) != 1.0f) tex_rescale(t, *F, 1.0f, "bound as a storage image");   // imageStore coordinates are not scaled (Ryujinx: ResScaleUnsupported)
+        if (tex_scale(t) != 1.0f && std::find(g_storage_unscale.begin(), g_storage_unscale.end(), t) != g_storage_unscale.end())
+            tex_rescale(t, *F, 1.0f, "bound as a storage image");   // imageStore coordinates are not scaled (Ryujinx: ResScaleUnsupported)
         tex_ensure_current(t, *F);
         tex_transition(t, *F, VK_IMAGE_LAYOUT_GENERAL);
         tex_mark_gpu_written(t);
@@ -2743,6 +2770,40 @@ void support_for_draw(const ProgLayout& pl, bool compute) {
     if (fs) frag_count = tex_count(fs);
     // the native size of the render target, for the fragment rule below
     Texture* rt = S.ncolor && S.color_tex[0] ? S.color_tex[0].get() : S.depth_tex.get();
+    // Ryujinx: a texture whose size is the render target's size times one factor on both axes interpolates the scaled pixels with
+    // gl_FragCoord (a negative scale tells TexelFetchScale to)
+    auto frag_sign = [rt](Texture* tex, float s) {
+        if (!rt || tex->b.width == 0 || tex->b.height == 0) return s;
+        const float rw = static_cast<float>(rt->b.width), rh = static_cast<float>(rt->b.height);
+        return rw / static_cast<float>(tex->b.width) == rh / static_cast<float>(tex->b.height) ? -s : s;
+    };
+    // A fragment shader's storage images an imageLoad reads at a scale (prepare_textures keeps the scale of an image only read): their
+    // scales follow the textures' (the harness numbers images after the textures, in binding order).
+    if (fs) {
+        int tex_n = 0;
+        std::vector<uint32_t> img_bindings;
+        for (const DescriptorBinding& b : fs->refl.bindings) {
+            if (b.count != 1) continue;
+            if (b.type == DescriptorType::CombinedImageSampler || b.type == DescriptorType::SampledImage || b.type == DescriptorType::UniformTexelBuffer) ++tex_n;
+            else if (b.type == DescriptorType::StorageImage || b.type == DescriptorType::StorageTexelBuffer) img_bindings.push_back(b.set << 16 | b.binding);
+        }
+        std::sort(img_bindings.begin(), img_bindings.end());
+        for (const BindingDesc& d : pl.bindings) {
+            if (d.type != VK_DESCRIPTOR_TYPE_STORAGE_IMAGE || d.shader != fs) continue;
+            const DescriptorBinding& b = d.shader->refl.bindings[d.index];
+            if (b.count != 1) continue;
+            TexResolved tmp;
+            Texture* tex = resolve_image_ref(d, tmp).tex;
+            if (!tex) continue;
+            const float s = tex_scale(tex);
+            if (s == 1.0f) continue;
+            const auto at = std::find(img_bindings.begin(), img_bindings.end(), b.set << 16 | b.binding);
+            const int slot = 1 + tex_n + static_cast<int>(at - img_bindings.begin());
+            if (at == img_bindings.end() || slot >= 73) continue;
+            sc[slot] = frag_sign(tex, s);
+            any = true;
+        }
+    }
     for (const BindingDesc& d : pl.bindings) {
         if (d.type != VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER) continue;
         const DescriptorBinding& b = d.shader->refl.bindings[d.index];
