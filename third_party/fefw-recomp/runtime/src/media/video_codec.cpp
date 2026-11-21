@@ -232,6 +232,7 @@ struct Decoder {
     long long first_picture_ms = -1;
     std::mutex dec_mu;                                    // the codec context and last picture: the worker decodes, the guest may fall back
     std::thread worker;                                   // decodes pending packets ahead of the player, off its thread
+    std::atomic<uint32_t> completed_early{0};             // acquires that completed their fence with no picture to pair (a film's first acquire)
     std::condition_variable cv;
     bool stop = false;
     bool worker_started = false;
@@ -968,7 +969,17 @@ void acquire_output(::Ctx* c) {   // (u32* index, NativeSyncHandle* fence, dec)
             index = d->free.front();
             d->free.pop_front();
             seq = d->next_seq++;
-            d->waiting.emplace_back(index, seq);
+            // Nothing to pair and nothing on the way: complete the fence right away instead of handing out one that nothing
+            // can ever complete. Fences are only completed on guest calls, and a player waiting in that fence makes no call,
+            // so the film stayed on its empty texture - a green picture with zero reads, one run in three (2026-11-21). It
+            // reads the pool's neutral image instead and comes back once packets exist.
+            if (d->ready.empty() && d->pending.empty()) {
+                d->done_seq.store(seq);
+                fences = true;
+                ++d->completed_early;
+            } else {
+                d->waiting.emplace_back(index, seq);
+            }
             // Usually the worker already has the picture. If it does not within a moment, decode here: the library arms its fence
             // right after this call and waits for it, so handing out an incomplete fence and hoping a later submit completes it
             // stalls the player for as long as that wait takes (3-16 s frames at the film's start, 2026-11-18).
