@@ -972,14 +972,8 @@ void acquire_output(::Ctx* c) {   // (u32* index, NativeSyncHandle* fence, dec)
             // Usually the worker already has the picture. If it does not within a moment, decode here: the library arms its fence
             // right after this call and waits for it, so handing out an incomplete fence and hoping a later submit completes it
             // stalls the player for as long as that wait takes (3-16 s frames at the film's start, 2026-11-18).
-            // A player that acquires before its first packet arrives gets a fence with no picture behind it, and then only
-            // waits: entering that fence wait with nothing on the way (no picture, no packet to decode) left the film on the
-            // player's empty texture - a green picture with zero reads, one run in three on the RX 6800 XT (2026-11-21). Wait
-            // here for the packet or the picture instead; measured 20 ms between the acquire and the first packet.
-            if (d->ready.empty() && d->pending.empty())
-                d->cv.wait_for(lk, std::chrono::milliseconds(300), [&] { return !d->ready.empty() || !d->pending.empty() || d->stop; });
             if (d->ready.empty() && !d->pending.empty() &&
-                !d->cv.wait_for(lk, std::chrono::milliseconds(50), [&] { return !d->ready.empty() || d->stop; })) {
+                !d->cv.wait_for(lk, std::chrono::milliseconds(2), [&] { return !d->ready.empty() || d->stop; })) {
                 lk.unlock();
                 decode_one(*d);
                 lk.lock();
