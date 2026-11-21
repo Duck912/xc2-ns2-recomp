@@ -37,6 +37,13 @@ translator, driven by our offline harness.
   audio drop in that window. The film is fine once the game has finished loading.
 * The first cutscene frame can flash green for a moment on some runs.
 
+### Something went wrong?
+
+Report it from the launcher: **About → Record a report**, or **Play → Record a report** right after a run that ended
+badly. It plays the game once more with the diagnostics on and writes `work\reports\report-<stamp>.zip` when you
+close the window; attach that zip to the issue. It holds the log, your settings and your driver's capability lines,
+and nothing in it is game data — which is why a report with the zip is worth ten without one.
+
 ## What you must supply
 
 The recompiler needs the game's own files; they are never part of this repository and are never downloaded:
@@ -138,6 +145,9 @@ code, no game assets and no keys, and gives no help in obtaining them.
   **不随仓库分发**，只能本地构建。
 * 当前状态：能启动、读 2022 通关存档、进游戏；港口与多数区域 **59–60 fps**，大平原 43–52 fps，4K 输出几乎零成本；
   **4K 过场 CG 30fps 正常播放、音画同步**。已知问题见 `docs/COMPATIBILITY.md`。
+* 遇到问题请**从启动器提交**：**关于 → 录制一份报告**，或者游戏异常退出后在 **开始游戏** 页点「录一份报告」。
+  它会用诊断模式再跑一次游戏，关掉窗口时把日志、设置、驱动能力行打包到 `work\reports\report-<时间>.zip`，
+  把这个 zip 附在 issue 里即可；里面没有任何游戏数据。带日志的问题几乎都能查，没有日志的大多只能猜。
 * 构建方法见 `docs/BUILD.md`；工具链见 `docs/ENVIRONMENT.md`；架构见 `docs/ARCHITECTURE.md`。
 * 影片/音频的宿主接管思路来自 [@capibawa 的 nxnative（`xc2-ns2-profile` 分支）](https://github.com/capibawa/nxnative/tree/xc2-ns2-profile)。
 * **本项目的运行时来自 [Goldoire 的 fefw-recomp](https://github.com/Goldoire/fefw-recomp)**：NVN/NVN2 重放层、

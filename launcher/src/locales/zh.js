@@ -48,6 +48,10 @@ export const zh = {
     'play.noExitCode': '无退出码',
     'play.codeWithHex': '退出码 {code}（{hex}）',
     'play.reportClean': '上次运行',
+    'play.recordReport': '录一份报告',
+    'play.recordHint':
+      '想让我们查？点这里录一份报告：会用诊断模式再启动一次游戏，关掉窗口后把日志、设置和帧时间打包成 zip，可以直接附到 issue 里。',
+    'play.recordStarted': '游戏已启动。再复现一次后关掉窗口，zip 会出现在 work\\reports。',
     'play.reportCrashed': '游戏未正常结束',
     'play.fileNew': '（新）',
     'play.problemRepo': '未找到仓库。请在设置里指定它的文件夹。',

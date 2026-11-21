@@ -49,6 +49,10 @@ export const en = {
     'play.noExitCode': 'no exit code',
     'play.codeWithHex': 'code {code} ({hex})',
     'play.reportClean': 'Last run',
+    'play.recordReport': 'Record a report',
+    'play.recordHint':
+      'Want us to look at this? Record a report: the game starts once more with the diagnostics on, and closing it packs the log, your settings and the frame times into a zip you can attach to an issue.',
+    'play.recordStarted': 'The game is starting. Play until it happens again, then close it - the zip lands in work\\reports.',
     'play.reportCrashed': 'The game did not end cleanly',
     'play.fileNew': ' (new)',
     'play.problemRepo': 'The repository was not found. Set its folder in Settings.',
