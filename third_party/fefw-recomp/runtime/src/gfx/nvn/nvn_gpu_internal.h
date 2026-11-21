@@ -338,6 +338,7 @@ void replay_lists(Frame& f, const std::vector<Ref<CmdList>>& lists);
 void replay_end_submit(Frame& f);
 void replay_abort_submit();     // after a recording threw (its command buffer is discarded)
 void replay_request_trace();      // trace the next whole presented frame (any thread)
+void replay_request_trace_span(int count);   // trace the next `count` presented frames (any thread)
 void replay_shutdown();           // destroys pipelines and layouts (render thread, device idle)
 
 // ---- shared facts (nvn_gpu.cpp) ----------------------------------------------------------------------------------------

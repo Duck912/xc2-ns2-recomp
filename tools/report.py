@@ -114,12 +114,20 @@ def run_game(args):
     return log, csv
 
 
-def newest_log():
+def newest_log(since=0.0):
+    """The newest log this run could have written. A release package's xc2_boot.exe is built from xc2_stub.cpp, which
+    forwards its arguments to the runtime and ignores --log, so the log lands where nxrt.ini says: <install>/nxrt.log.
+    Looking only in work/logs made every report on a package install come out with an empty folder (issue #18)."""
+    cands = []
     d = os.path.join(ROOT, "work", "logs")
-    if not os.path.isdir(d):
-        return ""
-    logs = [os.path.join(d, f) for f in os.listdir(d) if f.endswith(".log")]
-    return max(logs, key=os.path.getmtime) if logs else ""
+    if os.path.isdir(d):
+        cands += [os.path.join(d, f) for f in os.listdir(d) if f.endswith(".log")]
+    ini_log = os.path.join(ROOT, "nxrt.log")
+    if os.path.isfile(ini_log):
+        cands.append(ini_log)
+    if since:
+        cands = [c for c in cands if os.path.getmtime(c) >= since]
+    return max(cands, key=os.path.getmtime) if cands else ""
 
 
 def section(out_dir, name, lines):
@@ -143,6 +151,7 @@ def main():
     out_dir = os.path.join(ROOT, "work", "reports", "report-%s" % stamp)
     os.makedirs(out_dir, exist_ok=True)
 
+    started = time.time()
     if args.from_log:
         log, csv = args.from_log, ""
         print("packaging %s" % log)
@@ -150,9 +159,10 @@ def main():
         log, csv = run_game(args)
 
     if not os.path.isfile(log):
-        alt = newest_log()
+        alt = newest_log(started)
         if not alt:
             sys.exit("the run wrote no log at all")
+        print("the game wrote its log to %s (a packaged xc2_boot.exe ignores --log): packaging that" % alt)
         log = alt
     with open(log, encoding="utf-8", errors="ignore") as f:
         lines = [l.rstrip("\n") for l in f]

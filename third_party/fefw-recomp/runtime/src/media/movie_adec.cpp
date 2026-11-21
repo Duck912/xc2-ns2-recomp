@@ -547,7 +547,10 @@ bool install_audio_decoder_hle() {
         const game::Info& gi = game::info();
         if (gi.platform != game::Platform::Switch2 || !gi.movie_video_decoder) return;
         g_log = config_get_bool("media", "video_decoder_log", false);
-        g_audio = config_get_bool("media", "movie_audio", false);
+        // On by default since 2026-11-21: this track is a placeholder (one byte a packet, the sound comes from the game's own
+    // stream), but the player paces itself on the decoder's frames. With it off the opening film froze on its first picture
+    // for about five seconds on both machines, then caught up; with it on the film advances and lip sync holds.
+    g_audio = config_get_bool("media", "movie_audio", true);
         for (const Import& im : kImports) {
             hle_register(im.name, im.fn);
             module_override_symbol(im.name);

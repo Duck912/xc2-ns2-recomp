@@ -1452,6 +1452,10 @@ void backend_trace_next_frame() {
     if (be::gpu::active()) be::gpu::replay_request_trace();
 }
 
+void backend_trace_frames(int count) {
+    if (be::gpu::active()) be::gpu::replay_request_trace_span(count);
+}
+
 BackendStats backend_stats() {
     BackendStats s;
     if (!be::gpu::active()) return s;

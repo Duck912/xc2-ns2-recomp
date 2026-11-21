@@ -338,7 +338,13 @@ public:
         }
         mod_ = LoadLibraryW(path.c_str());
         if (!mod_) {
-            NXLOG_E(kTag, "LoadLibrary failed (error %lu)", GetLastError());
+            // Error 126 is "module not found" for the DLL *or one of its dependencies*, so name the file that was tried:
+            // a player cannot tell a wrong folder from a missing dependency otherwise (issue #18).
+            const std::error_code ec(static_cast<int>(GetLastError()), std::system_category());
+            char narrow_path[520] = {};
+            WideCharToMultiByte(CP_UTF8, 0, path.c_str(), -1, narrow_path, sizeof narrow_path - 1, nullptr, nullptr);
+            NXLOG_E(kTag, "LoadLibrary(%s) failed: %s (error %lu). Error 126 means the file or one of the DLLs it needs is missing",
+                    narrow_path, ec.message().c_str(), GetLastError());
             return false;
         }
         create_ = reinterpret_cast<PfnFfxCreateContext>(GetProcAddress(mod_, "ffxCreateContext"));
