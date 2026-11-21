@@ -18,6 +18,10 @@
 #include "nxrt/kernel.h"
 #include "nxrt/config.h"
 
+namespace nxrt::media {
+bool media_film_range_hit(uint64_t addr, uint64_t size);   // video_codec.cpp: was a film frame read into this range
+}
+
 namespace nxrt::nvn {
 using namespace be;
 namespace {
@@ -378,6 +382,14 @@ void nvnCommandBufferCopyBufferToTexture(NVNcommandBuffer* cmd, NVNbufferAddress
     std::unique_lock<std::mutex> lk;
     CommandBuffer* cb = begin_record(cmd, lk);
     if (!cb) return;
+    // A copy whose source is a buffer the film was read into: this is how the movie library puts a frame into a texture (no
+    // CPU upload ever happens). Logged so a frozen film says whether the copy stops (2026-11-21).
+    if (nxrt::media::media_film_range_hit(src, 64)) {
+        static std::atomic<uint32_t> n{0};
+        if (n.fetch_add(1, std::memory_order_relaxed) < 40)
+            NXLOG_I("nvn.copy", "buffer->texture from a film frame buffer: src %llx tex t%u %dx%d", static_cast<unsigned long long>(src), t->id,
+                    t->b.width, t->b.height);
+    }
     P_CopyBufTex p = zeroed<P_CopyBufTex>();
     p.address = src;
     p.tex = t;

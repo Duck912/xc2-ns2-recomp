@@ -194,6 +194,27 @@ bool film_trace_on() {
     return on;
 }
 std::atomic<int> g_signals_owed{0};   // signals the decoder workers owe; svc.cpp drains them on any guest call
+
+// The guest buffers the client has read a picture into. The movie library puts them into a texture with a GPU copy, not a CPU
+// upload (no 4K texture is ever uploaded during a film), so the copy is where the frame either reaches the screen or does not.
+struct FilmRange {
+    uint64_t addr = 0;
+    uint64_t size = 0;
+};
+std::mutex g_film_range_mu;
+FilmRange g_film_ranges[16];
+int g_film_range_n = 0;
+
+void film_range_note(uint64_t addr, uint64_t size) {
+    if (!addr || size < 4096) return;
+    std::lock_guard<std::mutex> lk(g_film_range_mu);
+    for (int i = 0; i < g_film_range_n; ++i)
+        if (g_film_ranges[i].addr == addr) return;
+    if (g_film_range_n < 16) g_film_ranges[g_film_range_n++] = FilmRange{addr, size};
+}
+
+// True when [addr, addr+size) overlaps a buffer a film frame was read into.
+
 void film_state_tick();   // defined after the decoder registry
 void film_trace(const char* what, unsigned long long a = 0, unsigned long long b = 0, unsigned long long c = 0) {
     if (!film_trace_on()) return;
@@ -525,6 +546,18 @@ void after_change(::Ctx* c, Decoder& d, bool fences) {
 
 }  // namespace
 
+// See the note above g_film_ranges: true when [addr, addr+size) overlaps a buffer a film frame was read into. Outside the
+// anonymous namespace so the NVN copy path can ask (api_cmd_work.cpp).
+bool media_film_range_hit(uint64_t addr, uint64_t size) {
+    if (!addr || !size) return false;
+    std::lock_guard<std::mutex> lk(g_film_range_mu);
+    for (int i = 0; i < g_film_range_n; ++i) {
+        const FilmRange& r = g_film_ranges[i];
+        if (addr < r.addr + r.size && r.addr < addr + size) return true;
+    }
+    return false;
+}
+
 // Delivers signals the decoder workers owe (see g_signals_owed). Called from the SVC dispatcher with the calling guest thread's
 // context, which is the only place a guest event may be signalled.
 void media_drain_signals(::Ctx* c) {
@@ -814,6 +847,7 @@ void read_nv12(::Ctx* c) {
     const uint32_t image_index = static_cast<uint32_t>(A(1) & 0xffff);
     if (!p || p->imgs.empty() || image_index >= p->count() || p->imgs[image_index].empty() || !ydst) { RET(0); return; }
     const std::vector<uint8_t>& nv12 = p->imgs[image_index];
+    film_range_note(reinterpret_cast<uint64_t>(ydst), static_cast<uint64_t>(h) * ystride * 3 / 2);
     // NXRT_FILM_HASH=1: a numeric fingerprint of every read, sampled over the luma plane. Numbers in the log answer "does the
     // picture the player reads change" without comparing images: same hash twice means the same picture came out (2026-11-21).
     static const bool read_hash = std::getenv("NXRT_FILM_HASH") != nullptr;
