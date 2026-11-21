@@ -15,6 +15,7 @@
 
 #include "nxrt/config.h"
 #include "nxrt/game.h"
+#include "nxrt/write_watch.h"
 #include "nxrt/ftrace.h"
 #include "nxrt/abi.h"
 #include "nxrt/gauge.h"
@@ -746,7 +747,9 @@ void map_physical_memory(::Ctx* c) {
         const uint16_t want = page_bits(g, addr, end);
         auto it = g_phys.find(g);
         if (it == g_phys.end()) {
-            if (VirtualAlloc(reinterpret_cast<void*>(g), static_cast<SIZE_T>(kGranule), MEM_RESERVE, PAGE_READWRITE) != reinterpret_cast<void*>(g)) {
+            // MEM_WRITE_WATCH: the write tracker reads which pages the CPU wrote (GetWriteWatch) instead of making them read-only; a
+            // protection change under a live GPU import of these pages hung the NVIDIA GPU once the CPU and GPU overlapped (write_watch.cpp)
+            if (VirtualAlloc(reinterpret_cast<void*>(g), static_cast<SIZE_T>(kGranule), MEM_RESERVE | MEM_WRITE_WATCH, PAGE_READWRITE) != reinterpret_cast<void*>(g)) {
                 NXLOG_E(kTag, "MapPhysicalMemory: reserving %llx failed, error %lu", U(g), static_cast<unsigned long>(GetLastError()));
                 svc_ret(c, kernel::kOutOfMemory);
                 return;
@@ -754,6 +757,7 @@ void map_physical_memory(::Ctx* c) {
             it = g_phys.emplace(g, uint16_t{0}).first;
         }
         const uint16_t add = static_cast<uint16_t>(want & ~it->second);
+        if (add) mem::ww::forget(g, kGranule, false);   // tracked copies of these pages (nvn pool mirrors) are stale from here
         for (uint64_t i = 0; i < kGranulePages; ++i) {
             if (!(add & (1u << i))) continue;
             uint64_t n = 1;   // a run of pages committed at once
@@ -804,6 +808,7 @@ void unmap_physical_memory(::Ctx* c) {
         if (it == g_phys.end()) continue;
         const uint16_t drop = static_cast<uint16_t>(page_bits(g, addr, end) & it->second);
         if (!drop) continue;
+        mem::ww::forget(g, kGranule, false);   // armed pages read-write again and counted written before they go away
         it->second = static_cast<uint16_t>(it->second & ~drop);
         if (it->second == 0) {
             VirtualFree(reinterpret_cast<void*>(g), 0, MEM_RELEASE);
