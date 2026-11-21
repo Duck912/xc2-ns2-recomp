@@ -233,7 +233,6 @@ struct Decoder {
     std::mutex dec_mu;                                    // the codec context and last picture: the worker decodes, the guest may fall back
     std::thread worker;                                   // decodes pending packets ahead of the player, off its thread
     std::atomic<uint32_t> completed_early{0};             // acquires that completed their fence with no picture to pair (a film's first acquire)
-    std::atomic<uint32_t> dropped_pending{0};             // packets dropped because the player submitted faster than it read
     std::condition_variable cv;
     bool stop = false;
     bool worker_started = false;
@@ -935,12 +934,6 @@ void submit_packet(::Ctx* c, uint64_t dec, const uint8_t* data, size_t size, int
         if (data && size) p.data.assign(data, data + size);
         p.pts = pts;
         p.eos = eos;
-        // A player that stops reading still submits: 29656 packets in five seconds, queued without bound (2026-11-21). Keep
-        // the newest and drop the oldest, which is what the missing picture would have consumed anyway.
-        while (d->pending.size() >= 64) {
-            d->pending.pop_front();
-            ++d->dropped_pending;
-        }
         d->pending.push_back(std::move(p));
         // Never decode here: the adapter thread submits the whole movie ahead, and a decode per submit (23 ms) left it no time to
         // service the player (the acquire-to-read gap was 48-69 ms with the copies at 1.1-1.7 ms, 2026-11-18). The worker decodes
@@ -985,12 +978,6 @@ void acquire_output(::Ctx* c) {   // (u32* index, NativeSyncHandle* fence, dec)
             // the player reads the pool's neutral image and keeps going instead of waiting for a fence no call will complete.
             d->waiting.emplace_back(index, seq);
             if (d->ready.empty() && d->pending.empty()) {
-                // Completing it is only half the job: the player reads the image's properties right after the fence, and a
-                // 0x0 image with no timestamp made it read once and never come back (29656 packets, 238 pictures placed, one
-                // read, 2026-11-21). Announce the pool's own size instead.
-                auto it = d->pools.find(index);
-                if (Pool* pool = it == d->pools.end() ? nullptr : pool_of(it->second))
-                    d->info[index] = BufInfo{pool->w, pool->h, 0, false};
                 d->done_seq.store(seq);
                 fences = true;
                 ++d->completed_early;
