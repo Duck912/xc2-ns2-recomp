@@ -56,10 +56,22 @@ Need $exe 'the built launcher'
 # checkout; older layouts kept it beside the checkout, which is why both are looked at.
 $dist = Join-Path $Launcher 'dist\index.html'
 if (-not (Test-Path $dist)) { $dist = Join-Path (Split-Path -Parent $Launcher) 'dist\index.html' }
-if (Test-Path $dist) {
+if ($dist -and (Test-Path $dist)) {
     if ((Get-Item $exe).LastWriteTime -lt (Get-Item $dist).LastWriteTime) {
         throw "the launcher ($exe) is older than its frontend ($dist): rebuild it with 'npm run tauri build -- --no-bundle'"
     }
+}
+# The version the About page shows comes from tauri.conf.json at build time, so an exe built before the version was bumped
+# reports the old release - 0.1.4 shipped a launcher that said 0.1.3 that way (issue #24, 2026-11-21). Compare the two numbers,
+# not just the timestamps.
+$conf = Join-Path $Launcher 'src-tauri\tauri.conf.json'
+if (Test-Path $conf) {
+    $want = (Get-Content -LiteralPath $conf -Raw | ConvertFrom-Json).version
+    $have = (Get-Item $exe).VersionInfo.ProductVersion
+    if ($want -and $have -and ($have -notlike "$want*")) {
+        throw "the launcher ($exe) reports $have while tauri.conf.json says $want - rebuild it with 'npm run tauri build -- --no-bundle', or the About page shows the wrong release"
+    }
+    Say ("launcher version {0} (tauri.conf.json {1})" -f $have, $want)
 }
 Copy-Item $exe $Out -Force
 Say ("launcher      {0:N1} MB" -f ((Get-Item $exe).Length / 1MB))

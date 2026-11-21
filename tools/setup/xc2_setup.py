@@ -820,6 +820,11 @@ def prefill_failure(log_path):
             reason = log_message(line)
     if not reason:
         for line in reversed(tail):
+            # "frame times: no frame was presented yet" is the gauge's summary of a run that never presented, not the reason
+            # it never did - it was picked as the cause of a prefill failure and told the reporter the wrong thing (issue #25,
+            # 2026-11-21). Skip report lines; the reason is an error above them.
+            if "frame times:" in line or "no frame presented in the last" in line:
+                continue
             if re.match(r"^\[\s*[\d.]+\s+[EF]\b", line):
                 reason = log_message(line)
                 break
@@ -899,7 +904,8 @@ def prefill_package(r, repo, install, py, harness, spirv, seconds=40, jobs=0):
             if hint:
                 r.log("  prefill: " + hint)
             r.log("  prefill: the run's own log: %s" % log)
-            return "the headless prefill could not start: " + (short or reason[:96] or hint[:96])
+            how = "exited with code %d" % finished if (finished is not None and finished != 0) else "was stopped"
+            return "the headless prefill %s after %.0f s without naming a block: %s" % (how, seconds, short or reason[:96] or hint[:96])
         retype_ds_samplers(r, repo, py, spirv, log)
         prefilled.write_text("0 collected: nothing was missing\n", encoding="utf-8")
         return ""
