@@ -105,6 +105,14 @@ export async function render(el) {
         <p class="dim">${esc(t('about.intro'))}</p>
       </div>
       ${updateCard(cfg)}
+      <div class="card" id="reportcard">
+        <h2>${icon('info')}${esc(t('about.reportTitle'))}</h2>
+        <p class="dim">${esc(t('about.reportHint'))}</p>
+        <div class="row wrap">
+          <button class="btn" id="report">${icon('file-text')}${esc(t('about.reportStart'))}</button>
+          <button class="btn quiet" id="reports">${icon('folder-open')}${esc(t('about.reportOpen'))}</button>
+        </div>
+      </div>
       <div class="card">
         <h2>${icon('info')}${esc(t('brand.name'))} ${esc(t('about.launcherWord'))}</h2>
 
@@ -130,6 +138,15 @@ export async function render(el) {
       api('start_update', { release: upd.check.latest }).catch((e) => toast(errText(e), 'error')),
     );
     el.querySelector('#cancel')?.addEventListener('click', () => api('cancel_update'));
+    el.querySelector('#report')?.addEventListener('click', async () => {
+      try {
+        await api('start_report');
+        toast(t('about.reportStarted'));
+      } catch (e) {
+        toast(errText(e), 'error');
+      }
+    });
+    el.querySelector('#reports')?.addEventListener('click', () => api('open_reports_dir').catch((e) => toast(errText(e), 'error')));
     el.querySelector('#restart')?.addEventListener('click', () => api('restart_launcher').catch((e) => toast(errText(e), 'error')));
   }
 

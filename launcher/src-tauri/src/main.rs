@@ -591,6 +591,40 @@ fn open_setup_log(app: AppHandle) -> Result<(), String> {
     play::open_with_shell(&log)
 }
 
+/// Starts tools/report.py, which plays the game once with the diagnostics on and packs work/reports/report-<stamp>.zip when
+/// the window closes. The player does not have to find a log or copy lines out of it: the zip is the whole report.
+#[tauri::command]
+fn start_report(app: AppHandle) -> Result<String, String> {
+    let cfg = load_config(&app);
+    let repo = need_repo(&cfg)?;
+    let dir = game_dir_of(&cfg, &repo);
+    let (py, script) = if package_tools().is_some() {
+        (dir.join("tools").join("python").join("python.exe"), dir.join("tools").join("report.py"))
+    } else {
+        let py = std::env::var_os("XC2_PYTHON").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("python"));
+        (py, repo.join("tools").join("report.py"))
+    };
+    if !script.is_file() {
+        return Err("tools/report.py is not in this folder.".into());
+    }
+    let reports = dir.join("work").join("reports");
+    fs::create_dir_all(&reports).map_err(|e| e.to_string())?;
+    let mut c = std::process::Command::new(&py);
+    c.arg(&script).current_dir(&dir);
+    setup::host_env(&mut c);
+    c.spawn().map_err(|e| format!("cannot start {}: {e}", py.display()))?;
+    Ok(reports.to_string_lossy().to_string())
+}
+
+/// Opens work/reports, where report.py puts the zip.
+#[tauri::command]
+fn open_reports_dir(app: AppHandle) -> Result<(), String> {
+    let cfg = load_config(&app);
+    let dir = game_dir_of(&cfg, &need_repo(&cfg)?).join("work").join("reports");
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    play::open_with_shell(&dir)
+}
+
 #[tauri::command]
 async fn check_update(app: AppHandle) -> Result<update::Check, String> {
     // FEFW_LAUNCHER_PRETEND_VERSION: test the update path against the published release from an older-looking launcher
@@ -716,6 +750,8 @@ fn main() {
             open_game_dir,
             open_mods_dir,
             open_setup_log,
+            start_report,
+            open_reports_dir,
             check_update,
             update_status,
             start_update,
