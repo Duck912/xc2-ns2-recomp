@@ -5293,6 +5293,16 @@ bool report_counter(uint64_t address, uint64_t* out) {
     return true;
 }
 
+// Where a counter report's query result is copied (vkCmdCopyQueryPoolResults). With [nvn] mirror_capture the GPU reads the pool through its
+// device-local copy, and do_write_memory has just put the placeholder into that copy too: a result copied into the pool only would leave
+// the copy at the placeholder (0 samples passed) for every later GPU read, and the game's cloud sea and fog volumes, which depend on such
+// results, were not drawn. The copy, as a GPU write: mirror_capture_end writes it back to the pool at the end of the submission, and the
+// next captures leave it out while it is in flight.
+BufRef query_result_target(uint64_t address, uint64_t size) {
+    if (mirror_capture_on()) return mirror_capture_bind(address, size, true);
+    return resolve_buffer(address, size);
+}
+
 bool conditional_render_enabled(uint32_t mode, uint64_t address) {
     uint64_t a = 0, b = 0;
     if (!report_counter(address, &a) || !report_counter(address + 16, &b)) return true;
@@ -6020,7 +6030,7 @@ void run_list(const CmdList& list, int depth) {
                         rep.counter = 0;
                         g_reports[p.address] = kReportUnknown;   // the query result lands on the GPU
                         do_write_memory(p.address, &rep, sizeof rep);
-                        BufRef b = resolve_buffer(p.address, sizeof rep);
+                        const BufRef b = query_result_target(p.address, sizeof rep);
                         if (b.ok && g_occ_last >= 0) {
                             vkCmdCopyQueryPoolResults(F->cb, g_occ_pool, static_cast<uint32_t>(g_occ_last), 1, b.buffer, b.offset, 16,
                                                       VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
@@ -6040,7 +6050,7 @@ void run_list(const CmdList& list, int depth) {
                             rep.counter = 0;
                             g_reports[p.address] = kReportUnknown;   // the result lands on the GPU
                             do_write_memory(p.address, &rep, sizeof rep);
-                            BufRef b = resolve_buffer(p.address, sizeof rep);
+                            const BufRef b = query_result_target(p.address, sizeof rep);
                             if (b.ok) {
                                 // the feedback query has two results (written, needed): the second would land on the timestamp word, which is written again after it
                                 vkCmdCopyQueryPoolResults(F->cb, cw.pool, static_cast<uint32_t>(cw.last), 1, b.buffer, b.offset, 16, VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
