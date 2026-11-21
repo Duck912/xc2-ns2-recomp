@@ -34,13 +34,16 @@ AVCodecID codec_id(int codec) {
 // Both end in the same av_hwframe_transfer_data -> NV12 copy; the CPU decoders stay the fallback for everything.
 AVHWDeviceType hw_device_type() {
     static const AVHWDeviceType t = [] {
-        std::string b = config_get_str("media", "hwdec_backend", "d3d11va");
+        std::string b = config_get_str("media", "hwdec_backend", "auto");
         for (char& c : b)
             if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
-        return b == "vulkan" ? AV_HWDEVICE_TYPE_VULKAN : AV_HWDEVICE_TYPE_D3D11VA;
+        if (b == "d3d11va" || b == "d3d11") return AV_HWDEVICE_TYPE_D3D11VA;
+        return AV_HWDEVICE_TYPE_VULKAN;   // auto and vulkan: Vulkan Video first, D3D11VA if it cannot be created
     }();
     return t;
 }
+// What was actually created: auto starts with Vulkan Video and falls back to D3D11VA, and the logs should say which one ran.
+AVHWDeviceType g_used_type = AV_HWDEVICE_TYPE_NONE;
 
 // One D3D11VA device for the whole process. Creating it is the expensive part of the first frame: on 0.1.4 the
 // presenting thread sat 183 ms inside a 213 ms frame at the start of a film, waiting for the first picture while the
@@ -54,10 +57,18 @@ AVBufferRef* shared_device() {
     if (g_dev) return g_dev;
     AVBufferRef* hw = nullptr;
     const auto t0 = std::chrono::steady_clock::now();
-    if (av_hwdevice_ctx_create(&hw, hw_device_type(), nullptr, nullptr, 0) < 0) return nullptr;
+    AVHWDeviceType t = hw_device_type();
+    if (av_hwdevice_ctx_create(&hw, t, nullptr, nullptr, 0) < 0) {
+        if (t != AV_HWDEVICE_TYPE_VULKAN) return nullptr;
+        // No Vulkan Video on this machine or driver: the D3D11VA path is the one that has been there all along.
+        t = AV_HWDEVICE_TYPE_D3D11VA;
+        if (av_hwdevice_ctx_create(&hw, t, nullptr, nullptr, 0) < 0) return nullptr;
+        NXLOG_I(kTag, "Vulkan Video is not available here; using D3D11VA");
+    }
+    g_used_type = t;
     g_dev = hw;   // process lifetime: each decoder holds its own reference to it
     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
-    NXLOG_I(kTag, "%s device in %lld ms (shared by every stream)", hw_device_type() == AV_HWDEVICE_TYPE_VULKAN ? "Vulkan Video" : "D3D11VA",
+    NXLOG_I(kTag, "%s device in %lld ms (shared by every stream)", t == AV_HWDEVICE_TYPE_VULKAN ? "Vulkan Video" : "D3D11VA",
             static_cast<long long>(ms));
     return g_dev;
 }
@@ -118,12 +129,12 @@ FfDec* ffdec_create(int codec, std::string* why) {
     d->frame = av_frame_alloc();
     d->sw = av_frame_alloc();
     d->pkt = av_packet_alloc();
-    NXLOG_I(kTag, "libavcodec %s on %s", c->name, hw_device_type() == AV_HWDEVICE_TYPE_VULKAN ? "Vulkan Video" : "D3D11VA");
+    NXLOG_I(kTag, "libavcodec %s on %s", c->name, ffdec_hw_name());
     return d;
 }
 
 bool ffdec_prewarm() { return shared_device() != nullptr; }
-const char* ffdec_hw_name() { return hw_device_type() == AV_HWDEVICE_TYPE_VULKAN ? "Vulkan Video" : "D3D11VA"; }
+const char* ffdec_hw_name() { return g_used_type == AV_HWDEVICE_TYPE_VULKAN ? "Vulkan Video" : "D3D11VA"; }
 
 bool ffdec_decode(FfDec* d, const uint8_t* data, size_t size, int64_t pts, std::vector<FfDecPicture>* out) {
     if (!d || d->failed || !out) return false;
