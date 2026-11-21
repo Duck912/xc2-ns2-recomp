@@ -13,6 +13,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <thread>
 #include <cctype>
 #include <cstdint>
 #include <cstring>
@@ -142,6 +144,7 @@ private:
     std::atomic<uint64_t> frames_written_{0};
     std::atomic<uint64_t> frames_accepted_{0};
     std::atomic<uint64_t> frames_dropped_{0};
+    std::atomic<uint64_t> frames_waited_{0};   // how often a full queue was waited on instead of dropping the batch (§234)
     std::atomic<uint64_t> underruns_{0};
     std::atomic<uint32_t> queued_peak_{0};
     std::atomic<uint64_t> submitted_frames_{0};          // frames handed to the voice since open()
@@ -304,7 +307,20 @@ uint32_t XAudio2Sink::submit(const int16_t* pcm, uint32_t frames) {
     while (accepted < frames) {
         XAUDIO2_VOICE_STATE state{};
         source_->GetState(&state);
-        if (state.BuffersQueued >= kMaxQueued) break;
+        if (state.BuffersQueued >= kMaxQueued) {
+            // Handover 63 §234: the movie's audio arrives in batches, and breaking out here dropped whole batches at once
+            // (1.9 million frames in one night), which broke the player's A/V sync and stopped it from fetching video
+            // frames. Wait for room instead - a few milliseconds buys a continuous timeline, and the guest's own thread
+            // is the one waiting, which is what audout's pacing expects.
+            bool room = false;
+            for (int ms = 0; ms < 5 && accepted < frames; ++ms) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                source_->GetState(&state);
+                if (state.BuffersQueued < kMaxQueued) { room = true; break; }
+            }
+            frames_waited_.fetch_add(1, std::memory_order_relaxed);
+            if (!room) break;
+        }
 
         const uint32_t n = std::min<uint32_t>(frames - accepted, kSlotFrames);
         uint32_t idx = kSlots;

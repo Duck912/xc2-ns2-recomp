@@ -212,6 +212,18 @@ VkFormat sint_alias(VkFormat f) {
 }
 bool bit_alias_class(VkFormat f) { return float_alias(f) != VK_FORMAT_UNDEFINED || uint_alias(f) != VK_FORMAT_UNDEFINED; }
 
+// The integer formats a float-declared shader is allowed to sample under [nvn] int_tex_as_float: the 8 and 16-bit masks the
+// game uses (32-bit ones already have a float alias above).
+bool can_bind_integer_view(VkFormat f) {
+    switch (f) {
+        case VK_FORMAT_R8_UINT: case VK_FORMAT_R8_SINT: case VK_FORMAT_R8G8_UINT: case VK_FORMAT_R8G8_SINT:
+        case VK_FORMAT_R8G8B8A8_UINT: case VK_FORMAT_R8G8B8A8_SINT: case VK_FORMAT_R16_UINT: case VK_FORMAT_R16_SINT:
+        case VK_FORMAT_R16G16_UINT: case VK_FORMAT_R16G16_SINT: case VK_FORMAT_R16G16B16A16_UINT:
+        case VK_FORMAT_R16G16B16A16_SINT: return true;
+        default: return false;
+    }
+}
+
 // Same image family: the format itself, its sRGB / UNORM partner, or a raw-bit alias of the same size, on a mutable image.
 bool format_view_ok(const TexGpu& g, VkFormat fmt) {
     if (fmt == g.format) return true;
@@ -2053,11 +2065,23 @@ VkImageView tex_sampled_view(Texture* t, const ViewRequest& req) {
     const int component = asp == VK_IMAGE_ASPECT_STENCIL_BIT ? 3 :
                           vk_format_is_integer(fmt) ? (vk_format_is_signed_int(fmt) ? 2 : 3) : 1;
     if (req.component && req.component != component) {
+        // [nvn] int_tex_as_float: the same bargain the stencil plane gets above. The translated shaders declare every sampled
+        // value as float, and the game samples 8/16-bit integer targets (masks) through them; Maxwell puts the bits in the
+        // register unchanged. Binding the integer view to that sampler is undefined by the Vulkan spec but is what the console
+        // does - off by default because NVIDIA took the device down once on the depth-stencil version of this (issue #4).
+        static const bool int_as_float = nxrt::config_get_bool("nvn", "int_tex_as_float", false);
+        if (int_as_float && req.component == 1 && asp == VK_IMAGE_ASPECT_COLOR_BIT && can_bind_integer_view(fmt)) {
+            static std::set<uint32_t> told;
+            if (told.insert(t->id).second)
+                NXLOG_W(kTag, "texture %u: integer format %d sampled by a float shader, binding the integer view ([nvn] int_tex_as_float)",
+                        t->id, static_cast<int>(fmt));
+        } else {
         char why[200];
         snprintf(why, sizeof why, "sampled numeric type does not match the shader (shader %d, image gives %d; aspect 0x%x of 0x%x, format %d of %d)",
                  static_cast<int>(req.component), component, static_cast<unsigned>(asp), static_cast<unsigned>(g->aspect),
                  static_cast<int>(fmt), static_cast<int>(g->format));
         return bad_view(*t, why);
+        }
     }
     if (req.depth_compare && !(asp & VK_IMAGE_ASPECT_DEPTH_BIT)) return bad_view(*t, "depth comparison needs a depth aspect");
     // Check the actual alias format, rather than only the image's original format. view_for
