@@ -8,7 +8,7 @@ vendored into the Xenoblade Chronicles 2 NS2E recomp project. Upstream base and 
 | upstream | https://github.com/Goldoire/fefw-recomp |
 | licence | GPL-3.0-or-later (see [LICENSE](LICENSE) and [LEGAL.md](LEGAL.md)) |
 | fork base commit in this repository | `6f1d964` (2026-11-12, baseline: 26 rounds of XC2 NS2 recomp) |
-| files changed since the base | 60 |
+| files changed since the base | 109 |
 | generated from | `git diff --name-only 6f1d964..HEAD -- third_party/fefw-recomp` |
 
 > **Why this file and not per-file headers.** GPL-3.0 section 5(a) requires the work to carry prominent notices
@@ -44,6 +44,10 @@ vendored into the Xenoblade Chronicles 2 NS2E recomp project. Upstream base and 
 | `runtime/src/gfx/extras/temporal.cpp` | 2026-11-16 | replay: pipe/fb hot-path audit (round 45, 9.7-15.4 -> 5.3-6.8 ms); fsr_follow_size; fs trace_stack_file off; s |
 | `runtime/src/gfx/extras/temporal_ffx.cpp` | 2026-11-16 | replay: pipe/fb hot-path audit (round 45, 9.7-15.4 -> 5.3-6.8 ms); fsr_follow_size; fs trace_stack_file off; s |
 | `runtime/src/gfx/nvn/api_dlss_replay.cpp` | 2026-11-21 | replay: pipe/fb hot-path audit (round 45, 9.7-15.4 -> 5.3-6.8 ms); fsr_follow_size; fs trace_stack_file off; s; the DLSS/TAAU output follows [gfx] render_scale |
+| `runtime/src/gfx/extras/temporal.h` | 2026-11-21 | live FSR version hot-switch (`set_ffx_version_live`, `temporal_ffx_active_version`) |
+| `runtime/src/gfx/extras/temporal_ffx.cpp` | 2026-11-21 | live FSR version override & context rebuild; auto-enable `fsr_follow_size` for FSR 4.x on amdvlk |
+| `runtime/src/gfx/nvn/api_device.cpp` | 2026-11-21 | handle `nvnWindowGetCrop` out-of-order `(int*, int*, int*, int*)` call and sanitize `R11G11B10F` clear colors |
+| `runtime/src/gfx/nvn/api_dlss_replay.cpp` | 2026-11-21 | live 3D upscaler/FSR/sharpness hot-switch (`set_dlss_live`, `dlss_live_info`) for F1 menu |
 | `runtime/src/gfx/nvn/api_program.cpp` | 2026-11-14 | nvn: [nvn] shader_dump writes the code and control of every unresolved block (HANDOVER 74) |
 | `runtime/src/gfx/nvn/api_texture.cpp` | 2026-11-16 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |
 | `runtime/src/gfx/nvn/earlyz_mask_shaders.inc` | 2026-11-13 | nvn: the light list registration mask is derived from the list after every list draw - the black rectangle (HA |
@@ -59,7 +63,30 @@ vendored into the Xenoblade Chronicles 2 NS2E recomp project. Upstream base and 
 | `runtime/src/gfx/nvn/nvn_shaders.cpp` | 2026-11-21 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override; reflection marks storage images a shader writes (OpImageWrite, image atomics) |
 | `runtime/src/gfx/nvn/nvn_spirv_patch.cpp` | 2026-11-16 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |
 | `runtime/src/gfx/nvn/nvn_spirv_patch.h` | 2026-11-16 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |
+| `runtime/src/gfx/nvn/nvn_gpu.cpp` | 2026-11-21 | atomic live `keep_aspect` toggle (`set_keep_aspect`) |
+| `runtime/src/gfx/nvn/nvn_gpu_internal.h` | 2026-11-16 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |
+| `runtime/src/gfx/nvn/nvn_gpu_pool.cpp` | 2026-11-13 | nvn: pool import/mirror granule is a config (default 64 MiB unchanged); 16 MiB does not help; movement overrun |
+| `runtime/src/gfx/nvn/nvn_gpu_texture.cpp` | 2026-11-16 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |
+| `runtime/src/gfx/nvn/nvn_pipeline.cpp` | 2026-11-21 | bump pipeline cache salt for SPIR-V depth-compare sampler auto-upgrading and `R11G11B10F` NaN scrub |
+| `runtime/src/gfx/nvn/nvn_pipeline.h` | 2026-11-14 | nvn: push the uniform buffers as push descriptors ([nvn] push_uniforms, ubo_only_rebind) |
+| `runtime/src/gfx/nvn/nvn_replay.cpp` | 2026-11-21 | subdivide 1-quad 3D Cloud Sea sheets (`quad_split` 1..16 with varying Z); pool-offset aliasing barrier; sampler compare auto-upgrade |
+| `runtime/src/gfx/nvn/nvn_shaders.cpp` | 2026-11-16 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |
+| `runtime/src/gfx/nvn/nvn_spirv_patch.cpp` | 2026-11-21 | sanitize NaN/Inf on fragment shader outputs targeting `R11G11B10F` color attachments |
+| `runtime/src/gfx/nvn/nvn_spirv_patch.h` | 2026-11-21 | declare `patch_sanitize_f16_outputs` |
 | `runtime/src/gfx/platform.cpp` | 2026-11-16 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |
+| `runtime/include/nxrt/nvn_backend.h` | 2026-11-21 | expose `set_keep_aspect`, `set_dlss_live`, and `dlss_live_info` |
+| `runtime/include/nxrt/play.h` | 2026-11-21 | expose `overlay_blocks_game()`, `live_pad_config()`, and `note_external_pad()` |
+| `runtime/src/gfx/play/play_types.h` | 2026-11-21 | default FPS counter hotkey F10, persistent `menu_lang`, and `Game3dSettings` |
+| `runtime/src/gfx/play/play_config.cpp` | 2026-11-21 | parse and persist `[fps] menu_lang` in `controls.ini` |
+| `runtime/src/gfx/play/play.cpp` | 2026-11-22 | F11 fullscreen toggle, live 3D upscaler & 8-preset native/upscale resolution sync to `nxrt.ini`, external pad bridge, bilingual HUD language hint |
+| `runtime/src/gfx/play/play_ui.h` | 2026-11-20 | add draw_settings_menu() wrapper replacing Diagnostics overlay |
+| `runtime/src/gfx/overlay.cpp` | 2026-11-22 | XC2 Aegis theme + CJK font, 4-level FPS counter with Detailed Performance HUD (AMD ADL2 / NVIDIA NVML / Vulkan VRAM / CPU / RAM / 120-frame graph / pipeline timings / resolution & scaling) |
+| `runtime/src/gfx/play/play_ui.cpp` | 2026-11-22 | bilingual (zh-Hans/en) two-pane F1 settings menu with native 1080p/1440p/4K & upscale presets, live FSR 3.1.6/4.1.2 switch, 4-level performance HUD selector |
+| `runtime/include/nxrt/nvn_backend.h` | 2026-11-22 | expose `set_game_viewport_info()` / `game_viewport_info()` and `BackendStats::gpu_busy_ns` |
+| `runtime/src/gfx/nvn/nvn_gpu.cpp` | 2026-11-22 | always-on lightweight Vulkan timestamp query pool for `gpu_busy_ns` and live viewport info reporting |
+| `runtime/src/gfx/nvn/nvn_present.cpp` | 2026-11-22 | auto-crop presentation to `(0, 0, base_w, base_h)` for true full-screen native 1080p/1440p output |
+| `runtime/src/gfx/vk_renderer.cpp` | 2026-11-21 | avoid `vkGetPhysicalDeviceSurfaceCapabilitiesKHR` during swapchain rebuild to prevent Win32 fullscreen deadlock |
+| `runtime/src/services/misc.cpp` | 2026-11-20 | auto-discover DLC folders in [aoc] dir when indices.txt is absent |
 | `runtime/src/gfx/vk_device.cpp` | 2026-11-19 | replay: pipe/fb hot-path audit (round 45, 9.7-15.4 -> 5.3-6.8 ms); fsr_follow_size; fs trace_stack_file off; s; start-up failures name the VkResult and the driver's own Vulkan version (a 1.0 probe instance) instead of a bare `-9` |
 | `runtime/src/ipc/ipc.cpp` | 2026-11-14 | dlc: the title never asks aoc, so the Torna entry is save driven (HANDOVER 66) |
 | `runtime/src/kernel/handles.cpp` | 2026-11-16 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |
@@ -70,7 +97,7 @@ vendored into the Xenoblade Chronicles 2 NS2E recomp project. Upstream base and 
 | `runtime/apps/video_codec_probe.cpp` | 2026-11-18 | probe: AV1 on the SDK 3.0.1 nn::codec entry points (video_codec_probe <movie.webm> <out.png> <frame>) |
 | `runtime/src/media/movie_trace.cpp` | 2026-11-19 | movie: [media] player_trace wrappers over the SDK's os calls, and the host-side poke that makes the player's per-frame timer due (one ticker for every timer, not one thread per timer) - without it the 4K CG froze for 7-8 s at a time (handover 58) |
 | `runtime/src/media/movie_vdec.cpp` | 2026-11-19 | movie: [media] video_decoder = library leaves movie::VideoDecoder to the library (it drives nn::codec AV1) and keeps the host AudioDecoder; same decoder-thread default as video_codec.cpp |
-| `runtime/src/media/video_codec.cpp` | 2026-11-19 | vcodec: nn::codec AV1 via dav1d and the SDK 3.0.1 names (ByTransferMemory, ImageTilingMode preference, event-returning submission event); decoder threads default to half the cores (4-8) and the film delay to 110 ms - the movie library's VideoDecoder path |
+| `runtime/src/media/video_codec.cpp` | 2026-11-22 | vcodec: allow bundled dav1d AV1 decoder to register nn::codec HLE even when built without libvpx (`#if NXRT_HAVE_LIBVPX \|\| NXRT_HAVE_DAV1D`), fixing AV1 cutscene crashes when libvpx is absent |
 | `runtime/src/mem/memory.cpp` | 2026-11-14 | heap: lazy commit is implemented and measured, but it stays off (crashes at 0.82 s) |
 | `runtime/src/services/audren/Server/AudioRenderSystem.h` | 2026-11-12 | nvn: trace the depth/blend state a draw is submitted with, summarize the frame; audren: log every voice the ga |
 | `runtime/src/services/common.cpp` | 2026-11-16 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |

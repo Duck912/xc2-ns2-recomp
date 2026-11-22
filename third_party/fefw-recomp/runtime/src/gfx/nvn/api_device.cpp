@@ -297,15 +297,28 @@ bool nvn2_sync_scope() {
 // Shared by nvnWindowAcquireTexture and nvnQueueAcquireTexture (the queue variant passes no sync object).
 NVNwindowAcquireTextureResult acquire_texture(be::Window* w, NVNsync* sync, int* index) {
     if (!w) return NVN_WINDOW_ACQUIRE_TEXTURE_RESULT_NATIVE_ERROR;
-    std::lock_guard<std::mutex> lk(w->lock);
-    const int total = static_cast<int>(w->textures.size());
-    const int n = (w->active > 0 && w->active < total) ? w->active : total;
-    if (n <= 0) return NVN_WINDOW_ACQUIRE_TEXTURE_RESULT_NATIVE_ERROR;
-    const int slot = w->next_acquire % n;
-    w->next_acquire = slot + 1;
+    int slot = 0;
+    uint64_t slot_serial = 0;
+    {
+        std::lock_guard<std::mutex> lk(w->lock);
+        const int total = static_cast<int>(w->textures.size());
+        const int n = (w->active > 0 && w->active < total) ? w->active : total;
+        if (n <= 0) return NVN_WINDOW_ACQUIRE_TEXTURE_RESULT_NATIVE_ERROR;
+        slot = w->next_acquire % n;
+        w->next_acquire = slot + 1;
+        if (slot < 4) slot_serial = w->present_serial[slot].load();
+    }
+    // Wait until the GPU has finished the previous frame that used this swapchain slot before returning
+    // it to the game (matching the Switch/Switch 2 display compositor releasing the buffer). Games with
+    // double-buffered per-frame constant/vertex rings (such as XC2) begin overwriting the slot's ring
+    // immediately after nvnWindowAcquireTexture returns and only wait on the acquire sync right before
+    // submitting; returning early lets the CPU overwrite live GPU UBOs/VBs in flight.
+    // Release w->lock first because present_on_render_thread() acquires w->lock while completing the slot.
+    if (slot_serial) be::gpu::wait_serial(slot_serial, UINT64_MAX);
     if (index) *index = slot;
     if (be::Sync* s = be::host_of<be::Sync>(sync)) {
-        s->serial.store(nvn2_sync_scope() ? (slot < 4 ? w->present_serial[slot].load() : 0) : be::gpu::last_serial());
+        const uint64_t ser = nvn2_sync_scope() ? slot_serial : be::gpu::last_serial();
+        s->serial.store(ser);
         s->armed.store(true);
     }
     return NVN_WINDOW_ACQUIRE_TEXTURE_RESULT_SUCCESS;

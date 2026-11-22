@@ -72,6 +72,7 @@
 `gfx`	`headless`	`false`	`NXRT_GFX_HEADLESS`	`src/gfx/vk_device.cpp`, `src/gfx/scene_runner.cpp`	No window and no surface: rendering goes to offscreen images (screenshots and automated tests).
 `gfx`	`hidden`	`false`	`NXRT_GFX_HIDDEN`	`src/gfx/platform.cpp`	Create the window hidden. CTest sets it to 1.
 `gfx`	`present_mode`	`fifo`	`NXRT_GFX_PRESENT_MODE`	`src/gfx/vk_renderer.cpp`	`fifo`, `fifo_relaxed`, `mailbox` or `immediate`. Wins over `[display] vsync` of controls.ini, which is where the mode came from before this key existed and which the launcher does not write: set, this key decides, otherwise vsync does. A mode the surface does not offer falls back (mailbox to immediate to fifo).
+`gfx`	`disallow_fse`	`false` (AMD: `true`)	`NXRT_GFX_DISALLOW_FSE`	`src/gfx/vk_renderer.cpp`	No full-screen exclusive presentation: the swap chain stays a windowed one. Off by default on AMD, where the exclusive swap chain with DWM/MPO flickers in full screen.
 `gfx`	`frames_in_flight`	`2`	`NXRT_GFX_FRAMES_IN_FLIGHT`	`src/gfx/vk_renderer.cpp`	Frames the CPU may record ahead of the GPU, 1 to 3.
 `gfx`	`overlay_key`	`F1`	`NXRT_GFX_OVERLAY_KEY`	`src/gfx/overlay.cpp`	SDL scancode name of the key that shows and hides the ImGui overlay.
 `gfx`	`overlay_pad`	`minus+plus`	`NXRT_GFX_OVERLAY_PAD`	`src/gfx/overlay.cpp`	The pad chord that shows and hides the overlay: Switch buttons (after the player's mapping) joined by `+` (`a b x y l r zl zr plus minus up down left right lstick rstick`), `none` = no chord. The buttons of the press stay away from the game until released. While the overlay is up the pad drives its gamepad navigation (A activate, B back, d-pad or left stick move, L / R switch the menu's tabs) and the game gets no input.
@@ -320,6 +321,10 @@
 `xc2`	`period_probe`	`0`	`NXRT_XC2_PERIOD_PROBE`	`xc2/src/xc2_boot.cpp`	Debugging: log the guest's vsync period writes.
 `xc2`	`delta_scan_at`	`0`	`NXRT_XC2_DELTA_SCAN_AT`	`xc2/src/xc2_boot.cpp`	Debugging: at this frame, scan the frame-time deltas and log the outliers.
 `xc2`	`obj_scan_at`	`0`	`NXRT_XC2_OBJ_SCAN_AT`	`xc2/src/xc2_boot.cpp`	Debugging: at this frame, scan for guest objects pointing outside the mapped ranges.
+`xc2`	`native_res`	`0`	`NXRT_XC2_NATIVE_RES`	`xc2/src/xc2_boot.cpp`	Native 3D resolution override: `0` off, `1` native 100% with DLSS off, `2` DLSS/FSR 1:1 Native AA at `native_w` x `native_h`.
+`xc2`	`native_w`	`2560`	`NXRT_XC2_NATIVE_W`	`xc2/src/xc2_boot.cpp`	Target 3D render width for `native_res = 2`; the default follows `[am] resolution`, 2560 when that is not set.
+`xc2`	`native_h`	`1440`	`NXRT_XC2_NATIVE_H`	`xc2/src/xc2_boot.cpp`	Target 3D render height for `native_res = 2`; the default follows `[am] resolution`, 1440 when that is not set.
+`xc2`	`res_class`	`0`	`NXRT_XC2_RES_CLASS`	`xc2/src/xc2_boot.cpp`	Display mode class: `0` auto, `2` force mode 5 (2560x1440), `1` force mode 1 (3840x2160).
 `aoc`	`dir`	`game/dlc`	`NXRT_AOC_DIR`	`third_party/fefw-recomp/runtime/src/services/aoc.cpp`	Add-on content root: one folder per title id, each with its own romfs.
 `nvn`	`int_tex_as_float`	`0`	`NXRT_NVN_INT_TEX_AS_FLOAT`	`src/gfx/nvn/nvn_gpu_texture.cpp`	Exercise only: an 8/16-bit integer colour format sampled by a float-declared shader binds its integer view instead of the zero dummy, the way the console leaves the bits in the register. Undefined by the Vulkan spec and off by default; tried for the eye/mouth flicker (issue #15) and it did not change it.
 

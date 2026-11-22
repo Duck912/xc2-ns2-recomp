@@ -118,9 +118,10 @@ def main(argv):
             print("ERROR: no log at " + a.log, file=sys.stderr)
             return 3
         pat = re.compile(r"ds_debug: fs ([0-9a-f]{16}) .*?\(s(\d+)b(\d+)\)")
+        pat_r8ui = re.compile(r"sampled texture \d+ \(R8UI,.*?shader ([0-9a-f]{16}) binding \S+ \(NVN slot \d+, set (\d+) binding (\d+)\)")
         with open(a.log, encoding="utf-8", errors="replace") as f:
             for line in f:
-                m = pat.search(line)
+                m = pat.search(line) or pat_r8ui.search(line)
                 if m:
                     wanted.setdefault(m.group(1), set()).add((int(m.group(2)), int(m.group(3))))
     if a.list:
@@ -197,6 +198,10 @@ def main(argv):
             return None, None
 
         added = []
+        created_images = {}
+        created_sampled = {}
+        created_ptrs = {}
+        first_img_pos = None
         sampled_types = set()
         ok = True
         for vid in sorted(targets):
@@ -219,26 +224,63 @@ def main(argv):
                 ok = False
                 break
             img_at = [at for at, op, wc in mod.find(OP_TYPE_IMAGE) if mod.words[at + 1] == old_image][0]
+            if first_img_pos is None:
+                first_img_pos = img_at + (mod.words[img_at] >> 16)
+            img_tail = tuple(mod.words[img_at + 3:img_at + (mod.words[img_at] >> 16)])
             group = []
-            new_image = mod.words[3]
-            mod.words[3] += 1
-            group.append(list(mod.words[img_at:img_at + (mod.words[img_at] >> 16)]))
-            group[-1][1] = new_image
-            group[-1][2] = uint32
+            # Reuse an existing identical uint OpTypeImage / OpTypeSampledImage / OpTypePointer if the module
+            # (or an earlier target in this pass) already declared one, because SPIR-V forbids duplicate
+            # non-aggregate type declarations.
+            new_image = created_images.get(img_tail)
+            if new_image is None:
+                new_image = find_type(
+                    mod, OP_TYPE_IMAGE,
+                    lambda w, at: w[at + 2] == uint32 and tuple(w[at + 3:at + (w[at] >> 16)]) == img_tail,
+                )
+            if new_image is None:
+                new_image = mod.words[3]
+                mod.words[3] += 1
+                decl = list(mod.words[img_at:img_at + (mod.words[img_at] >> 16)])
+                decl[1] = new_image
+                decl[2] = uint32
+                group.append(decl)
+                created_images[img_tail] = new_image
             if sampled:
-                new_sampled = mod.words[3]
-                mod.words[3] += 1
-                group.append([OP_TYPE_SAMPLED_IMAGE | (3 << 16), new_sampled, new_image])
-                new_ptr = mod.words[3]
-                mod.words[3] += 1
-                group.append([OP_TYPE_POINTER | (4 << 16), new_ptr, storage, new_sampled])
+                new_sampled = created_sampled.get(new_image)
+                if new_sampled is None:
+                    new_sampled = find_type(mod, OP_TYPE_SAMPLED_IMAGE, lambda w, at: w[at + 2] == new_image)
+                if new_sampled is None:
+                    new_sampled = mod.words[3]
+                    mod.words[3] += 1
+                    group.append([OP_TYPE_SAMPLED_IMAGE | (3 << 16), new_sampled, new_image])
+                    created_sampled[new_image] = new_sampled
+                new_ptr = created_ptrs.get((storage, new_sampled))
+                if new_ptr is None:
+                    new_ptr = find_type(
+                        mod, OP_TYPE_POINTER,
+                        lambda w, at: w[at + 2] == storage and w[at + 3] == new_sampled,
+                    )
+                if new_ptr is None:
+                    new_ptr = mod.words[3]
+                    mod.words[3] += 1
+                    group.append([OP_TYPE_POINTER | (4 << 16), new_ptr, storage, new_sampled])
+                    created_ptrs[(storage, new_sampled)] = new_ptr
                 sampled_types.add(new_sampled)
             else:
                 new_sampled = None
-                new_ptr = mod.words[3]
-                mod.words[3] += 1
-                group.append([OP_TYPE_POINTER | (4 << 16), new_ptr, storage, new_image])
-            added.append([img_at + (mod.words[img_at] >> 16), group])
+                new_ptr = created_ptrs.get((storage, new_image))
+                if new_ptr is None:
+                    new_ptr = find_type(
+                        mod, OP_TYPE_POINTER,
+                        lambda w, at: w[at + 2] == storage and w[at + 3] == new_image,
+                    )
+                if new_ptr is None:
+                    new_ptr = mod.words[3]
+                    mod.words[3] += 1
+                    group.append([OP_TYPE_POINTER | (4 << 16), new_ptr, storage, new_image])
+                    created_ptrs[(storage, new_image)] = new_ptr
+            if group:
+                added.append([img_at + (mod.words[img_at] >> 16), group])
             # the variable, the load that reads it and the OpSampledImage built from that load all move to the copy
             for at, op, wc in mod.find(OP_VARIABLE):
                 if mod.words[at + 2] == vid:
@@ -297,11 +339,14 @@ def main(argv):
                 if v in remap:
                     mod.words[at + k] = remap[v]
         # one insertion pass, last position first, so no offset moves under us
-        plan = [(pos, [OP_BITCAST | (4 << 16), back_type, nid, old_id]) for (pos, old, back_type, nid) in new_ids]
+        plan = [(pos, [OP_BITCAST | (4 << 16), back_type, nid, old]) for (pos, old, back_type, nid) in new_ids]
         # the cloned type declarations go right after the image type they copy: still in the type section, and
         # always before the variable that now uses them
-        if pre_types and added:
-            added[0][1] = pre_types + added[0][1]      # the uint types go with the first clone
+        if pre_types:
+            if added:
+                added[0][1] = pre_types + added[0][1]  # the uint types go with the first clone
+            elif first_img_pos is not None:
+                added.append([first_img_pos, pre_types])
         for pos, group in added:
             plan.append((pos, [w for decl in group for w in decl]))
         for pos, words in sorted(plan, key=lambda x: x[0], reverse=True):

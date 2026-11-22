@@ -415,6 +415,120 @@ bool spirv_gs_passthrough(const std::vector<uint32_t>& in, const std::vector<Spv
     return true;
 }
 
+bool spirv_gs_input_topology(const std::vector<uint32_t>& in, uint32_t vk_topology, std::vector<uint32_t>& out) {
+    enum : uint32_t {
+        OpEntryPointOp = 15, OpExecutionModeOp = 16, OpTypeIntOp = 21, OpTypeArrayOp = 28, OpTypePointerOp = 32,
+        OpConstantOp = 43, OpVariableOp = 59, ModelGeometry = 3, StorageInput = 1,
+        ExecInputPoints = 19, ExecInputLines = 20, ExecInputLinesAdj = 21, ExecInputTriangles = 22, ExecInputTrianglesAdj = 23,
+    };
+    uint32_t want_mode = 0, want_len = 0;
+    switch (vk_topology) {
+        case 0: want_mode = ExecInputPoints; want_len = 1; break;           // VK_PRIMITIVE_TOPOLOGY_POINT_LIST
+        case 1: case 2: want_mode = ExecInputLines; want_len = 2; break;    // LINE_LIST / LINE_STRIP
+        case 6: case 7: want_mode = ExecInputLinesAdj; want_len = 4; break; // LINE_*_WITH_ADJACENCY
+        case 3: case 4: case 5: want_mode = ExecInputTriangles; want_len = 3; break; // TRIANGLE_*
+        case 8: case 9: want_mode = ExecInputTrianglesAdj; want_len = 6; break;      // TRIANGLE_*_WITH_ADJACENCY
+        default: return false;
+    }
+    if (in.size() < 5) return false;
+
+    uint32_t entry_id = 0, cur_mode = 0, cur_len = 0;
+    size_t exec_at = 0, want_const_at = 0;
+    uint32_t u32_id = 0, s32_id = 0, want_const_id = 0;
+    std::map<uint32_t, uint32_t> const_val;
+    std::map<uint32_t, uint32_t> arr_len;
+    std::map<uint32_t, size_t> arr_at;
+    std::map<uint32_t, uint32_t> ptr_sc, ptr_pointee;
+    std::vector<uint32_t> input_var_ptrs;
+
+    for (size_t i = 5; i < in.size();) {
+        const uint32_t len = in[i] >> 16, op = in[i] & 0xffff;
+        if (!len || i + len > in.size()) return false;
+        const uint32_t* w = &in[i];
+        if (op == OpEntryPointOp && len >= 3 && w[1] == ModelGeometry) {
+            entry_id = w[2];
+        } else if (op == OpExecutionModeOp && len >= 3 && entry_id && w[1] == entry_id &&
+                   w[2] >= ExecInputPoints && w[2] <= ExecInputTrianglesAdj) {
+            cur_mode = w[2];
+            exec_at = i;
+        } else if (op == OpTypeIntOp && len == 4 && w[2] == 32) {
+            if (w[3] == 0) u32_id = w[1];
+            else if (w[3] == 1) s32_id = w[1];
+        } else if (op == OpConstantOp && len == 4 && ((u32_id && w[1] == u32_id) || (s32_id && w[1] == s32_id))) {
+            const_val[w[2]] = w[3];
+            if (w[3] == want_len && !want_const_id) { want_const_id = w[2]; want_const_at = i; }
+        } else if (op == OpTypeArrayOp && len == 4) {
+            arr_len[w[1]] = w[3];
+            arr_at[w[1]] = i;
+        } else if (op == OpTypePointerOp && len == 4) {
+            ptr_sc[w[1]] = w[2];
+            ptr_pointee[w[1]] = w[3];
+        } else if (op == OpVariableOp && len >= 4 && w[3] == StorageInput) {
+            input_var_ptrs.push_back(w[1]);
+        }
+        i += len;
+    }
+
+    if (!entry_id || !exec_at || cur_mode == want_mode) return false;
+    switch (cur_mode) {
+        case ExecInputPoints: cur_len = 1; break;
+        case ExecInputLines: cur_len = 2; break;
+        case ExecInputLinesAdj: cur_len = 4; break;
+        case ExecInputTriangles: cur_len = 3; break;
+        case ExecInputTrianglesAdj: cur_len = 6; break;
+        default: return false;
+    }
+
+    uint32_t bound = in[3];
+    std::map<uint32_t, uint32_t> ptr_to_old_arr;
+    std::map<uint32_t, uint32_t> old_to_new_arr;
+    size_t min_arr_at = in.size();
+    for (uint32_t ptr_ty : input_var_ptrs) {
+        auto sc_it = ptr_sc.find(ptr_ty);
+        auto pt_it = ptr_pointee.find(ptr_ty);
+        if (sc_it == ptr_sc.end() || sc_it->second != StorageInput || pt_it == ptr_pointee.end()) continue;
+        const uint32_t arr_ty = pt_it->second;
+        auto al_it = arr_len.find(arr_ty);
+        if (al_it == arr_len.end()) continue;
+        auto cv_it = const_val.find(al_it->second);
+        if (cv_it == const_val.end() || cv_it->second != cur_len) continue;
+        ptr_to_old_arr[ptr_ty] = arr_ty;
+        if (!old_to_new_arr.count(arr_ty)) old_to_new_arr[arr_ty] = bound++;
+        if (arr_at[arr_ty] < min_arr_at) min_arr_at = arr_at[arr_ty];
+    }
+
+    const uint32_t const_ty = u32_id ? u32_id : s32_id;
+    const bool need_const = !old_to_new_arr.empty() && (!want_const_id || want_const_at > min_arr_at);
+    if (need_const) {
+        if (!const_ty) return false;
+        want_const_id = bound++;
+    }
+
+    out.clear();
+    out.reserve(in.size() + old_to_new_arr.size() * 4 + (need_const ? 4 : 0));
+    out.insert(out.end(), in.begin(), in.begin() + 5);
+    for (size_t i = 5; i < in.size();) {
+        const uint32_t len = in[i] >> 16, op = in[i] & 0xffff;
+        if (i == exec_at) {
+            out.insert(out.end(), {(3u << 16) | OpExecutionModeOp, entry_id, want_mode});
+        } else if (op == OpTypePointerOp && len == 4 && ptr_to_old_arr.count(in[i + 1])) {
+            out.insert(out.end(), {in[i], in[i + 1], in[i + 2], old_to_new_arr[ptr_to_old_arr[in[i + 1]]]});
+        } else {
+            out.insert(out.end(), in.begin() + static_cast<std::ptrdiff_t>(i), in.begin() + static_cast<std::ptrdiff_t>(i + len));
+        }
+        if (need_const && op == OpTypeIntOp && len == 4 && in[i + 1] == const_ty) {
+            out.insert(out.end(), {(4u << 16) | OpConstantOp, const_ty, want_const_id, want_len});
+        }
+        if (op == OpTypeArrayOp && len == 4) {
+            auto it = old_to_new_arr.find(in[i + 1]);
+            if (it != old_to_new_arr.end()) out.insert(out.end(), {(4u << 16) | OpTypeArrayOp, it->second, in[i + 2], want_const_id});
+        }
+        i += len;
+    }
+    out[3] = bound;
+    return true;
+}
+
 }  // namespace nxrt::nvn::be::gpu
 
 namespace nxrt::nvn::be::gpu {
