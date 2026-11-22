@@ -103,6 +103,7 @@ struct AudioDecoder {
     // movie::AudioFrame::SetEndOfStreamState writes (subsdk0+0x1b2c0, one store).
     bool eos_pending = false;   // the stream ended; the next frame delivered carries the flag
     bool eos_sent = false;
+    uint64_t last_delivered = 0;   // the frame handed out last: the one that carries the flag when the film ends
     bool warned_packet = false;
     services::ServiceEvent in_ready, out_ready;
     alignas(16) uint8_t in_ev[0x100]{}, out_ev[0x100]{};
@@ -433,6 +434,7 @@ void deliver_sound(AudioDecoder& d) {
         const uint64_t f = d.free_.back();
         d.free_.pop_back();
         last_frame = f;
+        d.last_delivered = f;
         wr8(f + 0x10, 0);   // a normal frame: the end flag is set on the last one only (see below)
         Sound& s = d.sound.front();
         const uint64_t buf = rd64(f + kAfBuffer);
@@ -670,7 +672,20 @@ void movie_adec_film_end() {
     std::lock_guard<std::mutex> g(g_reg_mu);
     for (AudioDecoder* d : g_reg) {
         std::lock_guard<std::mutex> lk(d->mu);
-        if (!d->eos_sent) d->eos_pending = true;
+        if (d->eos_sent) continue;
+        // The picture is over, so the placeholder track is over: mark the last frame it handed out right here, rather than
+        // waiting for the player to pull the rest of a queue it has no reason to drain. It stopped pulling at the last
+        // picture; the chunks still queued are silence nobody hears (measured 2026-11-22: the video end arrived, the flag
+        // never did, and the player released the end-of-stream output without acting on it).
+        if (d->last_delivered) {
+            const size_t dropped = d->sound.size();
+            wr8(d->last_delivered + 0x10, 1);
+            d->eos_pending = false;
+            d->eos_sent = true;
+            NXLOG_I(kTag, "AudioDecoder: end of stream marked on the last audio frame at the film's end (%zu chunk(s) dropped)", dropped);
+        } else {
+            d->eos_pending = true;
+        }
     }
 }
 

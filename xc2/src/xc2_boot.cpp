@@ -687,7 +687,7 @@ static void arm_frame_rate(uint64_t main_base) {
     // frame without A7's per-draw instance snapshots; otherwise all stays as it was (no lead, snapshots on). Settings the player made win.
     // A stamp the log can be checked against: with two ways to build the runtime (this exe or the package's xc2_rt.dll),
     // "which binary ran" decided several tests on 2026-11-21. Bump it whenever the film/decode model changes.
-    NXLOG_I("xc2", "build stamp: film-model-32 (the end-of-stream marker is decoded past the preload, so it is never held back)");
+    NXLOG_I("xc2", "build stamp: 0.2.0 media (end of stream is a separate output; the placeholder track ends with the picture)");
     if (!nxrt::config_has("nvn", "mirror_capture")) nxrt::config_set("nvn", "mirror_capture", "auto");
     if (!nxrt::config_has("nvn", "snapshot_instances")) nxrt::config_set("nvn", "snapshot_instances", "auto");
     if (!nxrt::config_has("nvn", "present_ahead")) nxrt::config_set("nvn", "present_ahead", "auto");
