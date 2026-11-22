@@ -29,4 +29,8 @@ inline MirrorCap mirror_cap(uint64_t vram_bytes, int64_t explicit_mb, bool share
     return {std::min(kMirrorCapMax, vram_bytes / 4), vram_bytes / 4 < kMirrorCapMax ? "a quarter of the video memory" : "8192 MiB"};
 }
 
+// The largest device-local heap the device reported (0 before the device exists). The UI uses it to say whether a 4K
+// preset fits next to the capture's copies; the copies themselves are sized from the same number.
+uint64_t mirror_device_vram();
+
 }  // namespace nxrt::nvn

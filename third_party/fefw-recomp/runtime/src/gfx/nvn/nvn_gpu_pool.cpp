@@ -619,6 +619,28 @@ MirrorMode mirror_mode() {
     return m;
 }
 
+// The largest device-local heap, cached: the UI asks for it to say whether a preset fits next to the copies, and the
+// budget below needs the same number.
+std::atomic<uint64_t> g_device_vram{0};
+
+uint64_t device_vram_bytes_now() {
+    uint64_t vram = 0;
+    if (VkPhysicalDevice pd = device().physical()) {
+        VkPhysicalDeviceMemoryProperties mp{};
+        vkGetPhysicalDeviceMemoryProperties(pd, &mp);
+        for (uint32_t h = 0; h < mp.memoryHeapCount; ++h)
+            if (mp.memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) vram = std::max<uint64_t>(vram, mp.memoryHeaps[h].size);
+    }
+    g_device_vram.store(vram, std::memory_order_relaxed);
+    return vram;
+}
+
+uint64_t mirror_device_vram() {
+    const uint64_t cached = g_device_vram.load(std::memory_order_relaxed);
+    if (cached) return cached;
+    return device_vram_bytes_now();
+}
+
 // The cap of the copies ([nvn] pool_mirror_mb, or from the card's video memory when it is not set; nvn_mirror_cap.h), logged once.
 uint64_t mirror_budget() {
     uint64_t vram = 0;
@@ -627,10 +649,7 @@ uint64_t mirror_budget() {
         VkPhysicalDeviceProperties pp{};
         vkGetPhysicalDeviceProperties(pd, &pp);
         shared = pp.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU || pp.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU;
-        VkPhysicalDeviceMemoryProperties mp{};
-        vkGetPhysicalDeviceMemoryProperties(pd, &mp);
-        for (uint32_t h = 0; h < mp.memoryHeapCount; ++h)
-            if (mp.memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) vram = std::max<uint64_t>(vram, mp.memoryHeaps[h].size);
+        vram = device_vram_bytes_now();
     }
     const int64_t set_mb = config_has("nvn", "pool_mirror_mb") ? std::max<int64_t>(0, config_get_int("nvn", "pool_mirror_mb", 0)) : -1;
     const MirrorCap c = mirror_cap(vram, set_mb, shared);

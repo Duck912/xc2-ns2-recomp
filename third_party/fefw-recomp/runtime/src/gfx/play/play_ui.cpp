@@ -25,6 +25,7 @@
 #include "nxrt/input_source.h"
 #include "nxrt/lowlat.h"
 #include "nxrt/nvn_backend.h"
+#include "nvn/nvn_mirror_cap.h"
 #include "nxrt/overlay.h"
 #include "nxrt/platform.h"
 #include "play_game.h"
@@ -731,6 +732,18 @@ void tab_display(const LiveStatus& live, Page& p, float bottom_h) {
             if (p.edit.game3d.fsr_version.empty()) p.edit.game3d.fsr_version = "3.1";
         }
         mark(p);
+    }
+    // A hint, not a gate: 4K in this list means a 3840x2160 render target or a 4K output, and the mirror capture's copies
+    // (up to ~3.5 GiB when it is on) come on top of it. Measured on a 4060 Laptop (8 GB): the capture asked for 1989 of the
+    // 3584 MiB it wanted, so this is the combination that runs out of video memory first, and the DLC scenes are the ones
+    // that get there. The player can still pick it.
+    if ((p.edit.game3d.res_preset == 0 || p.edit.game3d.res_preset == 4) && nvn::mirror_device_vram() < (10ull << 30)) {
+        ImGui::PushStyleColor(ImGuiCol_Text, kGold);
+        ImGui::TextWrapped("%s", tr("注意：这台显卡的显存不到 10 GB，4K 会与 mirror capture 的拷贝（约 3.5 GiB）叠加，"
+                                    "附加内容场景最容易撑不住；1440p 更稳。",
+                                    "This card has under 10 GB of video memory: 4K stacks with the mirror capture's copies "
+                                    "(~3.5 GiB), and the add-on scenes are where it runs out first; 1440p is safer."));
+        ImGui::PopStyleColor();
     }
 
     int wmode = window_mode_index(d.window_mode);
