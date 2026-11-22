@@ -550,6 +550,12 @@ void set_window_mode(const std::string& mode) {
             if (platform::set_fullscreen(platform::FullscreenMode::Borderless)) NXLOG_W(kTag, "using borderless fullscreen instead");
             else NXLOG_W(kTag, "borderless fullscreen was refused too; staying windowed");
         }
+    } else if (want == platform::FullscreenMode::Windowed &&
+               st.settings.display.width >= 320 && st.settings.display.height >= 240) {
+        // Restore the player's configured windowed client size (e.g. 2560x1440 on a 4K display) and centre it,
+        // since fullscreen startup creates the window at desktop dimensions to avoid a white-box flash.
+        platform::set_window_size(st.settings.display.width, st.settings.display.height);
+        if (const int disp = platform::window_display(); disp > 0) platform::move_to_display(disp);
     }
     st.limiter.reset_schedule();
 }

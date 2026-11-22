@@ -720,9 +720,16 @@ void tab_display(const LiveStatus& live, Page& p, float bottom_h) {
 
     card_group("窗口与分辨率", "Window & Resolution");
     if (card_choice("game_res", "游戏 3D 分辨率 / 输出", "Game 3D resolution",
-                    "切换游戏内部 3D 渲染与主机输出分辨率（写入 nxrt.ini，重启生效）。支持 1080p / 1440p 真原生直出（不走 4K 超分）以及 1080p->1440p / 1440p->4K 等超分组合。",
-                    "Sets XC2 internal 3D render and output resolution in nxrt.ini (takes effect after restart). Supports true native 1080p/1440p (no 4K upscale) and upscaling presets.",
+                    "切换游戏内部 3D 渲染与主机输出分辨率（写入 nxrt.ini，重启生效）。切到 1080p/1440p 原生（不超分）会自动联动关闭超分，切到超分档位会自动联动 FSR 3.1.6；之后仍可在「画质」页自由微调。",
+                    "Sets XC2 internal 3D render and output resolution in nxrt.ini (takes effect on restart). Auto-links Native (No Upscale) to Off and upscale presets to FSR 3.1.6 (still freely adjustable in Graphics).",
                     &p.edit.game3d.res_preset, kGameResZh, kGameResEn, kGameResCount, true)) {
+        const int rp = p.edit.game3d.res_preset;
+        if (rp == 1 || rp == 2) {
+            p.edit.game3d.upscaler = "bilinear";
+        } else if (rp >= 3 && p.edit.game3d.upscaler == "bilinear") {
+            p.edit.game3d.upscaler = "fsr3";
+            if (p.edit.game3d.fsr_version.empty()) p.edit.game3d.fsr_version = "3.1";
+        }
         mark(p);
     }
 

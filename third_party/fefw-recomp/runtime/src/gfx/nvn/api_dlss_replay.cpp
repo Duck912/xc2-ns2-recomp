@@ -115,42 +115,50 @@ const Settings& settings() {
     static const std::string hot = config_get_str("dlss", "hot_file", "");
     if (!hot.empty()) {
         static std::chrono::steady_clock::time_point last{};
+        static std::string last_hot_content;
         const auto now = std::chrono::steady_clock::now();
         if (last.time_since_epoch().count() == 0 || now - last > std::chrono::milliseconds(250)) {
             last = now;
             std::ifstream in(hot);
-            std::string line;
-            while (std::getline(in, line)) {
-                const size_t eq = line.find('=');
-                if (eq == std::string::npos) continue;
-                std::string k = line.substr(0, eq), v = line.substr(eq + 1);
-                auto trim = [](std::string& x) {
-                    while (!x.empty() && (x.back() == ' ' || x.back() == '\t' || x.back() == '\r')) x.pop_back();
-                    while (!x.empty() && (x.front() == ' ' || x.front() == '\t')) x.erase(x.begin());
-                };
-                trim(k);
-                trim(v);
-                if (k.empty() || v.empty()) continue;
-                if (k == "upscaler") {
-                    for (char& c : v) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-                    const Upscaler u = v == "bilinear" || v == "spatial" ? Upscaler::Bilinear
-                                     : v == "fsr3" || v == "fsr" ? Upscaler::Fsr3
-                                     : v == "dlss" ? Upscaler::Dlss
-                                     : v == "auto" ? Upscaler::Auto : Upscaler::Taau;
-                    if (static_cast<int>(u) != g_upscaler_seen) {
-                        g_upscaler_seen = static_cast<int>(u);
-                        s.upscaler = u;
-                        ++g_upscaler_gen;
-                        NXLOG_I(kTag, "upscaler -> %s (hot)", upscaler_name(u));
+            std::string body((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            if (body != last_hot_content) {
+                last_hot_content = body;
+                size_t pos = 0;
+                while (pos < body.size()) {
+                    const size_t nl = body.find('\n', pos);
+                    std::string line = (nl == std::string::npos) ? body.substr(pos) : body.substr(pos, nl - pos);
+                    pos = (nl == std::string::npos) ? body.size() : nl + 1;
+                    const size_t eq = line.find('=');
+                    if (eq == std::string::npos) continue;
+                    std::string k = line.substr(0, eq), v = line.substr(eq + 1);
+                    auto trim = [](std::string& x) {
+                        while (!x.empty() && (x.back() == ' ' || x.back() == '\t' || x.back() == '\r')) x.pop_back();
+                        while (!x.empty() && (x.front() == ' ' || x.front() == '\t')) x.erase(x.begin());
+                    };
+                    trim(k);
+                    trim(v);
+                    if (k.empty() || v.empty()) continue;
+                    if (k == "upscaler") {
+                        for (char& c : v) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                        const Upscaler u = v == "bilinear" || v == "spatial" ? Upscaler::Bilinear
+                                         : v == "fsr3" || v == "fsr" ? Upscaler::Fsr3
+                                         : v == "dlss" ? Upscaler::Dlss
+                                         : v == "auto" ? Upscaler::Auto : Upscaler::Taau;
+                        if (static_cast<int>(u) != g_upscaler_seen) {
+                            g_upscaler_seen = static_cast<int>(u);
+                            s.upscaler = u;
+                            ++g_upscaler_gen;
+                            NXLOG_I(kTag, "upscaler -> %s (hot)", upscaler_name(u));
+                        }
+                    } else if (k == "history_weight") {
+                        s.max_weight = static_cast<float>(std::clamp(std::atof(v.c_str()), 2.0, 64.0));
+                    } else if (k == "jitter_sign") {
+                        s.jitter_sign = std::atoi(v.c_str());
+                    } else if (k == "mv_sign") {
+                        s.mv_sign = std::atoi(v.c_str());
+                    } else if (k == "sharpness") {
+                        s.sharpness = static_cast<float>(std::clamp(std::atof(v.c_str()), 0.0, 1.0));
                     }
-                } else if (k == "history_weight") {
-                    s.max_weight = static_cast<float>(std::clamp(std::atof(v.c_str()), 2.0, 64.0));
-                } else if (k == "jitter_sign") {
-                    s.jitter_sign = std::atoi(v.c_str());
-                } else if (k == "mv_sign") {
-                    s.mv_sign = std::atoi(v.c_str());
-                } else if (k == "sharpness") {
-                    s.sharpness = static_cast<float>(std::clamp(std::atof(v.c_str()), 0.0, 1.0));
                 }
             }
         }
