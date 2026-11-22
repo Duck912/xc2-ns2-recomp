@@ -109,7 +109,7 @@ def check_ascii_inputs(files):
 TOP_LEVEL_DIRS = {".github", "config", "docs", "launcher", "licenses", "third_party", "tools", "xc2"}
 TOP_LEVEL_FILES = {
     ".editorconfig", ".gitattributes", ".gitignore", "AGENTS.md", "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE",
-    "LICENSE.nxnative.MIT", "README.md", "README.zh-CN.md", "SECURITY.md", "STATUS.md", "THIRD_PARTY_NOTICES.md", "controls.ini",
+    "LICENSE.nxnative.MIT", "README.md", "SECURITY.md", "STATUS.md", "THIRD_PARTY_NOTICES.md", "controls.ini",
     "deepseek.md",
 }
 
