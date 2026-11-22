@@ -795,10 +795,19 @@ float attachment_scale(const Texture& t) {
     static const int out_min = static_cast<int>(nxrt::config_get_int("gfx", "output_min_width", 1920));
     float sc = t.b.width >= out_min ? out : scene;
     // The output scale takes the 1080-line output set to the output's height (output scale x 1080 lines); a taller target on that side
-    // goes to that height and no further. XC2 NS2 makes its final image in a 3840x2160 set of its own: at a 4K output a plain x2 drew
-    // it at 7680x4320 (~2 GB more video memory, and the 8K passes) only for the window to shrink it back to 4K.
-    if (t.b.width >= out_min && t.b.height > 1080 && sc > 1.0f)
-        sc = std::max(1.0f, std::min(sc, std::round(out * 1080.0f) / static_cast<float>(t.b.height)));
+    // is drawn at the output's height. XC2 NS2 makes its final image in a 3840x2160 set of its own: at a 4K output a plain x2 drew it
+    // at 7680x4320 (~2 GB more video memory, and the 8K passes) only for the window to shrink it back to 4K, and at a 1440p or 1080p
+    // output the set at its own 4K was shrunk the same way. With [upscale] render_quality the output height is known ([am] resolution)
+    // and the set gets exactly that (smaller than its own size below a 4K output); with only [gfx] output_scale it is never enlarged
+    // past output scale x 1080 lines nor made smaller than its own size.
+    if (t.b.width >= out_min && t.b.height > 1080) {
+        const float h = static_cast<float>(t.b.height);
+        if (quality_scales().set)
+            sc = static_cast<float>(quality_scales().out_h) / h;
+        else if (sc > 1.0f)
+            sc = std::max(1.0f, std::min(sc, std::round(out * 1080.0f) / h));
+        if (std::fabs(sc - 1.0f) < 0.01f) sc = 1.0f;
+    }
     if (sc == 1.0f) return 1.0f;
     const TextureBuilderInfo& b = t.b;
     if (!t.fmt || t.fmt->compressed || t.fmt->block_w != 1 || t.fmt->block_h != 1) return 1.0f;
