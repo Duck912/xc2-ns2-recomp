@@ -146,6 +146,26 @@ schema, not an installer.
 No mod, cheat or extracted asset ships with this project or its releases. Mods are the player's own files, exactly
 like the dump the game is built from; the project only provides the loader.
 
+## How the overlay is applied (M1, built)
+
+The game parses the RomFS tables itself, and this runtime synthesises those tables from a host folder. The overlay
+is therefore folded in **when the image is built**, before the tables are laid out: a mod's file replaces the host
+path of the entry at the same logical path, and nothing is looked up at run time.
+
+```
+[fs] mods       = mods          the folder of mod folders
+[mods] order    = A,B           highest priority first; unnamed folders follow alphabetically
+[mods] disabled = C             not loaded; logged as disabled
+```
+
+Only the **game's own** romfs gets the overlay - every add-on pack builds its own image through the same code, and
+laying the mods over those as well would put each file in seven storages. The build log reports each mod:
+
+```
+mods: TestMod: 1 file(s), 1 replaced, 0 added
+mods: 1 enabled, 0 disabled, 0 named in [mods] order
+```
+
 ## The asset catalog (M0, built)
 
 Where a mod can put a file depends on where the game reads it from, and most of this game's assets are inside

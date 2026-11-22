@@ -20,6 +20,7 @@
 #include <system_error>
 #include <vector>
 
+#include "nxrt/config.h"
 #include "nxrt/diag.h"
 #include "nxrt/log.h"
 #include "nxrt/nup.h"
@@ -113,6 +114,190 @@ struct Node {
 };
 
 std::string shown(const Node& n) { return n.path.empty() ? std::string("/") : n.path; }
+
+// ---- mods: a layered romfs (M1) -----------------------------------------------------------------------------------
+// A mod is a folder whose romfs tree is laid over the game's romfs by the same path. The image the game parses is one
+// tree either way, so the game cannot tell a modded file from a vanilla one, and no lookup happens at run time: the
+// overlay is folded into the tables this file builds (the emulator LayeredFS arrangement).
+//
+// [mods] order names mods from highest priority to lowest, anything unnamed follows alphabetically, and [mods]
+// disabled lists folders that are not loaded. Applying from the lowest to the highest lets the last writer win, which
+// is the rule docs/MODS.md states.
+
+struct ModStats {
+    std::string name;
+    uint32_t files = 0, replaced = 0, added = 0;
+};
+
+std::vector<std::string> config_name_list(const char* key) {
+    std::vector<std::string> out;
+    const std::string s = config_get_str("mods", key, "");
+    size_t i = 0;
+    while (i < s.size()) {
+        const size_t comma = s.find(',', i);
+        const size_t end = comma == std::string::npos ? s.size() : comma;
+        const std::string item = s.substr(i, end - i);
+        const size_t a = item.find_first_not_of(" \t");
+        const size_t b = item.find_last_not_of(" \t");
+        if (a != std::string::npos) out.push_back(item.substr(a, b - a + 1));
+        i = end + 1;
+    }
+    return out;
+}
+
+bool list_has(const std::vector<std::string>& list, const std::string& name) {
+    return std::find(list.begin(), list.end(), name) != list.end();
+}
+
+// Where a mod keeps its files: <mod>\romfs first, then the emulator layout <mod>\contents\<id>\romfs. Empty when
+// neither exists.
+std::filesystem::path mod_romfs_root(const std::filesystem::path& mod) {
+    std::error_code ec;
+    const std::filesystem::path plain = mod / "romfs";
+    if (std::filesystem::is_directory(plain, ec)) return plain;
+    const std::filesystem::path contents = mod / "contents";
+    if (std::filesystem::is_directory(contents, ec)) {
+        for (std::filesystem::directory_iterator it(contents, ec), end; !ec && it != end; it.increment(ec)) {
+            const std::filesystem::path inner = it->path() / "romfs";
+            if (std::filesystem::is_directory(inner, ec)) return inner;
+        }
+    }
+    return {};
+}
+
+Node* find_kid(Node& dir, const std::string& name) {
+    for (Node& k : dir.kids)
+        if (k.name == name) return &k;
+    return nullptr;
+}
+
+// Lays one mod's tree over dir. A file the game already has replaces it; a file it does not have is added - mods may
+// ship new assets, and tools/mods/mod_check.py is where a wrong game version is diagnosed.
+void overlay_dir(Node& dir, const std::filesystem::path& host, ModStats& st) {
+    std::error_code ec;
+    std::filesystem::directory_iterator it(host, ec), end;
+    for (; !ec && it != end; it.increment(ec)) {
+        std::string name;
+        if (!to_utf8(it->path().filename().wstring(), name) || name.empty()) {
+            NXLOG_W("mods", "mod %s: cannot use a file name under %s", st.name.c_str(), shown(dir).c_str());
+            continue;
+        }
+        const std::filesystem::file_status stat = it->symlink_status(ec);
+        if (ec || std::filesystem::is_symlink(stat)) {
+            NXLOG_W("mods", "mod %s: skipping %s (a symbolic link or unreadable)", st.name.c_str(), (dir.path + "/" + name).c_str());
+            continue;
+        }
+        Node* kid = find_kid(dir, name);
+        if (std::filesystem::is_directory(stat)) {
+            if (kid && !kid->is_dir) {
+                NXLOG_W("mods", "mod %s: %s is a file in the game and a folder in the mod: skipped", st.name.c_str(),
+                        (dir.path + "/" + name).c_str());
+                continue;
+            }
+            if (!kid) {
+                Node k;
+                k.name = name;
+                k.path = dir.path + "/" + name;
+                k.is_dir = true;
+                k.host = long_path(it->path().wstring());
+                dir.kids.push_back(std::move(k));
+                kid = &dir.kids.back();
+            }
+            overlay_dir(*kid, it->path(), st);
+            continue;
+        }
+        if (!std::filesystem::is_regular_file(stat)) continue;
+        if (kid && kid->is_dir) {
+            NXLOG_W("mods", "mod %s: %s is a folder in the game and a file in the mod: skipped", st.name.c_str(),
+                    (dir.path + "/" + name).c_str());
+            continue;
+        }
+        const uint64_t size = it->file_size(ec);
+        if (ec) {
+            NXLOG_W("mods", "mod %s: cannot read the size of %s", st.name.c_str(), (dir.path + "/" + name).c_str());
+            continue;
+        }
+        if (kid) {
+            kid->host = long_path(it->path().wstring());
+            kid->size = size;
+            kid->src = 0;   // the mod file starts at 0: src is the extent inside a .nup, and mods never apply to one
+            st.replaced++;
+        } else {
+            Node k;
+            k.name = name;
+            k.path = dir.path + "/" + name;
+            k.host = long_path(it->path().wstring());
+            k.size = size;
+            dir.kids.push_back(std::move(k));
+            st.added++;
+        }
+        st.files++;
+    }
+    if (ec) NXLOG_W("mods", "mod %s: cannot read %s", st.name.c_str(), host.string().c_str());
+}
+
+// Applies the mods of [fs] mods, if the folder exists. Never fails the build: a broken mod loses its own files, not
+// the game.
+void apply_mods(Node& root, const std::filesystem::path& host_abs) {
+    // Every RomFS image is built here, the add-on packs included. A mod lays files over the *game's* romfs; overlaying
+    // a pack's image as well would put the same file in seven storages and report it as 'added' six times.
+    {
+        std::error_code e;
+        const std::filesystem::path want = std::filesystem::absolute(
+            std::filesystem::path(config_get_str("fs", "romfs", "game/romfs")), e);
+        if (e || !std::filesystem::exists(want, e)) return;
+        if (!std::filesystem::equivalent(want, host_abs, e) || e) return;
+    }
+    const std::string dir_s = config_get_str("fs", "mods", "mods");
+    if (dir_s.empty()) return;
+    const std::filesystem::path dir(dir_s);
+    std::error_code ec;
+    if (!std::filesystem::is_directory(dir, ec)) {
+        NXLOG_I("mods", "mods: no folder at %s", dir_s.c_str());
+        return;
+    }
+    std::vector<std::string> present;
+    for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+        std::string name;
+        if (!to_utf8(it->path().filename().wstring(), name)) continue;
+        if (std::filesystem::is_directory(it->symlink_status(ec))) present.push_back(name);
+    }
+    if (present.empty()) {
+        NXLOG_I("mods", "mods: %s is empty", dir_s.c_str());
+        return;
+    }
+    std::sort(present.begin(), present.end());
+    const std::vector<std::string> order = config_name_list("order");
+    const std::vector<std::string> disabled = config_name_list("disabled");
+
+    std::vector<std::string> seq;
+    for (const std::string& n : order)
+        if (std::find(present.begin(), present.end(), n) != present.end()) seq.push_back(n);
+    for (const std::string& n : present)
+        if (!list_has(seq, n)) seq.push_back(n);
+    std::reverse(seq.begin(), seq.end());   // lowest priority first: the last writer wins
+
+    uint32_t applied = 0, off = 0;
+    for (const std::string& name : seq) {
+        if (list_has(disabled, name)) {
+            NXLOG_I("mods", "mods: %s: disabled", name.c_str());
+            off++;
+            continue;
+        }
+        const std::filesystem::path r = mod_romfs_root(dir / name);
+        if (r.empty()) {
+            NXLOG_W("mods", "mods: %s has no romfs folder: skipped", name.c_str());
+            continue;
+        }
+        ModStats st;
+        st.name = name;
+        overlay_dir(root, r, st);
+        NXLOG_I("mods", "mods: %s: %u file(s), %u replaced, %u added", name.c_str(), st.files, st.replaced, st.added);
+        applied++;
+    }
+    NXLOG_I("mods", "mods: %u enabled, %u disabled, %u named in [mods] order", applied, off, static_cast<uint32_t>(order.size()));
+}
+
 
 // Fills dir.kids from the host folder dir.host, recursively. False with msg set at the first entry that cannot be described.
 bool scan(Node& dir, std::string& msg) {
@@ -282,6 +467,11 @@ bool make_layout(const std::string& host_dir, Layout& L, std::string* err) {
         if (err) *err = msg;
         return false;
     }
+
+    // The overlay is folded in here, before the tables are laid out: one image, no lookup at run time. A .nup serves
+    // its own romfs, so mods only apply to the folder route.
+    if (packaged) NXLOG_I("mods", "mods: not applied - the romfs comes from a package");
+    else apply_mods(root, abs);
 
     std::vector<Node*> dirs{&root}, files;
     flatten(root, dirs, files);
