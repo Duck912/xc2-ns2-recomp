@@ -12,7 +12,7 @@ linked against a small Switch runtime.
 |---|---|
 | application | `0100E95004038000` (the same title as the Switch 1 release; update 1114112) |
 | what we recompile | **program 1**, `0400E95004038001` — SDK 21.4.4 ("Ounce"), NVN2 231.39, game version **3.0.1** |
-| add-on content | `0100E95004039001` … `0100E95004039063` (8 packs, optional) |
+| add-on content | `0100E95004039001` … `0100E95004039063` (up to 8 packs, depending on your dump — the ids are not\n  contiguous) |
 | current release | **v0.2.0** (2026-11-22) |
 
 > **This repository contains no game code and no game assets.** It is the toolchain, the runtime and the
@@ -177,7 +177,7 @@ Vulkan 运行。不是模拟器：游戏自己的模块被举升成 C++，再链
 |---|---|
 | application | `0100E95004038000`（与 NS1 版是同一个 title；update 1114112） |
 | **我们重编译的** | **program 1**，`0400E95004038001` —— SDK 21.4.4（"Ounce"）、NVN2 231.39、游戏版本 **3.0.1** |
-| 附加内容 | `0100E95004039001` … `0100E95004039063`（8 个包，可选） |
+| 附加内容 | `0100E95004039001` … `0100E95004039063`（最多 8 个，视你的 dump 而定；号段不连续） |
 | 当前版本 | **v0.2.0**（2026-11-22） |
 
 > **仓库里没有任何游戏代码、资源或密钥。** 这里只有工具链、运行时和文档。你需要自己合法获得的游戏副本——
