@@ -101,6 +101,7 @@ uint64_t diag_frame_count();
 uint32_t watchdog_fire_count();
 // Extra sections of the freeze dump: each function returns text (it must never block: the process may be frozen). Registered once at start-up.
 void diag_add_report(std::string (*fn)());
+void diag_set_exiting();               // the process is on its way out: a stopped frame tick is not a freeze
 std::string diag_thread_dump();        // the dump text the watchdog produces, on demand (also used by the SIGUSR-style "dump_threads" file)
 
 }  // namespace nxrt

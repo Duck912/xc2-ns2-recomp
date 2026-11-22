@@ -867,6 +867,12 @@ bool mirror_capture_on() {
         if (is_auto)
             NXLOG_I(kTag, "mirror_capture: %s (auto: the copies may take %llu MiB, %llu needed)", v ? "on" : "off",
                     static_cast<unsigned long long>(budget >> 20), static_cast<unsigned long long>(kCaptureMinBudget >> 20));
+        // A player on an 8 GB NVIDIA card reads "off" as "the fix is applied": the flicker this exists for stays, and the frame
+        // time it costs stays with it (measured 2026-11-22: a 4060 Laptop offered 1989 MiB of 3584 and ran the opening at 14 fps).
+        if (is_auto && !v)
+            NXLOG_W(kTag, "mirror_capture: off - this device offers %llu MiB and the copies need %llu, so the flicker fix is not active;"
+                          " [nvn] mirror_capture = 1 forces it (it may then run out of memory)",
+                    static_cast<unsigned long long>(budget >> 20), static_cast<unsigned long long>(kCaptureMinBudget >> 20));
         else
             NXLOG_I(kTag, "mirror_capture: %s", v ? "on (every GPU access to a mirrored pool goes through its copy)" : "off");
         return v;

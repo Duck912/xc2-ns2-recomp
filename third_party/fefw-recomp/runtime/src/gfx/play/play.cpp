@@ -8,6 +8,7 @@
 //                                                            present mode), the ImGui overlay and the settings page
 //   hid sampling thread                                      PlaySource::poll (200 Hz): reads the pad snapshot and asks the binding engine for the
 //                                                            keyboard and mouse contribution at that instant
+#include "nxrt/diag.h"
 #include "nxrt/extras.h"
 #include "nxrt/lowlat.h"
 #include "nxrt/play.h"
@@ -518,6 +519,7 @@ void vib_sink(uint32_t slot, int hand, const hid::VibrationValue& v, void*) {
 [[noreturn]] void exit_process(int code, const char* verdict, const std::string& message) {
     G& st = g();
     NXLOG_I(kTag, "ending the process (%s): %s", verdict, message.c_str());
+    diag_set_exiting();   // the watchdog stops looking for a stall: the frames are meant to stop now
     if (st.dirty) {
         std::string err;
         std::lock_guard<std::mutex> lk(st.mu);

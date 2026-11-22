@@ -36,6 +36,7 @@ std::atomic<uint64_t> g_frames{0};
 std::atomic<uint64_t> g_progress{0};   // heartbeats that are not frames (diag_progress)
 std::atomic<uint32_t> g_fires{0};
 std::atomic<bool> g_running{false};
+std::atomic<bool> g_exiting{false};   // set by diag_set_exiting: the frames are meant to stop, so a still tick is not a freeze
 
 enum class Status : uint8_t { NoSuspend, NoContext, Ok };
 
@@ -314,7 +315,9 @@ void run_loop(Control* c) {
             }
         }
         const double idle_s = std::chrono::duration<double>(now - last_change).count();
-        if (!fired && idle_s >= c->threshold_s) {
+        // A window closed on purpose stops the frames: measured on a laptop, closing the game wrote a FREEZE report 10 s
+        // later that read exactly like a hang, and it is what a player would attach to a bug report.
+        if (!fired && !g_exiting.load(std::memory_order_relaxed) && idle_s >= c->threshold_s) {
             fired = true;
             std::string header;
             appendf(header, "FREEZE: no frame tick for %.1f s (frame count %llu)", idle_s,
@@ -392,6 +395,7 @@ void diag_frame_tick() {
 uint64_t diag_frame_count() { return g_frames.load(std::memory_order_relaxed); }
 
 uint32_t watchdog_fire_count() { return g_fires.load(std::memory_order_relaxed); }
+void diag_set_exiting() { g_exiting.store(true, std::memory_order_relaxed); }
 
 std::string diag_thread_dump() { return dump_text(); }
 
