@@ -139,10 +139,26 @@ schema, not an installer.
 No mod, cheat or extracted asset ships with this project or its releases. Mods are the player's own files, exactly
 like the dump the game is built from; the project only provides the loader.
 
+## The asset catalog (M0, built)
+
+Where a mod can put a file depends on where the game reads it from, and most of this game's assets are inside
+`bf2.ard` rather than loose on the romfs. `tools/mods/asset_index.py` writes one table of every file the game can
+read — loose romfs files, the archive's records, and each add-on pack:
+
+```
+work/mods/assets.tsv        source, path, kind, size, unc, comp, offset, checksum, sha256
+work/mods/assets-summary.json
+```
+
+`source` is `romfs`, `ard` or `dlc:<id>`. The tooling and its contract live in
+[`tools/mods/README.md`](../tools/mods/README.md); the output is derived from the player's dump and is never
+committed.
+
 ## Implementation order
 
 | step | what | state |
 |---|---|---|
+| M0 | the asset catalog: romfs + `bf2.ard` + add-on content → `work/mods/assets.tsv` | **built** (`tools/mods/asset_index.py`) |
 | M1 | `mods\<name>\romfs\` overlay for loose files, load report, order and switches | not started |
 | M1.5 | the emulator layouts above | not started |
 | M2 | the archive index in the runtime: files inside `bf2.ard`, the "not found" check | not started |

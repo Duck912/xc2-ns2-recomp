@@ -117,6 +117,7 @@ glue, the launcher, the film path and the analysis tools.
 | `launcher/` | the Windows launcher (Tauri + a plain JS front end) |
 | `third_party/fefw-recomp/` | the runtime fork; every change is listed in its `MODIFICATIONS.md` |
 | `tools/` | build, run, CI and analysis tools |
+| `tools/mods/` | the mod path: the asset catalog (M0) and, later, the mod checker and packer |
 | `config/` | the settings schema (`keys.tsv`) and the install template |
 | `docs/` | the public documentation |
 
@@ -278,6 +279,7 @@ ExeFS (NSO) ──nxrecomp 举升──▶ C++ ──clang-cl──▶ main.lib 
 | `launcher/` | Windows 启动器（Tauri + 纯 JS 前端） |
 | `third_party/fefw-recomp/` | 运行时分支；每处改动都记在它的 `MODIFICATIONS.md` |
 | `tools/` | 构建、运行、CI 与分析工具 |
+| `tools/mods/` | MOD 这条路：资产编目（M0），以及后续的检查器与打包器 |
 | `config/` | 设置表（`keys.tsv`）与安装模板 |
 | `docs/` | 公开文档 |
 
