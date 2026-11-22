@@ -1,7 +1,7 @@
-# XC2 NS2 Recomp v0.2.0 — the NS2 edition's own problems, solved
+# XC2 NS2 Recomp v0.2.0 — the cornerstone release
 
-**Tested on a Radeon RX 6800 XT (16 GB).** The NVIDIA path comes from #19, which its author tested on a 5090 and a
-4060 Laptop.
+**Tested on a Radeon RX 6800 XT (16 GB) and an RTX 4060 Laptop (8 GB).** The NVIDIA path came from #19, which its author
+tested on a 5090 and a 4060 Laptop; the 4060 Laptop run here is ours.
 
 The Switch 2 edition is not the Switch 1 game with a bigger icon. Its cutscenes are 4K AV1, its memory films play *over* a
 live scene and have to hand that scene back, and its player is guest code we cannot call into — the runtime only supplies
@@ -43,7 +43,7 @@ renames the map's `f_<address>` entries.
 The whole path — the codec protocol, the audio clock, why an inserted film is harder than a standalone one — is written
 down in `docs/MEDIA.md`, for the next project that has to do this.
 
-### NVIDIA machines run (PR #19, @nikolaybutnik)
+### Smoother on NVIDIA, and on AMD too (PR #19, @nikolaybutnik)
 
 The GPU now reads a per-submission copy of every pool the CPU writes, so a draw sees the bytes of the frame it belongs to
 instead of whatever the CPU wrote next — the flicker, the tearing and the stripes on NVIDIA were all that race. The
@@ -133,9 +133,9 @@ Upstream: **fefw-recomp** by Goldoire (GPL-3.0, the runtime this fork is built o
 
 ---
 
-# XC2 NS2 重编译 v0.2.0 —— NS2 版自己的问题，自己解决
+# XC2 NS2 重编译 v0.2.0 —— 基石版本
 
-**在 Radeon RX 6800 XT（16 GB）上实测。** N 卡路径来自 #19，由作者在 5090 与 4060 Laptop 上测过。
+**在 Radeon RX 6800 XT（16 GB）与 RTX 4060 Laptop（8 GB）上实测。** N 卡路径来自 #19（其作者在 5090 与 4060 Laptop 上测过），4060 Laptop 这一组是我们自己的运行。
 
 NS2 版不是“换了图标的 NS1”。它的过场是 **4K AV1**；它的回忆短片是**叠在实时场景之上**播、播完必须把场景交还；
 而它的播放器是客机代码，我们调不进去——运行时只负责 `nn::codec`。这一版主要就是这三件事，加上第一个设置界面和
@@ -171,7 +171,7 @@ NS2 版的影片是 3840×2160 AV1，而 SDK 的解码器直接打开 GPU 驱动
 整条实现路径——codec 协议、音频时钟、为什么“叠场景的短片”比独立过场难——写在 `docs/MEDIA.md` 里，给下一个要做同样
 事情的项目参考。
 
-### N 卡能跑了（PR #19，@nikolaybutnik）
+### N 卡更加流畅（AMD 同样受益）（PR #19，@nikolaybutnik）
 
 GPU 现在读的是**每次提交时的一份池拷贝**，一次绘制看到的是它那一帧的字节，而不是 CPU 之后写进去的内容——N 卡上的
 闪烁、撕裂、条纹都是这个竞态。默认值按机器分流（`[nvn] mirror_capture = auto`：拷贝放得下才开，8 GB 笔记本不开）；
