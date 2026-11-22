@@ -1504,7 +1504,7 @@ void acquire_output(::Ctx* c) {   // (u32* index, NativeSyncHandle* fence, dec)
             // player for as long as the picture takes - measured 381 ms from acquire to the first read on the runs of main that
             // failed, against every read under 40 ms on the runs that played (2026-11-21). Decode one packet here, outside the
             // lock, so the picture exists before the client arms anything. main has this first-frame fallback; the protocol
-            // rewrite dropped it, which is why pr19plus stalls on runs where main gets through.
+            // rewrite dropped it, and without it the player stalls on runs where the other acquire path gets through.
             if (d->ready.empty() && !d->pending.empty()) {
                 lk.unlock();
                 decode_one(*d);
