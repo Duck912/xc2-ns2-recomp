@@ -88,6 +88,7 @@ pwsh -File third_party\fefw-recomp\tools\textures\scripts\fetch_third_party.ps1 
 | it builds but the screen is wrong, or the driver crashes | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) |
 | the toolchain, and the switches that print diagnostics | [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) |
 | the rules, and why they exist | [docs/INVARIANTS.md](docs/INVARIANTS.md) |
+| how films are decoded and why the end-of-stream protocol looks inverted | [docs/MEDIA.md](docs/MEDIA.md) |
 | the hook sites the lifter uses | [xc2/sites/README.md](xc2/sites/README.md) |
 | third-party components and their licences | [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) |
 

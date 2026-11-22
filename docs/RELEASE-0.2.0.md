@@ -7,9 +7,6 @@ The Switch 2 edition is not the Switch 1 game with a bigger icon. Its cutscenes 
 live scene and have to hand that scene back, and its player is guest code we cannot call into — the runtime only supplies
 `nn::codec`. This release is mostly about those three, plus the first settings page and the first NVIDIA support.
 
-> As far as we can tell this is the only public static recompilation of the NS2 edition. The Switch 1 game has its own
-> recomp (XC2 Recomp, MIT, a different codebase), and the emulator projects run the game instead of recompiling it; none of
-> them publishes a recompiled NS2 runtime.
 
 ## Which file do I download?
 
@@ -36,6 +33,9 @@ of stream instead of 35 s.
 Every thread dump now names those functions (`subsdk0!movie::MediaDecoder::Stop`, `main!nnMain`): the lift's dynsym
 tables carry real addresses (31,216 names across the modules), the build writes them next to the exe, and the runtime
 renames the map's `f_<address>` entries.
+
+The whole path — the codec protocol, the audio clock, why an inserted film is harder than a standalone one — is written
+down in `docs/MEDIA.md`, for the next project that has to do this.
 
 ### NVIDIA machines run (PR #19, @nikolaybutnik)
 
@@ -135,8 +135,6 @@ NS2 版不是“换了图标的 NS1”。它的过场是 **4K AV1**；它的回�
 而它的播放器是客机代码，我们调不进去——运行时只负责 `nn::codec`。这一版主要就是这三件事，加上第一个设置界面和
 第一份 N 卡支持。
 
-> 据我们所知，这是**NS2 版目前唯一公开的静态重编译项目**。NS1 版有它自己的重编译（XC2 Recomp，MIT，另一套代码），
-> 模拟器项目是“运行”而不是“重编译”，它们都没有发布 NS2 的重编译运行时。
 
 ## 我该下哪个文件？
 
@@ -159,6 +157,9 @@ NS2 版的影片是 3840×2160 AV1，而 SDK 的解码器直接打开 GPU 驱动
 
 每一份线程转储现在都能叫出这些函数（`subsdk0!movie::MediaDecoder::Stop`、`main!nnMain`）：提升产物的 dynsym 表
 带真实地址（各模块合计 31,216 个名字），构建时写进 exe 旁边，运行时把 map 里 `f_<地址>` 的条目改名。
+
+整条实现路径——codec 协议、音频时钟、为什么“叠场景的短片”比独立过场难——写在 `docs/MEDIA.md` 里，给下一个要做同样
+事情的项目参考。
 
 ### N 卡能跑了（PR #19，@nikolaybutnik）
 
