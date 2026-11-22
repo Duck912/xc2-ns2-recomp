@@ -236,7 +236,7 @@ void start_timer(::Ctx* c) {   // (TimerEventType*, TimeSpan first, TimeSpan per
     // comparison never turns it due (no ClearTimerEvent follows the player's StartPeriodicTimerEvent). Mark it due from the host
     // instead, or the player's frame loop simply never wakes: one picture read, then nothing.
     if (g_poke && heap_address(t) && i2 > 0 && i2 <= 1000000000) {
-        NXLOG_I(kTag, "timer poke: 0x%llx every %lld ns", t, (long long)i2);
+        if (g_on) NXLOG_I(kTag, "timer poke: 0x%llx every %lld ns", t, (long long)i2);
         poke_add(t, i2);
     }
     A(0) = r;
@@ -409,14 +409,19 @@ void install_player_trace() {
     std::call_once(once, [] {
         g_on = config_get_bool("media", "player_trace", false);
         g_poke = config_get_bool("media", "movie_timer_poke", true);   // on by default: without it the player's per-frame timer never fires
-        if (!g_on) return;
-        std::thread(stall_watch).detach();
+        // The poke is not a diagnostic. It is what makes the player's frame loop wake at all on this pair of runtimes (see
+        // start_timer below: without it, "one picture read, then nothing"). It used to be installed only when the trace was
+        // on - and every development run had the trace on, so a plain install degenerated to about one picture a second and
+        // then stopped, while the same build with NXRT_MEDIA_PLAYER_TRACE=1 played normally (measured 2026-11-22, first
+        // clean install of 0.2.0).
+        if (!g_on && !g_poke) return;
+        if (g_on) std::thread(stall_watch).detach();
         for (const Entry& e : kEntries) {
             hle_register(e.name, e.fn);
             module_override_symbol(e.name);
         }
-        NXLOG_I(kTag, "[media] player_trace: %zu nn::os message-queue / timer / MultiWait entry points logged",
-                sizeof kEntries / sizeof kEntries[0]);
+        NXLOG_I(kTag, "[media] player_trace: %zu nn::os message-queue / timer / MultiWait entry points %s",
+                sizeof kEntries / sizeof kEntries[0], g_on ? "logged" : "routed for the per-frame timer poke");
     });
 }
 
