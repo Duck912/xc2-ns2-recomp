@@ -4,6 +4,10 @@
 
 #include <atomic>
 #include <mutex>
+#include <thread>
+#include <windows.h>
+#include <psapi.h>
+#include <intrin.h>
 
 #include <SDL3/SDL_clipboard.h>
 #include <SDL3/SDL_keyboard.h>
@@ -17,6 +21,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
+#include <filesystem>
 #include <string>
 #include <utility>
 #include <vector>
@@ -25,9 +31,11 @@
 #include <imgui_impl_vulkan.h>
 
 #include "nxrt/config.h"
+#include "nxrt/gauge.h"
 #include "nxrt/input_source.h"
 #include "nxrt/log.h"
 #include "nxrt/nvn.h"
+#include "nxrt/nvn_backend.h"
 #include "nxrt/platform.h"
 #include "nxrt/services_api.h"
 #include "extras/overlay_composite.h"
@@ -225,6 +233,7 @@ struct Overlay::Impl {
     std::atomic<int> counter_corner{0};
     std::atomic<int> counter_detail{1};
     std::atomic<bool> counter_in_shots{false};
+    std::atomic<bool> counter_lang_zh{true};
     bool counter_was_on = false;
     bool counter_have_prev = false;
     std::chrono::steady_clock::time_point counter_prev{};
@@ -234,10 +243,73 @@ struct Overlay::Impl {
     std::string counter_lines[4];
     int counter_n = 0;
 
+    // Detailed Performance HUD (counter_detail == 3) state: refreshed every 250-500 ms with minimal overhead.
+    struct PerfHudState {
+        std::string cpu_name;
+        bool cpu_name_init = false;
+        // Rolling frame times for sparkline graph (newest at graph_pos - 1)
+        static constexpr int kGraphN = 120;
+        float graph_ms[kGraphN] = {};
+        int graph_pos = 0;
+        int graph_count = 0;
+        // Hardware telemetry (sampled at <= 2 Hz)
+        double hw_last_s = -1e9;
+        uint64_t prev_sys_idle = 0, prev_sys_kernel = 0, prev_sys_user = 0;
+        uint64_t prev_proc_kernel = 0, prev_proc_user = 0;
+        bool have_cpu_prev = false;
+        int cpu_total_pct = -1;
+        int cpu_game_pct = -1;
+        double ram_used_gb = 0.0, ram_total_gb = 0.0, ram_game_gb = 0.0;
+        double vram_used_gb = 0.0, vram_total_gb = 0.0;
+        int gpu_util_pct = -1;
+        int gpu_temp_c = -1;
+        int gpu_power_w = -1;
+        int gpu_clock_mhz = -1;
+        // Dynamic vendor telemetry handles (loaded lazily on first detailed HUD sample)
+        bool vendor_init = false;
+        HMODULE adl_dll = nullptr;
+        void* adl_ctx = nullptr;
+        int adl_adapter = -1;
+        using AdlDestroyFn = int(__cdecl*)(void*);
+        using AdlPmLogFn = int(__cdecl*)(void*, int, void*);
+        AdlDestroyFn adl_destroy = nullptr;
+        AdlPmLogFn adl_pmlog = nullptr;
+        HMODULE nvml_dll = nullptr;
+        void* nvml_dev = nullptr;
+        using NvmlShutdownFn = int(__cdecl*)();
+        using NvmlUtilFn = int(__cdecl*)(void*, void*);
+        using NvmlTempFn = int(__cdecl*)(void*, unsigned int, unsigned int*);
+        using NvmlPowerFn = int(__cdecl*)(void*, unsigned int*);
+        using NvmlClockFn = int(__cdecl*)(void*, unsigned int, unsigned int*);
+        NvmlShutdownFn nvml_shutdown = nullptr;
+        NvmlUtilFn nvml_util = nullptr;
+        NvmlTempFn nvml_temp = nullptr;
+        NvmlPowerFn nvml_power = nullptr;
+        NvmlClockFn nvml_clock = nullptr;
+        // Per-frame backend telemetry (delta between 250 ms samples)
+        bool have_be_prev = false;
+        uint64_t prev_presents = 0;
+        uint64_t prev_tex_uploads = 0;
+        uint64_t prev_gpu_busy_ns = 0;
+        double prev_prep_ms = 0.0;
+        double prev_pipe_ms = 0.0;
+        double prev_shader_ms = 0.0;
+        double prev_upload_ms = 0.0;
+        double gpu_prep_ms = 0.0;
+        double gpu_busy_ms = 0.0;
+        double pipe_wait_ms = 0.0;
+        double shader_wait_ms = 0.0;
+        double tex_uploads_pf = 0.0;
+        double tex_upload_ms = 0.0;
+    } perf;
+
     void build_ui();
     void update_scale(const VkExtent2D& extent);
     void refresh_counter_text(double now_s);
+    void refresh_perf_hud(double now_s);
+    void shutdown_perf_hud();
     void draw_counter(const FrameInfo& f, double now_s);
+    void draw_perf_hud(const FrameInfo& f, double now_s);
     // The "Preparing shaders" note: shown once the backlog has stood for a second and a half, gone a second after it is empty.
     bool note_enabled = true;
     bool note_read = false;
@@ -447,9 +519,86 @@ std::unique_ptr<Overlay> Overlay::create(const Context& ctx, std::string* error)
     io.LogFilename = nullptr;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
     io.BackendFlags |= ImGuiBackendFlags_HasGamepad;      // set_menu_pad feeds it
-    ImGui::StyleColorsDark();
-    io.Fonts->AddFontDefaultVector();          // the scalable default font: stays sharp at every UI scale (update_scale)
-    ImGui::GetStyle().FontSizeBase = 16.0f;
+    // XC2 Aegis Theme (Deep Ocean Slate + Aegis Emerald / Warm Gold accents), adapted from totk-pc-recomp / SavageWindRecomp (MIT).
+    {
+        ImGuiStyle& st = ImGui::GetStyle();
+        ImGui::StyleColorsDark(&st);
+        st.WindowRounding = 14.0f;
+        st.ChildRounding = 10.0f;
+        st.FrameRounding = 8.0f;
+        st.PopupRounding = 8.0f;
+        st.ScrollbarRounding = 8.0f;
+        st.GrabRounding = 8.0f;
+        st.TabRounding = 8.0f;
+        st.WindowPadding = ImVec2(24.0f, 18.0f);
+        st.FramePadding = ImVec2(12.0f, 7.0f);
+        st.ItemSpacing = ImVec2(12.0f, 10.0f);
+        st.ScrollbarSize = 14.0f;
+        st.WindowBorderSize = 1.0f;
+        st.ChildBorderSize = 0.0f;
+        st.PopupBorderSize = 1.0f;
+        st.TabBarBorderSize = 1.0f;
+        ImVec4* c = st.Colors;
+        const ImVec4 gold(0.94f, 0.78f, 0.36f, 1.0f);
+        const ImVec4 teal(0.14f, 0.42f, 0.44f, 1.0f);
+        const ImVec4 teal_hi(0.18f, 0.56f, 0.54f, 1.0f);
+        c[ImGuiCol_WindowBg] = ImVec4(0.055f, 0.085f, 0.135f, 0.94f);
+        c[ImGuiCol_ChildBg] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+        c[ImGuiCol_PopupBg] = ImVec4(0.06f, 0.10f, 0.16f, 0.97f);
+        c[ImGuiCol_Border] = ImVec4(0.22f, 0.46f, 0.54f, 0.45f);
+        c[ImGuiCol_Text] = ImVec4(0.94f, 0.96f, 0.98f, 1.0f);
+        c[ImGuiCol_TextDisabled] = ImVec4(0.58f, 0.66f, 0.74f, 1.0f);
+        c[ImGuiCol_TitleBg] = ImVec4(0.045f, 0.075f, 0.125f, 0.98f);
+        c[ImGuiCol_TitleBgActive] = ImVec4(0.055f, 0.095f, 0.155f, 0.98f);
+        c[ImGuiCol_FrameBg] = ImVec4(0.09f, 0.15f, 0.22f, 0.95f);
+        c[ImGuiCol_FrameBgHovered] = ImVec4(0.13f, 0.25f, 0.35f, 1.0f);
+        c[ImGuiCol_FrameBgActive] = ImVec4(0.16f, 0.33f, 0.43f, 1.0f);
+        c[ImGuiCol_Button] = ImVec4(0.11f, 0.21f, 0.30f, 1.0f);
+        c[ImGuiCol_ButtonHovered] = teal;
+        c[ImGuiCol_ButtonActive] = teal_hi;
+        c[ImGuiCol_Header] = ImVec4(0.12f, 0.28f, 0.36f, 0.90f);
+        c[ImGuiCol_HeaderHovered] = teal;
+        c[ImGuiCol_HeaderActive] = teal_hi;
+        c[ImGuiCol_Tab] = ImVec4(0.09f, 0.15f, 0.22f, 0.90f);
+        c[ImGuiCol_TabHovered] = teal;
+        c[ImGuiCol_TabSelected] = ImVec4(0.14f, 0.36f, 0.42f, 1.0f);
+        c[ImGuiCol_TabSelectedOverline] = gold;
+        c[ImGuiCol_SliderGrab] = ImVec4(0.22f, 0.74f, 0.68f, 1.0f);
+        c[ImGuiCol_SliderGrabActive] = gold;
+        c[ImGuiCol_CheckMark] = ImVec4(0.30f, 0.88f, 0.78f, 1.0f);
+        c[ImGuiCol_NavCursor] = gold;
+        c[ImGuiCol_Separator] = ImVec4(0.24f, 0.44f, 0.52f, 0.50f);
+        c[ImGuiCol_ScrollbarBg] = ImVec4(0.04f, 0.07f, 0.11f, 0.60f);
+        c[ImGuiCol_ScrollbarGrab] = ImVec4(0.20f, 0.38f, 0.46f, 0.80f);
+        c[ImGuiCol_ScrollbarGrabHovered] = teal;
+        c[ImGuiCol_ScrollbarGrabActive] = gold;
+    }
+    // Load crisp system CJK font (ImGui 1.92 dynamic atlas rasterizes glyphs on demand at native DPI).
+    {
+        bool font_loaded = false;
+        static const char* const kCjkFonts[] = {
+            "C:\\Windows\\Fonts\\msyh.ttc",
+            "C:\\Windows\\Fonts\\Deng.ttf",
+            "C:\\Windows\\Fonts\\simhei.ttf",
+        };
+        std::error_code ec;
+        for (const char* path : kCjkFonts) {
+            if (std::filesystem::exists(path, ec) && !ec) {
+                ImFontConfig fc;
+                fc.FontNo = 0;
+                if (io.Fonts->AddFontFromFileTTF(path, 0.0f, &fc) != nullptr) {
+                    NXLOG_I(kTag, "overlay font loaded: %s", path);
+                    font_loaded = true;
+                    break;
+                }
+            }
+        }
+        if (!font_loaded) {
+            io.Fonts->AddFontDefaultVector();
+            NXLOG_I(kTag, "overlay font: default vector fallback");
+        }
+    }
+    ImGui::GetStyle().FontSizeBase = 18.0f;
     s.base_style = ImGui::GetStyle();
     const VkExtent2D e = ctx.renderer->extent();
     io.DisplaySize = ImVec2(static_cast<float>(e.width), static_cast<float>(e.height));
@@ -483,6 +632,7 @@ std::unique_ptr<Overlay> Overlay::create(const Context& ctx, std::string* error)
 
 Overlay::~Overlay() {
     if (!impl_) return;
+    impl_->shutdown_perf_hud();
     if (impl_->ctx.device) impl_->ctx.device->wait_idle();
     impl_->composite.shutdown();
     if (impl_->backend_ready) ImGui_ImplVulkan_Shutdown();
@@ -529,8 +679,9 @@ void Overlay::set_pointer(bool show, float x, float y, bool in_screenshots) {
 void Overlay::set_counter(const CounterConfig& c) {
     Impl& s = *impl_;
     s.counter_corner.store(std::clamp(c.corner, 0, 3), std::memory_order_relaxed);
-    s.counter_detail.store(std::clamp(c.detail, 0, 2), std::memory_order_relaxed);
+    s.counter_detail.store(std::clamp(c.detail, 0, 3), std::memory_order_relaxed);
     s.counter_in_shots.store(c.in_screenshots, std::memory_order_relaxed);
+    s.counter_lang_zh.store(c.lang_zh, std::memory_order_relaxed);
     s.counter_show.store(c.show, std::memory_order_relaxed);   // last: the other settings are in place when it turns on
 }
 
@@ -996,8 +1147,462 @@ void Overlay::Impl::refresh_counter_text(double now_s) {
     }
 }
 
+namespace {
+
+uint64_t ft_to_u64(const FILETIME& ft) {
+    return (static_cast<uint64_t>(ft.dwHighDateTime) << 32) | static_cast<uint64_t>(ft.dwLowDateTime);
+}
+
+std::string query_cpu_brand_string() {
+    int regs[4] = {};
+    __cpuid(regs, static_cast<int>(0x80000000u));
+    if (static_cast<uint32_t>(regs[0]) < 0x80000004u) return "CPU";
+    char brand[49] = {};
+    for (int i = 0; i < 3; ++i) {
+        __cpuid(regs, static_cast<int>(0x80000002u + i));
+        std::memcpy(brand + i * 16, regs, 16);
+    }
+    brand[48] = '\0';
+    std::string s(brand);
+    while (!s.empty() && s.front() == ' ') s.erase(s.begin());
+    while (!s.empty() && s.back() == ' ') s.pop_back();
+    return s.empty() ? "CPU" : s;
+}
+
+void* __cdecl adl_alloc_cb(int sz) {
+    return std::malloc(static_cast<size_t>(sz > 0 ? sz : 1));
+}
+
+struct AdlSingleSensor {
+    int supported;
+    int value;
+};
+struct AdlPmLogOutput {
+    int size;
+    AdlSingleSensor sensors[256];
+};
+struct NvmlUtil {
+    unsigned int gpu;
+    unsigned int memory;
+};
+
+}  // namespace
+
+void Overlay::Impl::shutdown_perf_hud() {
+    if (perf.adl_ctx && perf.adl_destroy) {
+        perf.adl_destroy(perf.adl_ctx);
+        perf.adl_ctx = nullptr;
+    }
+    if (perf.adl_dll) {
+        FreeLibrary(perf.adl_dll);
+        perf.adl_dll = nullptr;
+    }
+    if (perf.nvml_dev && perf.nvml_shutdown) {
+        perf.nvml_shutdown();
+        perf.nvml_dev = nullptr;
+    }
+    if (perf.nvml_dll) {
+        FreeLibrary(perf.nvml_dll);
+        perf.nvml_dll = nullptr;
+    }
+    perf.vendor_init = false;
+}
+
+void Overlay::Impl::refresh_perf_hud(double now_s) {
+    if (!perf.cpu_name_init) {
+        perf.cpu_name = query_cpu_brand_string();
+        perf.cpu_name_init = true;
+    }
+    if (now_s - text_s >= 0.25) {
+        text_s = now_s;
+        snap = stats.snapshot(now_s);
+
+        // Backend per-frame pipeline/upload/GPU busy metrics
+        const nvn::BackendStats bs = nvn::backend_stats();
+        const double prep_ms = nxrt::hitch_phase_total_ms(nxrt::kHpRenderReplay);
+        const double pipe_ms = nxrt::hitch_phase_total_ms(nxrt::kHpRenderPipeline);
+        const double shdr_ms = nxrt::hitch_phase_total_ms(nxrt::kHpRenderLockWait);
+        const double upl_ms = nxrt::hitch_phase_total_ms(nxrt::kHpRenderUpload);
+        if (perf.have_be_prev && bs.presents > perf.prev_presents) {
+            const double df = static_cast<double>(bs.presents - perf.prev_presents);
+            perf.gpu_prep_ms = std::max(0.0, (prep_ms - perf.prev_prep_ms) / df);
+            perf.gpu_busy_ms = std::max(0.0, static_cast<double>(bs.gpu_busy_ns - perf.prev_gpu_busy_ns) / (1e6 * df));
+            perf.pipe_wait_ms = std::max(0.0, (pipe_ms - perf.prev_pipe_ms) / df);
+            perf.shader_wait_ms = std::max(0.0, (shdr_ms - perf.prev_shader_ms) / df);
+            perf.tex_uploads_pf = std::max(0.0, static_cast<double>(bs.texture_uploads - perf.prev_tex_uploads) / df);
+            perf.tex_upload_ms = std::max(0.0, (upl_ms - perf.prev_upload_ms) / df);
+        }
+        perf.prev_presents = bs.presents;
+        perf.prev_tex_uploads = bs.texture_uploads;
+        perf.prev_gpu_busy_ns = bs.gpu_busy_ns;
+        perf.prev_prep_ms = prep_ms;
+        perf.prev_pipe_ms = pipe_ms;
+        perf.prev_shader_ms = shdr_ms;
+        perf.prev_upload_ms = upl_ms;
+        perf.have_be_prev = true;
+    }
+
+    // Hardware telemetry sampled at 2 Hz (every 500 ms) so OS/driver queries stay negligible
+    if (now_s - perf.hw_last_s < 0.50) return;
+    perf.hw_last_s = now_s;
+
+    // 1. CPU utilization (total & this game process)
+    FILETIME s_idle{}, s_kern{}, s_user{}, p_create{}, p_exit{}, p_kern{}, p_user{};
+    if (GetSystemTimes(&s_idle, &s_kern, &s_user) &&
+        GetProcessTimes(GetCurrentProcess(), &p_create, &p_exit, &p_kern, &p_user)) {
+        const uint64_t si = ft_to_u64(s_idle), sk = ft_to_u64(s_kern), su = ft_to_u64(s_user);
+        const uint64_t pk = ft_to_u64(p_kern), pu = ft_to_u64(p_user);
+        if (perf.have_cpu_prev) {
+            const uint64_t di = si - perf.prev_sys_idle;
+            const uint64_t dsys = (sk - perf.prev_sys_kernel) + (su - perf.prev_sys_user);
+            const uint64_t dproc = (pk - perf.prev_proc_kernel) + (pu - perf.prev_proc_user);
+            if (dsys > 0) {
+                const double busy = (dsys > di) ? static_cast<double>(dsys - di) : 0.0;
+                perf.cpu_total_pct = std::clamp(static_cast<int>(std::lround(100.0 * busy / static_cast<double>(dsys))), 0, 100);
+                perf.cpu_game_pct = std::clamp(static_cast<int>(std::lround(100.0 * static_cast<double>(dproc) / static_cast<double>(dsys))), 0, 100);
+            }
+        }
+        perf.prev_sys_idle = si;
+        perf.prev_sys_kernel = sk;
+        perf.prev_sys_user = su;
+        perf.prev_proc_kernel = pk;
+        perf.prev_proc_user = pu;
+        perf.have_cpu_prev = true;
+    }
+
+    // 2. RAM (system used/total + game process working set)
+    MEMORYSTATUSEX ms{};
+    ms.dwLength = sizeof(ms);
+    if (GlobalMemoryStatusEx(&ms)) {
+        constexpr double kGiB = 1024.0 * 1024.0 * 1024.0;
+        perf.ram_total_gb = static_cast<double>(ms.ullTotalPhys) / kGiB;
+        perf.ram_used_gb = static_cast<double>(ms.ullTotalPhys - ms.ullAvailPhys) / kGiB;
+    }
+    PROCESS_MEMORY_COUNTERS pmc{};
+    if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) {
+        constexpr double kGiB = 1024.0 * 1024.0 * 1024.0;
+        perf.ram_game_gb = static_cast<double>(pmc.WorkingSetSize) / kGiB;
+    }
+
+    // 3. VRAM via Vulkan VK_EXT_memory_budget (fallback: device vram_bytes)
+    if (ctx.device && ctx.device->physical() != VK_NULL_HANDLE) {
+        constexpr double kGiB = 1024.0 * 1024.0 * 1024.0;
+        VkPhysicalDeviceMemoryBudgetPropertiesEXT budget{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT};
+        VkPhysicalDeviceMemoryProperties2 props{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2};
+        props.pNext = &budget;
+        vkGetPhysicalDeviceMemoryProperties2(ctx.device->physical(), &props);
+        uint64_t total_vram = 0, used_vram = 0;
+        for (uint32_t i = 0; i < props.memoryProperties.memoryHeapCount; ++i) {
+            if (props.memoryProperties.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
+                total_vram += props.memoryProperties.memoryHeaps[i].size;
+                used_vram += budget.heapUsage[i];
+            }
+        }
+        if (total_vram > 0) {
+            perf.vram_total_gb = static_cast<double>(total_vram) / kGiB;
+            perf.vram_used_gb = static_cast<double>(used_vram) / kGiB;
+        } else {
+            perf.vram_total_gb = static_cast<double>(ctx.device->gpu().vram_bytes) / kGiB;
+        }
+    }
+
+    // 4. GPU utilization / temp / power / clock via dynamic AMD ADL2 or NVIDIA NVML
+    const uint32_t vid = ctx.device ? ctx.device->gpu().vendor_id : 0;
+    if (!perf.vendor_init) {
+        perf.vendor_init = true;
+        if (vid == 0x1002) {
+            perf.adl_dll = LoadLibraryA("atiadlxx.dll");
+            if (perf.adl_dll) {
+                using CreateFn = int(__cdecl*)(void*(__cdecl*)(int), int, void**);
+                using NumFn = int(__cdecl*)(void*, int*);
+                auto fn_create = reinterpret_cast<CreateFn>(GetProcAddress(perf.adl_dll, "ADL2_Main_Control_Create"));
+                auto fn_num = reinterpret_cast<NumFn>(GetProcAddress(perf.adl_dll, "ADL2_Adapter_NumberOfAdapters_Get"));
+                perf.adl_destroy = reinterpret_cast<PerfHudState::AdlDestroyFn>(GetProcAddress(perf.adl_dll, "ADL2_Main_Control_Destroy"));
+                perf.adl_pmlog = reinterpret_cast<PerfHudState::AdlPmLogFn>(GetProcAddress(perf.adl_dll, "ADL2_New_QueryPMLogData_Get"));
+                if (fn_create && fn_num && perf.adl_destroy && perf.adl_pmlog && fn_create(&adl_alloc_cb, 1, &perf.adl_ctx) == 0 && perf.adl_ctx) {
+                    int n = 0;
+                    if (fn_num(perf.adl_ctx, &n) == 0 && n > 0) {
+                        for (int idx = 0; idx < std::min(n, 16); ++idx) {
+                            AdlPmLogOutput out{};
+                            out.size = sizeof(out);
+                            if (perf.adl_pmlog(perf.adl_ctx, idx, &out) == 0 &&
+                                (out.sensors[1].supported || out.sensors[8].supported || out.sensors[19].supported)) {
+                                perf.adl_adapter = idx;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        } else if (vid == 0x10DE) {
+            perf.nvml_dll = LoadLibraryA("nvml.dll");
+            if (perf.nvml_dll) {
+                using InitFn = int(__cdecl*)();
+                using GetHandleFn = int(__cdecl*)(unsigned int, void**);
+                auto fn_init = reinterpret_cast<InitFn>(GetProcAddress(perf.nvml_dll, "nvmlInit_v2"));
+                auto fn_handle = reinterpret_cast<GetHandleFn>(GetProcAddress(perf.nvml_dll, "nvmlDeviceGetHandleByIndex_v2"));
+                perf.nvml_shutdown = reinterpret_cast<PerfHudState::NvmlShutdownFn>(GetProcAddress(perf.nvml_dll, "nvmlShutdown"));
+                perf.nvml_util = reinterpret_cast<PerfHudState::NvmlUtilFn>(GetProcAddress(perf.nvml_dll, "nvmlDeviceGetUtilizationRates"));
+                perf.nvml_temp = reinterpret_cast<PerfHudState::NvmlTempFn>(GetProcAddress(perf.nvml_dll, "nvmlDeviceGetTemperature"));
+                perf.nvml_power = reinterpret_cast<PerfHudState::NvmlPowerFn>(GetProcAddress(perf.nvml_dll, "nvmlDeviceGetPowerUsage"));
+                perf.nvml_clock = reinterpret_cast<PerfHudState::NvmlClockFn>(GetProcAddress(perf.nvml_dll, "nvmlDeviceGetClockInfo"));
+                if (fn_init && fn_handle && fn_init() == 0) {
+                    if (fn_handle(0, &perf.nvml_dev) != 0) perf.nvml_dev = nullptr;
+                }
+            }
+        }
+    }
+
+    perf.gpu_util_pct = -1;
+    perf.gpu_temp_c = -1;
+    perf.gpu_power_w = -1;
+    perf.gpu_clock_mhz = -1;
+    if (perf.adl_ctx && perf.adl_pmlog && perf.adl_adapter >= 0) {
+        AdlPmLogOutput out{};
+        out.size = sizeof(out);
+        if (perf.adl_pmlog(perf.adl_ctx, perf.adl_adapter, &out) == 0) {
+            if (out.sensors[19].supported) perf.gpu_util_pct = std::clamp(out.sensors[19].value, 0, 100);
+            if (out.sensors[8].supported) perf.gpu_temp_c = out.sensors[8].value;
+            else if (out.sensors[27].supported) perf.gpu_temp_c = out.sensors[27].value;
+            if (out.sensors[42].supported && out.sensors[42].value > 0) perf.gpu_power_w = out.sensors[42].value;
+            else if (out.sensors[23].supported && out.sensors[23].value > 0) perf.gpu_power_w = out.sensors[23].value;
+            if (out.sensors[1].supported && out.sensors[1].value > 0) perf.gpu_clock_mhz = out.sensors[1].value;
+        }
+    } else if (perf.nvml_dev) {
+        NvmlUtil u{};
+        if (perf.nvml_util && perf.nvml_util(perf.nvml_dev, &u) == 0) perf.gpu_util_pct = std::clamp(static_cast<int>(u.gpu), 0, 100);
+        unsigned int t = 0;
+        if (perf.nvml_temp && perf.nvml_temp(perf.nvml_dev, 0, &t) == 0) perf.gpu_temp_c = static_cast<int>(t);
+        unsigned int mw = 0;
+        if (perf.nvml_power && perf.nvml_power(perf.nvml_dev, &mw) == 0) perf.gpu_power_w = static_cast<int>((mw + 500) / 1000);
+        unsigned int clk = 0;
+        if (perf.nvml_clock && perf.nvml_clock(perf.nvml_dev, 0, &clk) == 0) perf.gpu_clock_mhz = static_cast<int>(clk);
+    }
+    if (perf.gpu_util_pct < 0 && snap.valid && snap.avg_ms > 0.1 && perf.gpu_busy_ms > 0.0) {
+        perf.gpu_util_pct = std::clamp(static_cast<int>(std::lround(100.0 * perf.gpu_busy_ms / snap.avg_ms)), 0, 100);
+    }
+}
+
+void Overlay::Impl::draw_perf_hud(const FrameInfo& f, double now_s) {
+    refresh_perf_hud(now_s);
+    ImFont* font = ImGui::GetFont();
+    const bool zh = counter_lang_zh.load(std::memory_order_relaxed);
+    const float sz = std::clamp(std::round(static_cast<float>(f.extent.height) / 68.f), 12.f, 26.f);
+    const float line_h = sz * 1.24f;
+    const float pad_x = sz * 0.75f;
+    const float pad_y = sz * 0.60f;
+    const float sec_gap = sz * 0.45f;
+    const float graph_h = sz * 3.2f;
+    const float margin = sz * 0.9f;
+    const float box_w = std::round(sz * 21.5f);
+
+    // Count sections:
+    // 4 hw rows + 1 fps row + graph + 6 timing rows + 6 display rows + 2 hw name rows
+    const float box_h = pad_y * 2.f +
+                        4.f * line_h +          // GPU, VRAM, CPU, RAM
+                        1.f * line_h +          // FPS / avg ms / max ms
+                        sec_gap * 0.5f + graph_h + sec_gap +
+                        6.f * line_h + sec_gap + // GPU prep/busy, pipeline/shader waits, tex uploads/time
+                        6.f * line_h + sec_gap + // Window, Game image, 3D scene, Scaling, Frame limit, Presentation
+                        2.f * line_h;            // GPU name, CPU name
+
+    const int corner = counter_corner.load(std::memory_order_relaxed);
+    const bool right = (corner == 1 || corner == 3);
+    const bool bottom = (corner >= 2);
+    const float W = static_cast<float>(f.extent.width), H = static_cast<float>(f.extent.height);
+    const float x0 = right ? std::max(margin, W - margin - box_w) : margin;
+    const float y0 = bottom ? std::max(margin, H - margin - box_h) : margin;
+    const float xL = x0 + pad_x;
+    const float xR = x0 + box_w - pad_x;
+
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x0 + box_w, y0 + box_h), IM_COL32(10, 14, 20, 188), sz * 0.45f);
+    dl->AddRect(ImVec2(x0, y0), ImVec2(x0 + box_w, y0 + box_h), IM_COL32(180, 210, 235, 36), sz * 0.45f, 0, 1.0f);
+
+    const ImU32 cAmber  = IM_COL32(238, 186, 76, 255);
+    const ImU32 cGreen  = IM_COL32(118, 214, 114, 255);
+    const ImU32 cBlue   = IM_COL32(130, 168, 255, 255);
+    const ImU32 cPink   = IM_COL32(236, 126, 184, 255);
+    const ImU32 cCyan   = IM_COL32(136, 206, 238, 255);
+    const ImU32 cWhite  = IM_COL32(242, 246, 252, 255);
+    const ImU32 cMuted  = IM_COL32(175, 188, 204, 220);
+    const ImU32 cSep    = IM_COL32(255, 255, 255, 24);
+
+    auto draw_r = [&](float y, ImU32 col, const char* txt) {
+        const float tw = font->CalcTextSizeA(sz, FLT_MAX, 0.0f, txt).x;
+        dl->AddText(font, sz, ImVec2(xR - tw, y), col, txt);
+    };
+    auto draw_c = [&](float x, float y, ImU32 col, const char* txt) {
+        dl->AddText(font, sz, ImVec2(x, y), col, txt);
+    };
+    auto draw_kv = [&](float y, ImU32 lcol, const char* label, const char* val) {
+        draw_c(xL, y, lcol, label);
+        draw_r(y, cWhite, val);
+    };
+
+    float y = y0 + pad_y;
+    const float col1 = xL + sz * 4.2f;
+    const float col2 = xL + sz * 9.8f;
+    char buf1[64], buf2[64], buf3[64];
+
+    // Row 1: GPU | util% | temp C | power W
+    draw_c(xL, y, cAmber, "GPU");
+    if (perf.gpu_util_pct >= 0) std::snprintf(buf1, sizeof buf1, "%d%%", perf.gpu_util_pct);
+    else std::snprintf(buf1, sizeof buf1, "--%%");
+    draw_c(col1, y, cWhite, buf1);
+    if (perf.gpu_temp_c >= 0) {
+        std::snprintf(buf2, sizeof buf2, "%d °C", perf.gpu_temp_c);
+        draw_c(col2, y, cWhite, buf2);
+    }
+    if (perf.gpu_power_w >= 0) {
+        std::snprintf(buf3, sizeof buf3, "%d W", perf.gpu_power_w);
+        draw_r(y, cWhite, buf3);
+    }
+    y += line_h;
+
+    // Row 2: VRAM | used / total GB | clock MHz
+    draw_c(xL, y, cGreen, "VRAM");
+    if (perf.vram_total_gb > 0.0) std::snprintf(buf1, sizeof buf1, "%.1f / %.1f GB", perf.vram_used_gb, perf.vram_total_gb);
+    else std::snprintf(buf1, sizeof buf1, "-- GB");
+    draw_c(col1, y, cWhite, buf1);
+    if (perf.gpu_clock_mhz > 0) {
+        std::snprintf(buf3, sizeof buf3, "%d MHz", perf.gpu_clock_mhz);
+        draw_r(y, cWhite, buf3);
+    }
+    y += line_h;
+
+    // Row 3: CPU | total% | game XX%
+    draw_c(xL, y, cBlue, "CPU");
+    if (perf.cpu_total_pct >= 0) std::snprintf(buf1, sizeof buf1, "%d%%", perf.cpu_total_pct);
+    else std::snprintf(buf1, sizeof buf1, "--%%");
+    draw_c(col1, y, cWhite, buf1);
+    if (perf.cpu_game_pct >= 0) {
+        std::snprintf(buf3, sizeof buf3, zh ? "游戏 %d%%" : "game %d%%", perf.cpu_game_pct);
+        draw_r(y, cWhite, buf3);
+    }
+    y += line_h;
+
+    // Row 4: RAM | used / total GB | game X.X GB
+    draw_c(xL, y, cPink, "RAM");
+    if (perf.ram_total_gb > 0.0) std::snprintf(buf1, sizeof buf1, "%.1f / %.1f GB", perf.ram_used_gb, perf.ram_total_gb);
+    else std::snprintf(buf1, sizeof buf1, "-- GB");
+    draw_c(col1, y, cWhite, buf1);
+    if (perf.ram_game_gb > 0.0) {
+        std::snprintf(buf3, sizeof buf3, zh ? "游戏 %.1f GB" : "game %.1f GB", perf.ram_game_gb);
+        draw_r(y, cWhite, buf3);
+    }
+    y += line_h;
+
+    // Row 5: FPS | avg ms | max ms
+    if (snap.valid) {
+        std::snprintf(buf1, sizeof buf1, "%.0f FPS", snap.fps);
+        std::snprintf(buf2, sizeof buf2, "%.1f ms", snap.avg_ms);
+        std::snprintf(buf3, sizeof buf3, "max %.1f ms", snap.max_ms);
+    } else {
+        std::snprintf(buf1, sizeof buf1, "-- FPS");
+        std::snprintf(buf2, sizeof buf2, "-- ms");
+        std::snprintf(buf3, sizeof buf3, "max -- ms");
+    }
+    draw_c(xL, y, cWhite, buf1);
+    draw_c(col1 + sz * 1.1f, y, cWhite, buf2);
+    draw_r(y, cMuted, buf3);
+    y += line_h + sec_gap * 0.5f;
+
+    // Frame-time sparkline graph
+    const ImVec2 g0(xL, y), g1(xR, y + graph_h);
+    dl->AddRectFilled(g0, g1, IM_COL32(255, 255, 255, 12), sz * 0.2f);
+    dl->AddRect(g0, g1, cSep, sz * 0.2f, 0, 1.0f);
+    // 16.67 ms (60fps) and 33.33 ms (30fps) subtle guide lines on a 0..40 ms scale
+    const float max_scale = 40.0f;
+    const float y60 = g1.y - (16.67f / max_scale) * graph_h;
+    const float y30 = g1.y - (33.33f / max_scale) * graph_h;
+    dl->AddLine(ImVec2(g0.x, y60), ImVec2(g1.x, y60), IM_COL32(118, 214, 114, 48), 1.0f);
+    dl->AddLine(ImVec2(g0.x, y30), ImVec2(g1.x, y30), IM_COL32(238, 186, 76, 42), 1.0f);
+    if (perf.graph_count >= 2) {
+        ImVec2 pts[PerfHudState::kGraphN];
+        const int cnt = std::min(perf.graph_count, PerfHudState::kGraphN);
+        const int start = (perf.graph_pos - cnt + PerfHudState::kGraphN) % PerfHudState::kGraphN;
+        const float gw = g1.x - g0.x - 2.f;
+        for (int i = 0; i < cnt; ++i) {
+            const float ms_val = std::clamp(perf.graph_ms[(start + i) % PerfHudState::kGraphN], 0.f, max_scale);
+            const float px = g0.x + 1.f + gw * static_cast<float>(i) / static_cast<float>(PerfHudState::kGraphN - 1);
+            const float py = g1.y - 1.f - (ms_val / max_scale) * (graph_h - 2.f);
+            pts[i] = ImVec2(px, py);
+        }
+        dl->AddPolyline(pts, cnt, IM_COL32(96, 178, 255, 235), 0, 1.5f);
+    }
+    y += graph_h + sec_gap;
+
+    // Renderer / Pipeline timings section
+    std::snprintf(buf1, sizeof buf1, "%.2f ms", perf.gpu_prep_ms);
+    draw_kv(y, cAmber, zh ? "GPU 指令准备" : "GPU frame prep", buf1); y += line_h;
+    std::snprintf(buf1, sizeof buf1, "%.2f ms", perf.gpu_busy_ms);
+    draw_kv(y, cAmber, zh ? "GPU 渲染耗时" : "GPU busy per frame", buf1); y += line_h;
+    std::snprintf(buf1, sizeof buf1, "%.2f ms", perf.pipe_wait_ms);
+    draw_kv(y, cAmber, zh ? "管线编译等待" : "Pipeline waits", buf1); y += line_h;
+    const int pending_sh = shader_backlog();
+    if (pending_sh > 0) std::snprintf(buf1, sizeof buf1, "%.2f ms (%d)", perf.shader_wait_ms, pending_sh);
+    else std::snprintf(buf1, sizeof buf1, "%.2f ms", perf.shader_wait_ms);
+    draw_kv(y, cAmber, zh ? "着色器等待" : "Shader waits", buf1); y += line_h;
+    std::snprintf(buf1, sizeof buf1, zh ? "%.1f 次/帧" : "%.1f per frame", perf.tex_uploads_pf);
+    draw_kv(y, cAmber, zh ? "纹理上传次数" : "Texture uploads", buf1); y += line_h;
+    std::snprintf(buf1, sizeof buf1, "%.2f ms", perf.tex_upload_ms);
+    draw_kv(y, cAmber, zh ? "纹理上传耗时" : "Texture upload time", buf1); y += line_h + sec_gap;
+
+    // Display & Resolution section
+    const nvn::GameViewportInfo gvi = nvn::game_viewport_info();
+    const uint32_t game_w = gvi.base_w > 0 ? gvi.base_w : f.extent.width;
+    const uint32_t game_h = gvi.base_h > 0 ? gvi.base_h : f.extent.height;
+    const uint32_t scn_w = gvi.render_w > 0 ? gvi.render_w : game_w;
+    const uint32_t scn_h = gvi.render_h > 0 ? gvi.render_h : game_h;
+    const int pct = game_w > 0 ? static_cast<int>(std::lround(100.0 * static_cast<double>(scn_w) / static_cast<double>(game_w))) : 100;
+
+    std::snprintf(buf1, sizeof buf1, "%ux%u", f.extent.width, f.extent.height);
+    draw_kv(y, cCyan, zh ? "窗口输出" : "Window", buf1); y += line_h;
+    std::snprintf(buf1, sizeof buf1, "%ux%u", game_w, game_h);
+    draw_kv(y, cCyan, zh ? "游戏画布" : "Game image", buf1); y += line_h;
+    std::snprintf(buf1, sizeof buf1, "%ux%u, %d%%", scn_w, scn_h, pct);
+    draw_kv(y, cCyan, zh ? "3D 场景" : "3D scene", buf1); y += line_h;
+
+    const nvn::DlssLiveInfo dli = nvn::dlss_live_info();
+    const bool is_1to1 = (scn_w == game_w && scn_h == game_h);
+    const bool is_bi = (dli.upscaler == "bilinear");
+    std::string scale_str;
+    if (gvi.dlss_bypassed || (is_1to1 && is_bi)) {
+        scale_str = zh ? "原生直出 (1:1)" : "Native (1:1)";
+    } else if (!dli.active_name.empty()) {
+        scale_str = dli.active_name;
+        if (is_1to1) scale_str += " (Native AA)";
+    } else if (!dli.upscaler.empty()) {
+        scale_str = dli.upscaler;
+    } else {
+        scale_str = "bilinear";
+    }
+    draw_kv(y, cCyan, zh ? "超分 / 缩放" : "Scaling", scale_str.c_str()); y += line_h;
+
+    const double cap = ctx.limiter ? ctx.limiter->target_fps() : 0.0;
+    if (cap > 0.5) std::snprintf(buf1, sizeof buf1, "%.0f FPS", std::round(cap));
+    else std::snprintf(buf1, sizeof buf1, zh ? "无上限" : "Unlimited");
+    draw_kv(y, cCyan, zh ? "帧率上限" : "Frame limit", buf1); y += line_h;
+
+    const PresentMode pm = ctx.renderer ? ctx.renderer->present_mode() : PresentMode::Fifo;
+    const char* pm_str = (pm == PresentMode::Fifo || pm == PresentMode::FifoRelaxed) ? "VSync"
+                       : (pm == PresentMode::Mailbox) ? "Mailbox" : "Immediate";
+    draw_kv(y, cCyan, zh ? "呈现模式" : "Presentation", pm_str); y += line_h + sec_gap;
+
+    // Hardware footer
+    dl->AddLine(ImVec2(xL, y - sec_gap * 0.5f), ImVec2(xR, y - sec_gap * 0.5f), cSep, 1.0f);
+    const char* gpu_nm = ctx.device ? ctx.device->gpu().name.c_str() : "Vulkan GPU";
+    draw_c(xL, y, cMuted, gpu_nm); y += line_h;
+    draw_c(xL, y, cMuted, perf.cpu_name.c_str());
+}
+
 // Draws the counter with the foreground draw list: no window, so it never takes mouse or keyboard input.
 void Overlay::Impl::draw_counter(const FrameInfo& f, double now_s) {
+    if (counter_detail.load(std::memory_order_relaxed) >= 3) {
+        draw_perf_hud(f, now_s);
+        return;
+    }
     refresh_counter_text(now_s);
     ImFont* font = ImGui::GetFont();
     const float size = std::clamp(std::round(static_cast<float>(f.extent.height) / 45.f), 14.f, 40.f);
@@ -1089,7 +1694,12 @@ void Overlay::draw(const FrameInfo& f) {
         }
         if (s.counter_have_prev) {
             const double dt_ms = std::chrono::duration<double, std::milli>(now - s.counter_prev).count();
-            if (dt_ms <= 1000.0) s.stats.push(now_s, dt_ms);   // over a second: a pause (debugger, window in the background), not a frame
+            if (dt_ms <= 1000.0) {
+                s.stats.push(now_s, dt_ms);   // over a second: a pause (debugger, window in the background), not a frame
+                s.perf.graph_ms[s.perf.graph_pos] = static_cast<float>(dt_ms);
+                s.perf.graph_pos = (s.perf.graph_pos + 1) % Impl::PerfHudState::kGraphN;
+                if (s.perf.graph_count < Impl::PerfHudState::kGraphN) ++s.perf.graph_count;
+            }
         }
         s.counter_prev = now;
         s.counter_have_prev = true;

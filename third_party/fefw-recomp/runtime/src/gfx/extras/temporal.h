@@ -15,6 +15,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 
 namespace nxrt::extras {
 
@@ -72,6 +73,9 @@ TemporalBackend* temporal_dlss(void* gfx_device, bool dlaa);
 bool temporal_ffx_available();
 bool temporal_dlss_available();
 bool temporal_dlss_started();   // Streamline was initialised before the Vulkan instance (needed for DLSS; set by streamline_preinit)
+// Live FSR version override (e.g. "3.1", "4.1", "2.3"): tears down and rebuilds the FidelityFX context on the next evaluation.
+void set_ffx_version_live(const char* version);
+std::string temporal_ffx_active_version();   // e.g. "FSR 3.1.6" / "FSR 4.1.2" once a context has been created
 
 // Streamline must own vkCreateInstance / vkCreateDevice / the swapchain calls: when the start-up mode is DLSS or DLAA, this loads
 // sl.interposer.dll, runs slInit and returns its vkGetInstanceProcAddr for volkInitializeCustom (vk_device.cpp). Null: use the normal loader.

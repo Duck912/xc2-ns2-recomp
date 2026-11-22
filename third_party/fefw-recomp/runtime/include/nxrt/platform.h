@@ -48,6 +48,8 @@ bool display_name(int number, char* out, int cap);
 int window_display();                         // the number of the display the window is on, 0 if unknown
 // Moves the window to the centre of that display, keeping its mode (a fullscreen window leaves fullscreen, moves and goes back).
 bool move_to_display(int number);
+// Restores window decorations/state (if windowed) and centres the window on its current display.
+bool center_window();
 
 // Relative mouse mode: raw, unaccelerated deltas (SDL_SetWindowRelativeMouseMode with SDL_HINT_MOUSE_RELATIVE_SYSTEM_SCALE
 // forced to "0" and SDL_HINT_MOUSE_RELATIVE_SPEED_SCALE to "1"). The cursor is hidden and confined while it is on.

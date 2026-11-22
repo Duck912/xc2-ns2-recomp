@@ -8,6 +8,10 @@
 #include "play_engine.h"
 #include "play_types.h"
 
+namespace nxrt::gfx {
+class Overlay;
+}
+
 namespace nxrt::play {
 
 struct LiveStatus {
@@ -52,6 +56,7 @@ public:
 // a Game page when the registered game has tweaks of its own. Call between ImGui::Begin / End of the window. Everything is laid out in units
 // of the font size, so it follows the overlay's UI scale (overlay.cpp). Keeps its editing state in a function-local static (one page per process).
 void draw_settings_page(UiHost& host);
+void draw_settings_menu(UiHost& host, gfx::Overlay& ov);
 
 // The About page (play_ui_about.cpp): version, build and the folders and files in use. Draws into the current window.
 void draw_about_page(const std::string& settings_path);

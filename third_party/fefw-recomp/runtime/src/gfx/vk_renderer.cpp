@@ -50,7 +50,10 @@ void barrier(VkCommandBuffer cmd, VkImage img, const ImageState& from, const Ima
     vkCmdPipelineBarrier2(cmd, &di);
 }
 
-const ImageState kUndefined = {VK_IMAGE_LAYOUT_UNDEFINED, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0};
+// Swapchain acquire semaphore waits at COLOR_ATTACHMENT_OUTPUT_BIT; the UNDEFINED -> COLOR_ATTACHMENT_OPTIMAL
+// transition MUST use COLOR_ATTACHMENT_OUTPUT_BIT as srcStageMask so the layout/DCC transition does not race
+// with the presentation engine scanning out the image (critical for AMD RDNA2 Direct Flip in fullscreen).
+const ImageState kAcquireUndefined = {VK_IMAGE_LAYOUT_UNDEFINED, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, 0};
 const ImageState kColorAtt = {VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                               VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT};
 const ImageState kTransferSrc = {VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT};
@@ -487,9 +490,13 @@ struct Renderer::Impl {
         ci.oldSwapchain = old;
         if (latency) latency->prepare_swapchain(&ci);
 #ifdef _WIN32
-        // borderless fullscreen stays a window: no exclusive mode behind our back, so switching away does not black the screen out
+        // borderless fullscreen stays a window: no exclusive mode behind our back, so switching away does not black the screen out.
+        // On AMD Windows drivers (vendor 0x1002), VK_FULL_SCREEN_EXCLUSIVE_DISALLOWED_EXT in borderless fullscreen triggers
+        // DWM/MPO swapchain flickering, so default it off on AMD unless [gfx] disallow_fse = 1 is explicitly requested.
+        const bool is_amd = dev->properties().vendorID == 0x1002u;
+        const bool disallow_fse = config_get_bool("gfx", "disallow_fse", !is_amd);
         VkSurfaceFullScreenExclusiveInfoEXT fse = {VK_STRUCTURE_TYPE_SURFACE_FULL_SCREEN_EXCLUSIVE_INFO_EXT};
-        if (dev->features().full_screen_exclusive && platform::fullscreen_mode() != platform::FullscreenMode::Exclusive) {
+        if (disallow_fse && dev->features().full_screen_exclusive && platform::fullscreen_mode() != platform::FullscreenMode::Exclusive) {
             fse.fullScreenExclusive = VK_FULL_SCREEN_EXCLUSIVE_DISALLOWED_EXT;
             fse.pNext = const_cast<void*>(ci.pNext);
             ci.pNext = &fse;
@@ -714,7 +721,7 @@ bool Renderer::begin_frame(FrameInfo* out) {
         vkCmdWriteTimestamp2(slot.cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, slot.queries, 0);
     }
     Impl::Target& t = s.targets[idx];
-    barrier(slot.cmd, t.image, kUndefined, kColorAtt);
+    barrier(slot.cmd, t.image, kAcquireUndefined, kColorAtt);
 
     s.cur_image = idx;
     s.info = FrameInfo{slot.cmd, t.image, t.view, s.format, s.extent, s.cur_slot, idx, s.frame_number, s.kind != extras::OutputKind::Sdr8};
@@ -729,7 +736,10 @@ void Renderer::end_frame(SubmitPrefix* prefix) {
     s.in_frame = false;
     Impl::Slot& slot = s.slots[s.cur_slot];
     Impl::Target& t = s.targets[s.cur_image];
-    if (s.overlay) s.overlay(s.info);
+    if (s.overlay) {
+        barrier(slot.cmd, t.image, kColorAtt, kColorAtt);
+        s.overlay(s.info);
+    }
 
     const bool capturing = s.cap_pending.load(std::memory_order_acquire) && (s.headless || s.capture_supported);
     Buffer cap;

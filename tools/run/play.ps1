@@ -80,9 +80,9 @@ if (-not (Test-Path -LiteralPath $env:NXRT_NVN_SKIP_FS_FILE)) { New-Item -ItemTy
 if (-not (Test-Path -LiteralPath $env:NXRT_NVN_HOT_STATE_FILE)) { Set-Content -LiteralPath $env:NXRT_NVN_HOT_STATE_FILE -Value ('front_face=' + (Get-Cfg 'env/NXRT_NVN_FRONT_FACE_MODE' '2')) }
 if ($Dump) { New-Item -ItemType Directory -Force -Path $missing | Out-Null; $env:NXRT_NVN_DUMP_ALL = '1' }
 
-# The upscaler hot file: start every run from the ini, never from what a previous session left behind.
+# The upscaler hot file: start every run empty so [dlss] upscaler from nxrt.ini takes effect.
 $hot = Join-Path $repo 'work\\dlss_hot.txt'
-Set-Content -LiteralPath $hot -Value 'upscaler = taau' -Encoding ascii
+Set-Content -LiteralPath $hot -Value '' -NoNewline -Encoding ascii
 $env:NXRT_DLSS_HOT_FILE = $hot
 
 # The preload pack is read before the loose .spv files, so a pack older than a replaced shader hides it.

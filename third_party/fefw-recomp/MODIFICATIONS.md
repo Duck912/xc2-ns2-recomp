@@ -8,7 +8,7 @@ vendored into the Xenoblade Chronicles 2 NS2E recomp project. Upstream base and 
 | upstream | https://github.com/Goldoire/fefw-recomp |
 | licence | GPL-3.0-or-later (see [LICENSE](LICENSE) and [LEGAL.md](LEGAL.md)) |
 | fork base commit in this repository | `6f1d964` (2026-11-12, baseline: 26 rounds of XC2 NS2 recomp) |
-| files changed since the base | 60 |
+| files changed since the base | 118 |
 | generated from | `git diff --name-only 6f1d964..HEAD -- third_party/fefw-recomp` |
 
 > **Why this file and not per-file headers.** GPL-3.0 section 5(a) requires the work to carry prominent notices
@@ -24,17 +24,17 @@ vendored into the Xenoblade Chronicles 2 NS2E recomp project. Upstream base and 
 | `runtime/include/nxrt/symbols.h` | 2026-11-22 | guest names: symbols_load_guest_names[_text], symbols_guest_count, symbols_describe_guest (the map's f_<guest VA> entries named from the lift's dynsym) |
 | `runtime/src/diag/symbols.cpp` | 2026-11-22 | guest names: the map's f_<guest VA> entries take the lift's name; symbols_describe_guest matches the exact function start, not the nearest preceding export |
 | `runtime/src/diag/watchdog.cpp` | 2026-11-22 | thread dump prints guest frames through symbols_describe_guest instead of a literal f_%llx |
-| `runtime/src/diag/crash.cpp` | 2026-11-22 | the crash report's guest call stack uses the same names |
+| `runtime/src/diag/crash.cpp` | 2026-11-22 | the crash report's guest call stack uses the same names pkg7 assert: the data is newer than the exefs (HANDOVER 79) |
 | `runtime/src/core/runtime.cpp` | 2026-11-22 | the start-up symbol line reports how many guest names were loaded |
 | `runtime/tests/test_symbols.cpp` | 2026-11-22 | test: the sidecar renames map entries, and only an exact start is named |
-| `runtime/src/media/video_codec.cpp` | 2026-11-22 | end of stream is a flag-only output (w=h=0), never a flag on a picture; the audio track is ended with it; props/release diagnostics carry the guest caller |
+| `runtime/src/media/video_codec.cpp` | 2026-11-22 | end of stream is a flag-only output (w=h=0), never a flag on a picture; the audio track is ended with it; props/release diagnostics carry the guest caller vcodec: allow bundled dav1d AV1 decoder to register nn::codec HLE even when built without libvpx (`#if NXRT_HAVE_LIBVPX \|\| NXRT_HAVE_DAV1D`), fixing AV1 cutscene crashes when libvpx is absent |
 | `runtime/src/media/movie_adec.cpp` | 2026-11-22 | a zero-byte packet is the end of the placeholder audio track (it used to be fed as a full buffer); the last frame gets the eos byte the SDK's AudioFrame::SetEndOfStreamState writes |
-| `runtime/src/media/movie_trace.cpp` | 2026-11-22 | a new film resets the stall-dump clock too; the end-of-stream marker re-arms the dump so the pause is actually sampled |
+| `runtime/src/media/movie_trace.cpp` | 2026-11-22 | a new film resets the stall-dump clock too; the end-of-stream marker re-arms the dump so the pause is actually sampled movie: [media] player_trace wrappers over the SDK's os calls, and the host-side poke that makes the player's per-frame timer due (one ticker for every timer, not one thread per timer) - without it the 4K CG froze for 7-8 s at a time (handover 58) |
 | `runtime/docs/CONFIG.md` | 2026-11-21 | the settings the NVIDIA fixes and the render_scale fixes added (mirror_capture, sync_scope, render_scale_min_width, ...); pool_mirror_mb: at most 8192 MiB |
 | `runtime/include/nxrt/write_watch.h` | 2026-11-21 | write-watch: per-64 KiB-reservation queries (capture_poll) for submit-time captures; VAMM pages tracked by GetWriteWatch |
 | `runtime/src/mem/write_watch.cpp` | 2026-11-21 | write-watch: VAMM (MapPhysicalMemory) pages tracked through their write-watch record; capture_poll for submit-time captures |
 | `runtime/tests/test_svc_memory.cpp` | 2026-11-21 | test: a large UnmapPhysicalMemory followed by a map of the same range succeeds |
-| `runtime/src/gfx/nvn/api_device.cpp` | 2026-11-21 | [nvn] sync_scope switch: window-acquire syncs can wait for all GPU work (NVIDIA fallback) |
+| `runtime/src/gfx/nvn/api_device.cpp` | 2026-11-21 | [nvn] sync_scope switch: window-acquire syncs can wait for all GPU work (NVIDIA fallback) handle `nvnWindowGetCrop` out-of-order `(int*, int*, int*, int*)` call and sanitize `R11G11B10F` clear colors |
 | `runtime/src/gfx/nvn/api_memory.cpp` | 2026-11-21 | [nvn] pool_prefetch_init: every GPU-reachable pool is imported in the background when it is made, not at its first draw |
 | `runtime/src/gfx/nvn/nvn_mirror_cap.h` | 2026-11-21 | mirror cap 2048 -> 8192 MiB (still at most a quarter of the video memory); kCaptureMinBudget for mirror_capture = auto |
 | `runtime/src/gfx/nvn/nvn_texprep.cpp` | 2026-11-21 | ready_textures(): finished background preparations, uploaded at the start of a submission ([nvn] tex_preupload) |
@@ -49,26 +49,37 @@ vendored into the Xenoblade Chronicles 2 NS2E recomp project. Upstream base and 
 | `runtime/include/nxrt/svc.h` | 2026-11-16 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |
 | `runtime/scripts/gen_earlyz_mask_shaders.py` | 2026-11-13 | nvn: the light list registration mask is derived from the list after every list draw - the black rectangle (HA |
 | `runtime/src/core/switch2.cpp` | 2026-11-16 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |
-| `runtime/src/diag/crash.cpp` | 2026-11-14 | pkg7 assert: the data is newer than the exefs (HANDOVER 79) |
 | `runtime/src/gfx/extras/temporal.cpp` | 2026-11-16 | replay: pipe/fb hot-path audit (round 45, 9.7-15.4 -> 5.3-6.8 ms); fsr_follow_size; fs trace_stack_file off; s |
-| `runtime/src/gfx/extras/temporal_ffx.cpp` | 2026-11-16 | replay: pipe/fb hot-path audit (round 45, 9.7-15.4 -> 5.3-6.8 ms); fsr_follow_size; fs trace_stack_file off; s |
-| `runtime/src/gfx/nvn/api_dlss_replay.cpp` | 2026-11-21 | replay: pipe/fb hot-path audit (round 45, 9.7-15.4 -> 5.3-6.8 ms); fsr_follow_size; fs trace_stack_file off; s; the DLSS/TAAU output follows [gfx] render_scale |
+| `runtime/src/gfx/extras/temporal_ffx.cpp` | 2026-11-21 | replay: pipe/fb hot-path audit (round 45, 9.7-15.4 -> 5.3-6.8 ms); fsr_follow_size; fs trace_stack_file off; s live FSR version override & context rebuild; auto-enable `fsr_follow_size` for FSR 4.x on amdvlk |
+| `runtime/src/gfx/nvn/api_dlss_replay.cpp` | 2026-11-21 | replay: pipe/fb hot-path audit (round 45, 9.7-15.4 -> 5.3-6.8 ms); fsr_follow_size; fs trace_stack_file off; s; the DLSS/TAAU output follows [gfx] render_scale live 3D upscaler/FSR/sharpness hot-switch (`set_dlss_live`, `dlss_live_info`) for F1 menu |
+| `runtime/src/gfx/extras/temporal.h` | 2026-11-21 | live FSR version hot-switch (`set_ffx_version_live`, `temporal_ffx_active_version`) |
 | `runtime/src/gfx/nvn/api_program.cpp` | 2026-11-14 | nvn: [nvn] shader_dump writes the code and control of every unresolved block (HANDOVER 74) |
 | `runtime/src/gfx/nvn/api_texture.cpp` | 2026-11-16 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |
 | `runtime/src/gfx/nvn/earlyz_mask_shaders.inc` | 2026-11-13 | nvn: the light list registration mask is derived from the list after every list draw - the black rectangle (HA |
 | `runtime/src/gfx/nvn/nvn_core.h` | 2026-11-16 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |
 | `runtime/src/gfx/nvn/nvn_enums.cpp` | 2026-11-16 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |
-| `runtime/src/gfx/nvn/nvn_gpu.cpp` | 2026-11-21 | nvn: [nvn] split_draws hands the recorded commands to the GPU at pass boundaries - the GPU stops waiting for t; never lose a flush request; 72 submission slots; [nvn] mirror_capture at submit; [nvn] present_ahead = auto |
+| `runtime/src/gfx/nvn/nvn_gpu.cpp` | 2026-11-22 | nvn: [nvn] split_draws hands the recorded commands to the GPU at pass boundaries - the GPU stops waiting for t; never lose a flush request; 72 submission slots; [nvn] mirror_capture at submit; [nvn] present_ahead = auto atomic live `keep_aspect` toggle (`set_keep_aspect`) always-on lightweight Vulkan timestamp query pool for `gpu_busy_ns` and live viewport info reporting |
 | `runtime/src/gfx/nvn/nvn_gpu_internal.h` | 2026-11-21 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override; mirror capture and prologue interfaces (Frame::prologue, mirror_capture_*) |
 | `runtime/src/gfx/nvn/nvn_gpu_pool.cpp` | 2026-11-21 | nvn: pool import/mirror granule is a config (default 64 MiB unchanged); 16 MiB does not help; movement overrun; device-local mirrors for VAMM and SHADER_CODE pools; CPU snapshots; chunked pool imports; [nvn] mirror_capture (= auto) |
 | `runtime/src/gfx/nvn/nvn_gpu_texture.cpp` | 2026-11-21 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override; [gfx] render_scale_min_width: textures narrower than it keep their size under render_scale |
-| `runtime/src/gfx/nvn/nvn_pipeline.cpp` | 2026-11-16 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |
+| `runtime/src/gfx/nvn/nvn_pipeline.cpp` | 2026-11-21 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override bump pipeline cache salt for SPIR-V depth-compare sampler auto-upgrading and `R11G11B10F` NaN scrub |
 | `runtime/src/gfx/nvn/nvn_pipeline.h` | 2026-11-14 | nvn: push the uniform buffers as push descriptors ([nvn] push_uniforms, ubo_only_rebind) |
-| `runtime/src/gfx/nvn/nvn_replay.cpp` | 2026-11-21 | replay: pipe/fb hot-path audit (round 45, 9.7-15.4 -> 5.3-6.8 ms); fsr_follow_size; fs trace_stack_file off; s; snapshots of instance streams; first uploads in a submission prologue; storage images under [gfx] render_scale |
+| `runtime/src/gfx/nvn/nvn_replay.cpp` | 2026-11-21 | replay: pipe/fb hot-path audit (round 45, 9.7-15.4 -> 5.3-6.8 ms); fsr_follow_size; fs trace_stack_file off; s; snapshots of instance streams; first uploads in a submission prologue; storage images under [gfx] render_scale; occlusion query results go into the mirror capture copy (the cloud sea and fog were not drawn); under mirror_capture a query report is assembled in the copy and reaches the pool in one piece (flames, smoke and reflections flickered with present_ahead); [nvn] mirror_gfx_storage_writeback (graphics-stage storage writes stay in the copy; XC2's waterfall mist blinked) subdivide 1-quad 3D Cloud Sea sheets (`quad_split` 1..16 with varying Z); pool-offset aliasing barrier; sampler compare auto-upgrade |
 | `runtime/src/gfx/nvn/nvn_shaders.cpp` | 2026-11-21 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override; reflection marks storage images a shader writes (OpImageWrite, image atomics) |
-| `runtime/src/gfx/nvn/nvn_spirv_patch.cpp` | 2026-11-16 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |
-| `runtime/src/gfx/nvn/nvn_spirv_patch.h` | 2026-11-16 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |
+| `runtime/src/gfx/nvn/nvn_spirv_patch.cpp` | 2026-11-21 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override sanitize NaN/Inf on fragment shader outputs targeting `R11G11B10F` color attachments |
+| `runtime/src/gfx/nvn/nvn_spirv_patch.h` | 2026-11-21 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override declare `patch_sanitize_f16_outputs` |
 | `runtime/src/gfx/platform.cpp` | 2026-11-16 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |
+| `runtime/include/nxrt/nvn_backend.h` | 2026-11-22 | expose `set_keep_aspect`, `set_dlss_live`, and `dlss_live_info` expose `set_game_viewport_info()` / `game_viewport_info()` and `BackendStats::gpu_busy_ns` |
+| `runtime/include/nxrt/play.h` | 2026-11-21 | expose `overlay_blocks_game()`, `live_pad_config()`, and `note_external_pad()` |
+| `runtime/src/gfx/play/play_types.h` | 2026-11-21 | default FPS counter hotkey F10, persistent `menu_lang`, and `Game3dSettings` |
+| `runtime/src/gfx/play/play_config.cpp` | 2026-11-21 | parse and persist `[fps] menu_lang` in `controls.ini` |
+| `runtime/src/gfx/play/play.cpp` | 2026-11-22 | F11 fullscreen toggle, live 3D upscaler & 8-preset native/upscale resolution sync to `nxrt.ini`, external pad bridge, bilingual HUD language hint |
+| `runtime/src/gfx/play/play_ui.h` | 2026-11-20 | add draw_settings_menu() wrapper replacing Diagnostics overlay |
+| `runtime/src/gfx/overlay.cpp` | 2026-11-22 | XC2 Aegis theme + CJK font, 4-level FPS counter with Detailed Performance HUD (AMD ADL2 / NVIDIA NVML / Vulkan VRAM / CPU / RAM / 120-frame graph / pipeline timings / resolution & scaling) |
+| `runtime/src/gfx/play/play_ui.cpp` | 2026-11-22 | bilingual (zh-Hans/en) two-pane F1 settings menu with native 1080p/1440p/4K & upscale presets, live FSR 3.1.6/4.1.2 switch, 4-level performance HUD selector |
+| `runtime/src/gfx/nvn/nvn_present.cpp` | 2026-11-22 | auto-crop presentation to `(0, 0, base_w, base_h)` for true full-screen native 1080p/1440p output |
+| `runtime/src/gfx/vk_renderer.cpp` | 2026-11-21 | avoid `vkGetPhysicalDeviceSurfaceCapabilitiesKHR` during swapchain rebuild to prevent Win32 fullscreen deadlock |
+| `runtime/src/services/misc.cpp` | 2026-11-20 | auto-discover DLC folders in [aoc] dir when indices.txt is absent 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |
 | `runtime/src/gfx/vk_device.cpp` | 2026-11-19 | replay: pipe/fb hot-path audit (round 45, 9.7-15.4 -> 5.3-6.8 ms); fsr_follow_size; fs trace_stack_file off; s; start-up failures name the VkResult and the driver's own Vulkan version (a 1.0 probe instance) instead of a bare `-9` |
 | `runtime/src/ipc/ipc.cpp` | 2026-11-14 | dlc: the title never asks aoc, so the Torna entry is save driven (HANDOVER 66) |
 | `runtime/src/kernel/handles.cpp` | 2026-11-16 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |
@@ -77,15 +88,12 @@ vendored into the Xenoblade Chronicles 2 NS2E recomp project. Upstream base and 
 | `runtime/src/kernel/svc_thread.cpp` | 2026-11-16 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |
 | `runtime/src/loader/module.cpp` | 2026-11-16 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |
 | `runtime/apps/video_codec_probe.cpp` | 2026-11-18 | probe: AV1 on the SDK 3.0.1 nn::codec entry points (video_codec_probe <movie.webm> <out.png> <frame>) |
-| `runtime/src/media/movie_trace.cpp` | 2026-11-19 | movie: [media] player_trace wrappers over the SDK's os calls, and the host-side poke that makes the player's per-frame timer due (one ticker for every timer, not one thread per timer) - without it the 4K CG froze for 7-8 s at a time (handover 58) |
 | `runtime/src/media/movie_vdec.cpp` | 2026-11-19 | movie: [media] video_decoder = library leaves movie::VideoDecoder to the library (it drives nn::codec AV1) and keeps the host AudioDecoder; same decoder-thread default as video_codec.cpp |
-| `runtime/src/media/video_codec.cpp` | 2026-11-19 | vcodec: nn::codec AV1 via dav1d and the SDK 3.0.1 names (ByTransferMemory, ImageTilingMode preference, event-returning submission event); decoder threads default to half the cores (4-8) and the film delay to 110 ms - the movie library's VideoDecoder path |
 | `runtime/src/mem/memory.cpp` | 2026-11-14 | heap: lazy commit is implemented and measured, but it stays off (crashes at 0.82 s) |
 | `runtime/src/services/audren/Server/AudioRenderSystem.h` | 2026-11-12 | nvn: trace the depth/blend state a draw is submitted with, summarize the frame; audren: log every voice the ga |
 | `runtime/src/services/common.cpp` | 2026-11-16 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |
 | `runtime/src/services/fs.cpp` | 2026-11-16 | replay: pipe/fb hot-path audit (round 45, 9.7-15.4 -> 5.3-6.8 ms); fsr_follow_size; fs trace_stack_file off; s |
 | `runtime/src/services/hid.cpp` | 2026-11-16 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |
-| `runtime/src/services/misc.cpp` | 2026-11-16 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |
 | `tools/shaders/ampere/decoder/SassDecoder.Tensor.cs` | 2026-11-16 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |
 | `tools/shaders/ampere/decoder/SassDecoder.Tex.cs` | 2026-11-14 | shaders: SUATOM (0x593/0x595) and the TLD4 PTP modifier - 1529 of 1529 blocks the game asks for translate (HAN |
 | `tools/shaders/ampere/decoder/SassDecoder.cs` | 2026-11-16 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |
@@ -200,3 +208,9 @@ git log --oneline 6f1d964..HEAD -- third_party/fefw-recomp
   client returning from the loading screen could read one picture per ~40 ms decode and could never catch up (it now holds 24 for
   the first ten seconds of a film, then drops back to four). Measured after: 23 pictures deep during the window, 3 after it,
   no stall, one read 60 ms after its acquire.
+- **runtime/src/gfx/nvn/nvn_replay.cpp: [nvn] mirror_gfx_storage_writeback (2026-11-21)** - default on (unchanged); off keeps
+  what a graphics stage writes into storage in the mirror_capture copy: no write-back to the pool, and the CPU's pages there
+  are no longer left out of the next capture. XC2 NS2 (xc2_boot.cpp sets it off) updates its effects' particles from vertex
+  shaders over ~300 KiB ranges the game also writes on the CPU; with present_ahead the whole-range write-back and the
+  in-flight exclusion dropped the game's next-frame words, and the waterfall mist blinked at render_scale 3. Write-back
+  ~65 -> ~1 MB per second.

@@ -73,3 +73,14 @@ entryhook 710036e594   # gf::GfQuestManager::reqistLinkQuest(QuestID)
 #  - ASCII only: the lifter reads this file with the locale encoding, and a non-ASCII byte breaks the lift.
 #  - Add your own with "entryhook <address>" (called on entry) or "midhook <address>" (called mid-function).
 #    Use tools\analysis\symat.py to name an address, and xc2_boot.cpp's hook_add_entry to act on it.
+
+# Native resolution hooks (3.0.1)
+entryhook 710084d230   # rtmgr::isDlssEnabled (also tail-called by 0x71007d2180)
+entryhook 710085f090   # dlss_obj::updateDynamicResScale
+entryhook 710085f3c0   # dlss_obj::applyScale(obj, w*, h*)
+entryhook 7100844120   # rtmgr::rebuildRenderTargets
+inline 71007cfc2c      # scale_x/y *= s0 (0.5f when DLSS on)
+entryhook 71008d9ce0   # display resolution class (2 -> 1440p mode 5, 1 -> 4K mode 1)
+entryhook 71007b8b30   # dynres::update (lock dynamic resolution stepping when native_res=2)
+entryhook 71008eab90   # nvn_dlss::getPresetInputSize (return native_w x native_h when native_res=2)
+entryhook 710083f660   # dlss_obj::getHaltonJitter (zero sub-pixel jitter when upscaler is bilinear)

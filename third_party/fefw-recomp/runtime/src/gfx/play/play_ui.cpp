@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Play mode settings page: the "Controls" window of the F1 overlay. The contract is play_ui.h. The page edits a working copy of the
-// settings: Apply and save hands it to the host, Revert and Factory defaults replace the copy, and nothing else reaches the game.
+// Play mode settings menu: two-pane card-row UI (left option cards, right live description & status),
+// bilingual Simplified Chinese / English, with XC2 Aegis Deep Ocean + Emerald / Gold styling.
+//
+// Two-pane card-row interaction & layout adapted from totk-pc-recomp (runtime/ui/option_rows.cpp & menu.cpp,
+// MIT License, https://github.com/valentderah/totk-pc-recomp) and SavageWindRecomp (MIT License).
 #include "play_ui.h"
 
 #include <algorithm>
@@ -9,16 +12,19 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
 
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "nxrt/audio_sink.h"
 #include "nxrt/extras.h"
 #include "extras/temporal.h"
 #include "nxrt/frame_limiter.h"
 #include "nxrt/input_source.h"
 #include "nxrt/lowlat.h"
+#include "nxrt/nvn_backend.h"
 #include "nxrt/overlay.h"
 #include "nxrt/platform.h"
 #include "play_game.h"
@@ -29,33 +35,140 @@ namespace {
 
 namespace hid = nxrt::hid;
 
-const ImVec4 kRed(1.0f, 0.35f, 0.35f, 1.0f);
-const ImVec4 kYellow(1.0f, 0.85f, 0.3f, 1.0f);
-const ImVec4 kOrange(1.0f, 0.65f, 0.25f, 1.0f);
-const ImVec4 kPressed(0.20f, 0.60f, 0.30f, 1.0f);
-const ImVec4 kReleased(0.25f, 0.25f, 0.28f, 1.0f);
+// ---- XC2 Aegis palette --------------------------------------------------------------------------------------------------------------
+const ImVec4 kGold(0.94f, 0.78f, 0.36f, 1.0f);
+const ImVec4 kEmerald(0.28f, 0.86f, 0.76f, 1.0f);
+const ImVec4 kOrange(0.95f, 0.64f, 0.28f, 1.0f);
+const ImVec4 kDimText(0.60f, 0.68f, 0.76f, 1.0f);
+const ImVec4 kPressed(0.18f, 0.56f, 0.46f, 1.0f);
+const ImVec4 kReleased(0.14f, 0.20f, 0.28f, 1.0f);
 
+const ImU32 kColGold = IM_COL32(240, 198, 92, 255);
+const ImU32 kColGoldLine = IM_COL32(240, 198, 92, 115);
+const ImU32 kColEmerald = IM_COL32(72, 220, 194, 255);
+const ImU32 kColOrange = IM_COL32(242, 168, 78, 255);
+const ImU32 kColWhite = IM_COL32(242, 246, 250, 255);
+const ImU32 kColDim = IM_COL32(150, 170, 190, 255);
+const ImU32 kColGrey = IM_COL32(105, 120, 136, 255);
+
+// ---- Language state -----------------------------------------------------------------------------------------------------------------
+bool g_zh = true;
+const char* tr(const char* zh, const char* en) { return g_zh ? zh : en; }
+
+// ---- Static option tables -----------------------------------------------------------------------------------------------------------
 constexpr int kWindowModeCount = 3;
-constexpr const char* kWindowModeNames[kWindowModeCount] = {"Windowed", "Borderless fullscreen", "Exclusive fullscreen"};
 constexpr const char* kWindowModeKeys[kWindowModeCount] = {"windowed", "borderless", "exclusive"};
+constexpr const char* kWindowModeZh[kWindowModeCount] = {"窗口模式", "无边框全屏", "独占全屏"};
+constexpr const char* kWindowModeEn[kWindowModeCount] = {"Windowed", "Borderless", "Exclusive"};
+
 constexpr int kSizePresets[][2] = {{1280, 720}, {1600, 900}, {1920, 1080}, {2560, 1440}, {3840, 2160}};
+constexpr const char* kSizeLabels[] = {"1280 x 720", "1600 x 900", "1920 x 1080", "2560 x 1440", "3840 x 2160"};
 constexpr int kSizePresetCount = static_cast<int>(sizeof kSizePresets / sizeof kSizePresets[0]);
-constexpr int kFpsChoices[] = {-1, 0, 30, 60, 72, 90, 120, 144, 165, 240, 360};   // -1 = the refresh rate
-// The aspect ratio combo: Auto stores 0, the presets store their ratio, Custom shows a slider (index kAspectCustom, no value of its own).
-constexpr const char* kAspectNames[] = {"Auto", "16:9", "16:10", "21:9", "32:9", "Custom"};
-constexpr double kAspectValues[] = {0.0, 16.0 / 9.0, 1.6, 21.0 / 9.0, 32.0 / 9.0};
-constexpr int kAspectCustom = 5;
-constexpr int kAspectNameCount = static_cast<int>(sizeof kAspectNames / sizeof kAspectNames[0]);
-constexpr const char* kAnisoNames[] = {"Game default", "2x", "4x", "8x", "16x"};
+
+constexpr int kFpsChoices[] = {-1, 0, 30, 60, 72, 90, 120, 144, 165, 240, 360};
+constexpr int kFpsChoiceCount = static_cast<int>(sizeof kFpsChoices / sizeof kFpsChoices[0]);
+
+constexpr const char* kAnisoZh[] = {"游戏默认", "2x", "4x", "8x", "16x"};
+constexpr const char* kAnisoEn[] = {"Game default", "2x", "4x", "8x", "16x"};
 constexpr int kAnisoValues[] = {0, 2, 4, 8, 16};
 constexpr int kAnisoCount = static_cast<int>(sizeof kAnisoValues / sizeof kAnisoValues[0]);
+
 constexpr const char* kAstcValues[] = {"fast", "high", "uncompressed"};
-constexpr const char* kAstcNames[] = {"Fast", "High (sharper, built in the background)", "Uncompressed (lots of video memory)"};
+constexpr const char* kAstcZh[] = {"快速 (BC7)", "高质量 (后台重编码)", "无压缩 (RGBA8)"};
+constexpr const char* kAstcEn[] = {"Fast (BC7)", "High (background)", "Uncompressed (RGBA8)"};
 constexpr int kAstcCount = static_cast<int>(sizeof kAstcValues / sizeof kAstcValues[0]);
-constexpr Trig kTrigChoices[] = {Trig::Press, Trig::Tap, Trig::Hold, Trig::Toggle, Trig::DoubleTap};
-// The Button prompts combo on the Controller tab, in PromptStyle order.
-constexpr const char* kPromptLabels[kPromptStyleCount] = {"Switch (the game's own)", "Xbox", "PlayStation", "Keyboard and mouse",
-                                                          "Auto (follows the last used device)"};
+
+constexpr const char* kCornerZh[] = {"左上角", "右上角", "左下角", "右下角"};
+constexpr const char* kCornerEn[] = {"Top left", "Top right", "Bottom left", "Bottom right"};
+constexpr int kCornerCount = 4;
+
+constexpr const char* kFpsDetailZh[] = {
+    "仅显示帧率",
+    "帧率 + 帧时间",
+    "简洁统计 (含 1% Low / 最慢帧)",
+    "详细性能监控面板 (全参数 + 曲线图)",
+};
+constexpr const char* kFpsDetailEn[] = {
+    "FPS only",
+    "FPS & frame time",
+    "Compact (1% low & worst)",
+    "Detailed Performance HUD (+ Graph)",
+};
+constexpr int kFpsDetailCount = 4;
+
+constexpr const char* kHdrModeZh[] = {"关闭 (SDR)", "自动", "强制开启", "Switch 2 原生 HDR"};
+constexpr const char* kHdrModeEn[] = {"Off (SDR)", "Auto", "On", "Native HDR"};
+
+constexpr const char* kHdrFmtZh[] = {"自动", "HDR10", "scRGB"};
+constexpr const char* kHdrFmtEn[] = {"Auto", "HDR10", "scRGB"};
+
+constexpr const char* kLatencyZh[] = {"关闭", "自动", "开启", "增强 (Boost)"};
+constexpr const char* kLatencyEn[] = {"Off", "Auto", "On", "Boost"};
+
+constexpr const char* kGameResZh[] = {
+    "4K 真原生 (3840x2160)",
+    "1440p 原生 (2560x1440，不超分)",
+    "1080p 原生 (1920x1080，不超分)",
+    "1080p -> 1440p 超分 (2K 屏推荐)",
+    "1440p -> 4K 超分 (4K 屏推荐)",
+    "1080p -> 4K 超分",
+    "900p -> 4K 超分",
+    "主机原版动态 4K",
+};
+constexpr const char* kGameResEn[] = {
+    "4K Native (3840x2160)",
+    "1440p Native (2560x1440, No Upscale)",
+    "1080p Native (1920x1080, No Upscale)",
+    "1080p -> 1440p Upscale (2K Display)",
+    "1440p -> 4K Upscale (4K Display)",
+    "1080p -> 4K Upscale",
+    "900p -> 4K Upscale",
+    "Console Dynamic 4K",
+};
+constexpr int kGameResCount = static_cast<int>(sizeof kGameResZh / sizeof kGameResZh[0]);
+
+constexpr const char* kGame3dUpZh[] = {
+    "FSR 3.1.6 (推荐 60fps)",
+    "FSR 4.1.2 (ML 高画质)",
+    "FSR 2.3.4 (经典版)",
+    "TAAU (内置时序)",
+    "关闭 / 原生直出 (Bilinear)",
+};
+constexpr const char* kGame3dUpEn[] = {
+    "FSR 3.1.6 (Rec. 60fps)",
+    "FSR 4.1.2 (ML High)",
+    "FSR 2.3.4 (Classic)",
+    "TAAU (Built-in)",
+    "Off / Native (Bilinear)",
+};
+constexpr int kGame3dUpCount = static_cast<int>(sizeof kGame3dUpZh / sizeof kGame3dUpZh[0]);
+
+constexpr const char* kSpatialUpZh[] = {"关闭", "FSR 1 (空间锐化)", "NIS (空间锐化)"};
+constexpr const char* kSpatialUpEn[] = {"Off", "FSR 1 (spatial)", "NIS (spatial)"};
+constexpr extras::UpscaleMode kSpatialUpModes[] = {
+    extras::UpscaleMode::Off,
+    extras::UpscaleMode::Fsr1,
+    extras::UpscaleMode::Nis,
+};
+constexpr int kSpatialUpCount = static_cast<int>(sizeof kSpatialUpModes / sizeof kSpatialUpModes[0]);
+
+int game3d_up_index(const Game3dSettings& g) {
+    if (g.upscaler == "taau") return 3;
+    if (g.upscaler == "bilinear") return 4;
+    if (!g.fsr_version.empty() && g.fsr_version[0] == '4') return 1;
+    if (!g.fsr_version.empty() && g.fsr_version[0] == '2') return 2;
+    return 0;
+}
+
+void set_game3d_up_index(Game3dSettings& g, int idx) {
+    switch (idx) {
+        case 0: g.upscaler = "fsr3"; g.fsr_version = "3.1"; break;
+        case 1: g.upscaler = "fsr3"; g.fsr_version = "4.1"; break;
+        case 2: g.upscaler = "fsr3"; g.fsr_version = "2.3"; break;
+        case 3: g.upscaler = "taau"; break;
+        default: g.upscaler = "bilinear"; break;
+    }
+}
 
 struct SwitchButton {
     const char* name;
@@ -68,48 +181,38 @@ constexpr SwitchButton kSwitchButtons[] = {
     {"LEFT", hid::kBtnLeft},   {"RIGHT", hid::kBtnRight}, {"LSTICK", hid::kBtnStickL}, {"RSTICK", hid::kBtnStickR},
 };
 constexpr int kSwitchButtonCount = static_cast<int>(sizeof kSwitchButtons / sizeof kSwitchButtons[0]);
-static_assert(kSwitchButtonCount == 16, "the Switch pad has 16 buttons in the status view");
 
-// The working copy and the editing state of the page. One page per process.
+// ---- Working state ------------------------------------------------------------------------------------------------------------------
 struct Page {
     bool loaded = false;
-    bool dirty = false;                    // the working copy differs from the settings in force (set by every change)
+    bool dirty = false;
     Settings edit;
-    Ctx ctx = Ctx::Play;               // the context shown in the Bindings tab
-    int rebind = -1;                       // index into edit.bindings of the row waiting for an input; -1 = none
-    bool link_pitch = true;                // Mouse tab: moving the horizontal sensitivity moves the vertical one too (local, not saved)
-    bool out_tab_open = false;             // the Switch layout tab was open last frame; its fields are refilled when it opens
-    char out_text[kActCount][128] = {};    // the text of each output field
-    std::string out_err[kActCount];        // parse error of each field; empty when its text is valid
-    bool aspect_custom = false;            // Display tab: the Custom aspect entry is picked (local, not saved)
-    bool fps_capture = false;              // Display tab: the frame rate counter's hotkey waits for a key (local, not saved)
-    std::string notice;                    // a line under the buttons: a refused or conflicting binding (cleared by the next rebind)
-    bool notice_warn = false;              // the notice is a warning (drawn in orange), not information
-    std::vector<std::string> monitors;     // Display page: "1: name (w x h @ hz)", refreshed every couple of seconds while the page is open
+    Ctx ctx = Ctx::Play;
+    int rebind = -1;
+    bool link_pitch = true;
+    bool out_tab_open = false;
+    char out_text[kActCount][128] = {};
+    std::string out_err[kActCount];
+    bool fps_capture = false;
+    std::string notice;
+    bool notice_warn = false;
+    std::vector<std::string> monitors;
     double monitors_at = -1e9;
-    std::vector<std::string> audio_devices;   // Audio page: output device names, read when the page opens and by its Refresh button
+    std::vector<std::string> audio_devices;
     bool audio_loaded = false;
+    int active_tab = 0;   // 0 Display, 1 Graphics, 2 Audio, 3 Controls, 4 Overlay
 };
 
 void mark(Page& p) { p.dirty = true; }
-
-const char* yes_no(bool b) { return b ? "yes" : "no"; }
 const char* cstr(const char* s) { return s ? s : ""; }
-const char* act_label(Act a) { return a == Act::None ? "none (input off)" : act_info(a).name; }
+const char* act_label(Act a) { return a == Act::None ? tr("无 (禁用)", "none") : act_info(a).name; }
+float px(float v) { return v * ImGui::GetFontSize() / 18.0f; }
 
-// Stops our rebind. The host's capture is cancelled only when it is ours.
 void stop_rebind(UiHost& host, Page& p) {
     if (p.rebind >= 0 && host.capturing()) host.cancel_capture();
     p.rebind = -1;
 }
 
-// Ends the frame rate counter's hotkey capture. The host's capture is cancelled only when it is ours.
-void stop_fps_capture(UiHost& host, Page& p) {
-    if (p.fps_capture && host.capturing()) host.cancel_capture();
-    p.fps_capture = false;
-}
-
-// The bindings of the working copy that share row `row`'s input in the same context and trigger: pressing that input would do both.
 std::vector<int> conflicts_of(const Page& p, int row) {
     std::vector<int> out;
     const Binding& a = p.edit.bindings[static_cast<std::size_t>(row)];
@@ -126,72 +229,22 @@ void set_notice(Page& p, const std::string& text, bool warn) {
     p.notice_warn = warn;
 }
 
-// Takes the captured input, if the host has one. Results are taken every frame, so a stale one never reaches a later rebind.
-// Only one capture runs at a time (the binding row or the frame rate hotkey), so a result goes to whichever one is waiting.
-// The key that opens the menu cannot be bound (and the frame rate hotkey cannot be bound to an action): the page says so and keeps waiting.
-void poll_capture(UiHost& host, Page& p) {
-    InputId id;
-    if (host.capture_result(&id)) {
-        const std::string name = input_name(id);
-        const bool reserved = host.reserved_key(id);
-        if (p.fps_capture) {
-            // The frame rate hotkey takes keyboard keys only; a mouse button or a wheel notch is dropped and the capture ends.
-            if (reserved) {
-                set_notice(p, name + " opens this menu and cannot be the frame rate hotkey. Press another key, Escape cancels.", true);
-                host.begin_capture();
-                return;
-            }
-            p.fps_capture = false;
-            if (id.kind == InKind::Key) {
-                Settings cur = host.settings();
-                cur.fps.key = id;
-                host.apply(cur);   // live: not part of the working copy
-            }
-        } else if (p.rebind >= 0 && p.rebind < static_cast<int>(p.edit.bindings.size())) {
-            const Settings cur = host.settings();
-            if (reserved || (id.kind == InKind::Key && id == cur.fps.key)) {
-                set_notice(p, name + (reserved ? " opens this menu" : " is the frame rate counter hotkey") + " and cannot be bound. Press another input, Escape cancels.", true);
-                host.begin_capture();
-                return;
-            }
-            p.edit.bindings[static_cast<std::size_t>(p.rebind)].in = id;
-            mark(p);
-            const std::vector<int> other = conflicts_of(p, p.rebind);
-            if (other.empty()) {
-                set_notice(p, name + " bound.", false);
-            } else {
-                const Binding& o = p.edit.bindings[static_cast<std::size_t>(other[0])];
-                set_notice(p, name + " is also bound to " + act_label(o.act) + " (" + ctx_name(o.ctx) + "): both happen when it is pressed.", true);
-            }
-        }
-        p.rebind = -1;
-    } else if ((p.rebind >= 0 || p.fps_capture) && !host.capturing()) {
-        p.rebind = -1;   // Escape, or the host ended the capture without a result
-        p.fps_capture = false;
-        set_notice(p, "Rebinding cancelled.", false);
-    }
-}
-
-// Fills the Switch layout fields from the working copy. Also clears their errors.
 void refresh_out_text(Page& p) {
-    for (int a = 1; a < kActCount; ++a) {   // Act::None has no row
+    for (int a = 1; a < kActCount; ++a) {
         const std::string text = output_text(p.edit.out[a]);
         std::snprintf(p.out_text[a], sizeof p.out_text[a], "%s", text.c_str());
         p.out_err[a].clear();
     }
 }
 
-// Changes made by the page that must hold before the copy is handed to the host: no bindings without an input, values in range.
 void sanitize(Settings& s) {
     std::vector<Binding>& v = s.bindings;
     v.erase(std::remove_if(v.begin(), v.end(), [](const Binding& b) { return b.in.kind == InKind::None; }), v.end());
     for (Binding& b : v) b.ms = std::clamp(b.ms, 0, 5000);
     s.display.width = std::clamp(s.display.width, 320, 16384);
     s.display.height = std::clamp(s.display.height, 320, 16384);
-    // A fixed render size is 0 (follow the window) or 320..16384 per side; the settings file rejects anything else.
     s.display.render_width = s.display.render_width <= 0 ? 0 : std::clamp(s.display.render_width, 320, 16384);
     s.display.render_height = s.display.render_height <= 0 ? 0 : std::clamp(s.display.render_height, 320, 16384);
-    // Extras: peak and paper white are 0 (auto) or in range; the upscale mode is kept as it is, even for the modes not yet offered.
     extras::HdrSettings& h = s.extras.hdr;
     h.peak_nits = h.peak_nits <= 0 ? 0 : std::clamp(h.peak_nits, 200.0, 10000.0);
     h.paper_white_nits = h.paper_white_nits <= 0 ? 0 : std::clamp(h.paper_white_nits, 80.0, 500.0);
@@ -200,26 +253,28 @@ void sanitize(Settings& s) {
     s.extras.picture = extras::picture_clamped(s.extras.picture);
     s.audio.volume = std::clamp(s.audio.volume, 0.0, 1.0);
     s.display.monitor = std::clamp(s.display.monitor, 0, 32);
+    s.game3d.res_preset = std::clamp(s.game3d.res_preset, 0, kGameResCount - 1);
+    s.game3d.sharpness = std::clamp(s.game3d.sharpness, 0.0, 1.0);
     if (s.audio.device.empty()) s.audio.device = "default";
 }
 
-// The frame rate counter is live (the hotkey changes it in the game), so the working copy always takes it from the host, never from a
-// stale copy: Apply and save, Revert and Factory defaults leave the counter as it is.
 void apply_now(UiHost& host, Page& p) {
     stop_rebind(host, p);
     p.edit.fps = host.settings().fps;
     sanitize(p.edit);
     host.apply(p.edit);
     p.dirty = false;
+    set_notice(p, tr("设置已应用并保存", "Settings applied and saved"), false);
 }
 
 void revert_to_saved(UiHost& host, Page& p) {
     stop_rebind(host, p);
     p.edit = host.settings();
     p.edit.fps = host.settings().fps;
-    extras::set_picture_live(p.edit.extras.picture);   // the colour sliders preview live: back to the saved values
+    extras::set_picture_live(p.edit.extras.picture);
     refresh_out_text(p);
     p.dirty = false;
+    set_notice(p, tr("已放弃未保存的修改", "Changes discarded"), false);
 }
 
 void load_factory(UiHost& host, Page& p) {
@@ -229,265 +284,8 @@ void load_factory(UiHost& host, Page& p) {
     extras::set_picture_live(p.edit.extras.picture);
     refresh_out_text(p);
     mark(p);
+    set_notice(p, tr("已载入默认配置，点击「应用并保存」生效", "Factory defaults loaded; click Apply & Save"), false);
 }
-
-// A slider on a double; true when the user changed it.
-bool slider(const char* label, double* v, double lo, double hi, const char* format, ImGuiSliderFlags flags = 0) {
-    float f = static_cast<float>(*v);
-    if (!ImGui::SliderFloat(label, &f, static_cast<float>(lo), static_cast<float>(hi), format, flags)) return false;
-    *v = f;
-    return true;
-}
-
-// An int field. The value is clamped when the field is left, not while typing (typing "1280" must not turn into "320" on the way).
-bool int_field(const char* label, int* v, int lo, int hi, int step, int step_fast) {
-    bool changed = ImGui::InputInt(label, v, step, step_fast);
-    if (ImGui::IsItemDeactivated()) {
-        const int c = std::clamp(*v, lo, hi);
-        changed = changed || c != *v;
-        *v = c;
-    }
-    return changed;
-}
-
-// One side of the fixed render size: 0 (follow the window) or 320..16384. A value in between is clamped to 320 when the field is left.
-bool render_size_field(const char* label, int* v) {
-    bool changed = ImGui::InputInt(label, v, 0, 0);
-    if (ImGui::IsItemDeactivated()) {
-        const int c = *v <= 0 ? 0 : std::clamp(*v, 320, 16384);
-        changed = changed || c != *v;
-        *v = c;
-    }
-    return changed;
-}
-
-// Sizes are in units of the 16 px reference font, so the page follows the overlay's UI scale (overlay.cpp).
-float px(float v) { return v * ImGui::GetFontSize() / 16.0f; }
-
-// A hover tooltip for the item drawn last.
-void tip(const char* text) {
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("%s", text);
-}
-
-// Marks the item drawn last as one that only takes effect at the next start.
-void restart_badge() {
-    ImGui::SameLine();
-    ImGui::TextColored(kOrange, "restart");
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("%s", "Applies on restart: the game reads this once, when it starts.");
-}
-
-// ---- Mouse --------------------------------------------------------------------------------------------------------------------------
-
-void sensitivity_help(double rad) {
-    if (rad <= 0) {
-        ImGui::TextDisabled("= %.6f rad per count", rad);
-        return;
-    }
-    ImGui::TextDisabled("= %.6f rad per count, %.3f degrees per count, 360 degrees in %.0f counts", rad, rad * 180.0 / kPi, 2.0 * kPi / rad);
-}
-
-// The game's own entries of the Mouse tab (play_game.h GamePlay::mouse_tab): where = 0 after the sensitivity, 1 after the invert boxes, 2 at the end.
-void game_mouse_section(int where, Page& p) {
-    const GamePlay* gp = game_play();
-    if (gp && gp->mouse_tab && gp->mouse_tab(where, p.edit)) mark(p);
-}
-
-void mouse_tab(Page& p) {
-    MouseSettings& m = p.edit.mouse;
-    double src = source_sens(m.yaw_rad);
-    if (slider("Horizontal sensitivity", &src, 0.1, 20.0, "%.2f", ImGuiSliderFlags_Logarithmic)) {
-        m.yaw_rad = rad_per_count(src);
-        if (p.link_pitch) m.pitch_rad = m.yaw_rad;
-        mark(p);
-    }
-    sensitivity_help(m.yaw_rad);
-
-    src = source_sens(m.pitch_rad);
-    if (slider("Vertical sensitivity", &src, 0.1, 20.0, "%.2f", ImGuiSliderFlags_Logarithmic)) {
-        m.pitch_rad = rad_per_count(src);
-        mark(p);
-    }
-    sensitivity_help(m.pitch_rad);
-    ImGui::Checkbox("Link vertical to horizontal", &p.link_pitch);
-    game_mouse_section(0, p);
-
-    ImGui::Spacing();
-    if (ImGui::Checkbox("Invert vertical", &m.invert_y)) mark(p);
-    if (ImGui::Checkbox("Invert horizontal", &m.invert_x)) mark(p);
-    game_mouse_section(1, p);
-    if (ImGui::Checkbox("Mouse pointer in menus (cursor, hover, click)", &m.menu_cursor)) mark(p);
-    game_mouse_section(2, p);
-}
-
-// ---- Controller ---------------------------------------------------------------------------------------------------------------------
-
-// The 16 controller buttons, in PadSrc order.
-constexpr const char* kPadSrcLabels[kPadSrcCount] = {
-    "A / Cross (bottom)", "B / Circle (right)", "X / Square (left)", "Y / Triangle (top)",
-    "LB / L1",            "RB / R1",            "LT / L2",            "RT / R2",
-    "Menu / Options",     "View / Create",      "Left stick click",   "Right stick click",
-    "D-pad up",           "D-pad down",         "D-pad left",         "D-pad right",
-};
-static_assert(sizeof kPadSrcLabels / sizeof kPadSrcLabels[0] == 16, "one label per controller button");
-
-// The choices of a controller button: Default, Nothing, then the single Switch buttons in kSwitchButtons order.
-constexpr const char* kPadChoiceNames[] = {
-    "Default", "Nothing",
-    "A", "B", "X", "Y", "L", "R", "ZL", "ZR", "Plus", "Minus",
-    "D-pad up", "D-pad down", "D-pad left", "D-pad right", "Left stick click", "Right stick click",
-};
-constexpr int kPadChoiceCount = static_cast<int>(sizeof kPadChoiceNames / sizeof kPadChoiceNames[0]);
-static_assert(kPadChoiceCount == 2 + kSwitchButtonCount, "one choice per Switch button, plus Default and Nothing");
-constexpr const char* kPadCustomLabel = "Custom (edit in controls.ini)";
-
-// The value a choice stores.
-uint64_t pad_choice_value(int c) {
-    if (c == 0) return kPadDefault;
-    if (c == 1) return 0;
-    return static_cast<uint64_t>(hid::btn(kSwitchButtons[c - 2].bit));
-}
-
-// The choice a stored value shows as, or -1 when no choice holds it (a mask such as two buttons, set in the file).
-int pad_choice_of(uint64_t v) {
-    for (int c = 0; c < kPadChoiceCount; ++c)
-        if (pad_choice_value(c) == v) return c;
-    return -1;
-}
-
-void pad_buttons_group(Page& p) {
-    ImGui::SeparatorText("Pad buttons");
-    ImGui::TextWrapped("What each controller button presses on the Switch pad. Default keeps the built-in layout.");
-    if (ImGui::BeginTable("pad_buttons", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-        ImGui::TableSetupColumn("Controller button");
-        ImGui::TableSetupColumn("Presses on the Switch pad");
-        ImGui::TableHeadersRow();
-        for (int i = 0; i < kPadSrcCount; ++i) {
-            uint64_t& v = p.edit.pad.remap[i];
-            const int sel = pad_choice_of(v);
-            ImGui::PushID(i);
-            ImGui::TableNextRow();
-
-            ImGui::TableSetColumnIndex(0);
-            ImGui::TextUnformatted(kPadSrcLabels[i]);
-
-            ImGui::TableSetColumnIndex(1);
-            ImGui::SetNextItemWidth(-FLT_MIN);
-            if (ImGui::BeginCombo("##remap", sel >= 0 ? kPadChoiceNames[sel] : kPadCustomLabel)) {
-                if (sel < 0) {   // a mask no choice holds: shown as the current entry, not offered
-                    ImGui::BeginDisabled();
-                    ImGui::Selectable(kPadCustomLabel, true);
-                    ImGui::EndDisabled();
-                }
-                for (int c = 0; c < kPadChoiceCount; ++c) {
-                    if (ImGui::Selectable(kPadChoiceNames[c], c == sel) && c != sel) {
-                        v = pad_choice_value(c);
-                        mark(p);
-                    }
-                }
-                ImGui::EndCombo();
-            }
-            ImGui::PopID();
-        }
-        ImGui::EndTable();
-    }
-    if (ImGui::Button("Reset pad buttons")) {
-        bool changed = false;
-        for (uint64_t& v : p.edit.pad.remap) {
-            if (v != kPadDefault) {
-                v = kPadDefault;
-                changed = true;
-            }
-        }
-        if (changed) mark(p);
-    }
-}
-
-// The button prompt style: which icons the game shows (Auto follows the last device used). Shared by the keyboard and the pad.
-void prompts_row(const LiveStatus& live, Page& p) {
-    PromptSettings& prompts = p.edit.prompts;
-    const int prompt_sel = static_cast<int>(prompts.style);
-    if (ImGui::BeginCombo("Button prompts", kPromptLabels[prompt_sel])) {
-        for (int i = 0; i < kPromptStyleCount; ++i) {
-            if (ImGui::Selectable(kPromptLabels[i], i == prompt_sel) && i != prompt_sel) {
-                prompts.style = static_cast<PromptStyle>(i);
-                mark(p);
-            }
-        }
-        ImGui::EndCombo();
-    }
-    tip("The button icons in the game's prompts: the game's own Switch icons, Xbox, PlayStation, keyboard and mouse, or Auto to follow the device you used last.");
-    if (prompts.style == PromptStyle::Auto) {
-        ImGui::SameLine();
-        ImGui::TextDisabled("showing %s", cstr(live.prompt_now));
-    }
-}
-
-void pad_tab(const LiveStatus& live, Page& p) {   // the Gamepad tab of the Controls page
-    PadSettings& pad = p.edit.pad;
-    const bool by_label = pad.label_abxy;
-    if (ImGui::RadioButton("Buttons by label (Xbox A = Switch A)", by_label) && !by_label) {
-        pad.label_abxy = true;
-        mark(p);
-    }
-    if (ImGui::RadioButton("Buttons by position (bottom button = Switch B)", !by_label) && by_label) {
-        pad.label_abxy = false;
-        mark(p);
-    }
-
-    ImGui::SeparatorText("Sticks and triggers");
-    if (slider("Left stick dead zone", &pad.stick_deadzone, 0.0, 0.5, "%.2f")) mark(p);
-    tip("The stick must move this far from the centre before it counts (a fraction of its travel). Applies before the game's own dead zone.");
-    if (slider("Right stick dead zone", &pad.right_deadzone, 0.0, 0.5, "%.2f")) mark(p);
-    tip("The same for the right stick (looking).");
-    if (slider("Left stick max", &pad.stick_max, 0.5, 1.0, "%.2f")) mark(p);
-    tip("How far the left stick must be pushed to count as fully pushed (a fraction of its travel). Lower it if your stick never reaches full speed (for example it tops out around 0.95).");
-    if (ImGui::Checkbox("Invert look (right stick up looks down)", &pad.invert_y)) mark(p);
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("%s", "Applies in play only; adds to the game's own invert option.");
-    if (slider("Look sensitivity", &pad.look_sens, 0.25, 3.0, "%.2f", ImGuiSliderFlags_Logarithmic)) mark(p);
-    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("%s", "Multiplies the right stick while playing. Below 1 the top turning speed is lower; above 1 you reach it with less stick.");
-    if (slider("Trigger threshold", &pad.trigger_threshold, 0.05, 1.0, "%.2f")) mark(p);
-    if (ImGui::Checkbox("Gyro (six-axis sensor)", &pad.gyro)) mark(p);
-    if (slider("Gyro scale", &pad.gyro_scale, 0.1, 4.0, "%.2f", ImGuiSliderFlags_Logarithmic)) mark(p);
-    if (ImGui::Checkbox("Rumble", &pad.rumble)) mark(p);
-    if (slider("Rumble scale", &pad.rumble_scale, 0.0, 2.0, "%.2f")) mark(p);
-
-    pad_buttons_group(p);
-
-    ImGui::SeparatorText("Gamepad");
-    if (live.pads == 0) ImGui::TextUnformatted("No gamepad open.");
-    else ImGui::Text("%d open: %s", live.pads, live.pad_name.c_str());
-    ImGui::Text("Gyro available: %s    Rumble available: %s", yes_no(live.pad_gyro), yes_no(live.pad_rumble));
-}
-
-// ---- Display ------------------------------------------------------------------------------------------------------------------------
-
-int window_mode_index(const std::string& mode) {
-    for (int i = 0; i < kWindowModeCount; ++i)
-        if (mode == kWindowModeKeys[i]) return i;
-    return 0;
-}
-
-// The combo entry for an aspect value. Auto wins for 0; Custom is shown when picked or when the value is no preset.
-int aspect_index(double aspect, bool custom) {
-    if (aspect <= 0.0) return 0;
-    if (custom) return kAspectCustom;
-    for (int i = 1; i < kAspectCustom; ++i)
-        if (std::fabs(aspect - kAspectValues[i]) < 1e-6) return i;
-    return kAspectCustom;
-}
-
-void fps_label(int fps, char* buf, std::size_t n) {
-    if (fps < 0) std::snprintf(buf, n, "Refresh rate");
-    else if (fps == 0) std::snprintf(buf, n, "Unlimited");
-    else std::snprintf(buf, n, "%d fps", fps);
-}
-
-// The frame rate counter. Its controls act on the host at once, not on the working copy: the game's hotkey flips `show` too, so the
-// page reads the host's value every frame and never writes a stale copy. These controls do not mark the page as changed.
-constexpr const char* kCornerNames[] = {"Top left", "Top right", "Bottom left", "Bottom right"};   // in Corner order
-constexpr int kCornerCount = static_cast<int>(sizeof kCornerNames / sizeof kCornerNames[0]);
-constexpr const char* kFpsDetailNames[] = {"Frame rate", "Frame rate and frame time", "Plus 1% low and worst frame"};
-constexpr int kFpsDetailCount = static_cast<int>(sizeof kFpsDetailNames / sizeof kFpsDetailNames[0]);
 
 void set_fps_live(UiHost& host, const FpsSettings& f) {
     Settings cur = host.settings();
@@ -495,245 +293,49 @@ void set_fps_live(UiHost& host, const FpsSettings& f) {
     host.apply(cur);
 }
 
-void fps_group(UiHost& host, Page& p) {
-    const FpsSettings fps = host.settings().fps;
-    ImGui::SeparatorText("Frame rate counter");
-
-    bool show = fps.show;
-    if (ImGui::Checkbox("Show frame rate counter", &show)) {
-        FpsSettings f = fps;
-        f.show = show;
-        set_fps_live(host, f);
-    }
-
-    const int corner = static_cast<int>(fps.corner);
-    if (ImGui::BeginCombo("Corner##fps_corner", kCornerNames[corner])) {
-        for (int i = 0; i < kCornerCount; ++i) {
-            if (ImGui::Selectable(kCornerNames[i], i == corner) && i != corner) {
-                FpsSettings f = fps;
-                f.corner = static_cast<Corner>(i);
-                set_fps_live(host, f);
+void poll_capture(UiHost& host, Page& p) {
+    InputId id;
+    if (host.capture_result(&id)) {
+        const std::string name = input_name(id);
+        const bool reserved = host.reserved_key(id);
+        if (p.fps_capture) {
+            if (reserved) {
+                set_notice(p, name + tr(" 是菜单快捷键，无法绑定为帧率键（按 Esc 取消）", " opens the menu; press another key or Esc"), true);
+                host.begin_capture();
+                return;
+            }
+            p.fps_capture = false;
+            if (id.kind == InKind::Key) {
+                Settings cur = host.settings();
+                cur.fps.key = id;
+                host.apply(cur);
+                set_notice(p, std::string(tr("帧率快捷键已改为 ", "FPS hotkey set to ")) + name, false);
+            }
+        } else if (p.rebind >= 0 && p.rebind < static_cast<int>(p.edit.bindings.size())) {
+            const Settings cur = host.settings();
+            if (reserved || (id.kind == InKind::Key && id == cur.fps.key)) {
+                set_notice(p, name + tr(" 为系统保留键，请按其他键（Esc 取消）", " is reserved; press another key or Esc"), true);
+                host.begin_capture();
+                return;
+            }
+            p.edit.bindings[static_cast<std::size_t>(p.rebind)].in = id;
+            mark(p);
+            const std::vector<int> other = conflicts_of(p, p.rebind);
+            if (other.empty()) {
+                set_notice(p, std::string(tr("已绑定 ", "Bound ")) + name, false);
+            } else {
+                const Binding& o = p.edit.bindings[static_cast<std::size_t>(other[0])];
+                set_notice(p, name + tr(" 与以下操作冲突：", " conflicts with: ") + act_label(o.act), true);
             }
         }
-        ImGui::EndCombo();
-    }
-
-    const int detail = std::clamp(fps.detail, 0, kFpsDetailCount - 1);
-    if (ImGui::BeginCombo("Detail##fps_detail", kFpsDetailNames[detail])) {
-        for (int i = 0; i < kFpsDetailCount; ++i) {
-            if (ImGui::Selectable(kFpsDetailNames[i], i == detail) && i != detail) {
-                FpsSettings f = fps;
-                f.detail = i;
-                set_fps_live(host, f);
-            }
-        }
-        ImGui::EndCombo();
-    }
-
-    bool shots = fps.in_screenshots;
-    if (ImGui::Checkbox("Also draw it in screenshots", &shots)) {
-        FpsSettings f = fps;
-        f.in_screenshots = shots;
-        set_fps_live(host, f);
-    }
-
-    const std::string key = input_name(fps.key);
-    ImGui::Text("Hotkey: %s", key.empty() ? "?" : key.c_str());
-    ImGui::SameLine();
-    if (ImGui::Button("Change##fps_key")) {
-        stop_rebind(host, p);
-        p.fps_capture = true;
-        host.begin_capture();
-    }
-    if (p.fps_capture) {
-        ImGui::SameLine();
-        ImGui::TextDisabled("press a keyboard key...");
+        p.rebind = -1;
+    } else if ((p.rebind >= 0 || p.fps_capture) && !host.capturing()) {
+        p.rebind = -1;
+        p.fps_capture = false;
+        set_notice(p, tr("已取消按键捕获", "Capture cancelled"), false);
     }
 }
 
-// ---- Display page groups (HDR, upscaling, low latency) ----------------------------------------------------------------------------------
-
-// HDR output, upscaling and low latency (nxrt/extras.h). Items that apply at the next start say so in their labels, as the Display tab does.
-constexpr const char* kHdrModeNames[] = {"Off", "Auto", "On", "Native"};
-constexpr const char* kHdrFormatNames[] = {"Auto", "HDR10", "scRGB"};
-constexpr const char* kLatencyModeNames[] = {"Off", "Auto", "On", "Boost"};
-constexpr const char* kUpscaleNames[] = {"Off", "FSR 1 (spatial)", "FSR 3", "DLSS", "XeSS", "NIS (spatial)", "DLAA"};   // indexed by extras::UpscaleMode
-// The order the list shows them in: the spatial upscalers, then the temporal ones.
-constexpr extras::UpscaleMode kUpscaleOrder[] = {extras::UpscaleMode::Off, extras::UpscaleMode::Fsr1, extras::UpscaleMode::Nis,
-                                                 extras::UpscaleMode::Fsr3, extras::UpscaleMode::Dlss, extras::UpscaleMode::Dlaa, extras::UpscaleMode::Xess};
-constexpr const char* kUpscaleQualityNames[] = {"Native (AA only)", "Quality", "Balanced", "Performance", "Ultra performance", "Custom (scene resolution)"};
-
-// Off and the spatial upscalers (FSR 1, NIS) always work. The temporal ones (src/gfx/extras/temporal.h) get depth, camera motion vectors made by
-// the runtime and the game's projection jitter: FSR 3 when the FidelityFX DLLs are found, DLSS / DLAA when the Streamline DLLs and nvngx_dlss.dll are found (the GPU
-// check runs when the renderer starts them). XeSS is not wired. A file that holds an unavailable one shows it as selected (the game runs as Off).
-bool upscale_available(extras::UpscaleMode m) {
-    switch (m) {
-        case extras::UpscaleMode::Off:
-        case extras::UpscaleMode::Fsr1:
-        case extras::UpscaleMode::Nis: return true;
-        case extras::UpscaleMode::Fsr3: return extras::temporal_ffx_available();
-        case extras::UpscaleMode::Dlss:
-        case extras::UpscaleMode::Dlaa: return extras::temporal_dlss_available();
-        default: return false;
-    }
-}
-const char* temporal_why(extras::UpscaleMode m) {
-    if (m == extras::UpscaleMode::Fsr3)
-        return "Needs amd_fidelityfx_upscaler_vk.dll (AMD FidelityFX SDK v2.4.0, 36 MB) in upscalers\\fsr3 next to the executable - the "
-               "39 KB amd_fidelityfx_loader_vk.dll beside it also works, and so does a path in [upscale] fsr_dll.";
-    if (m == extras::UpscaleMode::Dlss || m == extras::UpscaleMode::Dlaa)
-        return "Needs an NVIDIA RTX GPU and the Streamline DLLs (sl.interposer.dll, sl.common.dll, sl.dlss.dll, nvngx_dlss.dll) in upscalers\\streamline "
-               "next to the executable, or their folder in [upscale] dlss_dll. The launcher's Game files page downloads nvngx_dlss.dll from NVIDIA.";
-    return "XeSS is not wired up yet.";
-}
-
-// A nits field where 0 means "auto" (shown as "auto"). Other values are clamped into lo..hi when the field is left, so the slider can be
-// dragged through the gap below lo while it is held.
-bool auto_nits_slider(const char* label, double* v, int lo, int hi) {
-    int x = static_cast<int>(std::lround(*v));
-    bool changed = ImGui::SliderInt(label, &x, 0, hi, x <= 0 ? "auto" : "%d nits");
-    if (ImGui::IsItemDeactivated()) {
-        const int c = x <= 0 ? 0 : std::clamp(x, lo, hi);
-        changed = changed || c != x;
-        x = c;
-    }
-    if (changed) *v = x;
-    return changed;
-}
-
-void hdr_group(Page& p) {
-    extras::HdrSettings& h = p.edit.extras.hdr;
-    ImGui::SeparatorText("HDR output");
-
-    const int mode = static_cast<int>(h.mode);
-    const bool mode_open = ImGui::BeginCombo("Mode##hdr_mode", kHdrModeNames[mode]);
-    tip("Off keeps the SDR picture, Auto uses HDR when the display and Windows offer it, On runs the HDR pipeline even without an HDR display. "
-        "Native is On with the levels the game declares for an HDR TV on Switch 2.");
-    if (mode_open) {
-        for (int i = 0; i < 4; ++i) {
-            if (ImGui::Selectable(kHdrModeNames[i], i == mode) && i != mode) {
-                h.mode = static_cast<extras::HdrMode>(i);
-                mark(p);
-            }
-        }
-        ImGui::EndCombo();
-    }
-    restart_badge();
-
-    const int format = static_cast<int>(h.format);
-    const bool format_open = ImGui::BeginCombo("Format##hdr_format", kHdrFormatNames[format]);
-    tip("The signal sent to the display: HDR10, or scRGB; Auto picks HDR10 when the display offers it and scRGB otherwise.");
-    if (format_open) {
-        for (int i = 0; i < 3; ++i) {
-            if (ImGui::Selectable(kHdrFormatNames[i], i == format) && i != format) {
-                h.format = static_cast<extras::HdrFormat>(i);
-                mark(p);
-            }
-        }
-        ImGui::EndCombo();
-    }
-    restart_badge();
-
-    if (auto_nits_slider("Peak brightness##hdr_peak", &h.peak_nits, 200, 10000)) mark(p);
-    tip("How bright the brightest highlights get, in nits; auto reads the peak brightness the display reports.");
-    if (auto_nits_slider("Paper white##hdr_paper", &h.paper_white_nits, 80, 500)) mark(p);
-    tip("The brightness of ordinary white in the game, in nits; auto follows Windows' SDR content brightness when HDR is on there, else 203.");
-    if (slider("Highlight boost", &h.highlight_boost, 0.0, 2.0, "%.2f")) mark(p);
-    tip("0 keeps the game's SDR look up to its own white, 1 lets highlights reach the display's peak, 2 pushes them further.");
-
-    const extras::HdrState hs = extras::hdr_state();
-    ImGui::Text("HDR scene: %s, swapchain: %s, paper white %.0f nits, peak %.0f nits, peak ratio %.2f, display reports HDR: %s",
-                hs.scene_hdr ? "on" : "off", extras::output_kind_name(hs.output), static_cast<double>(hs.paper_white_nits),
-                static_cast<double>(hs.peak_nits), static_cast<double>(hs.peak_ratio), yes_no(hs.display_hdr));
-}
-
-void upscale_group(Page& p) {
-    extras::UpscaleSettings& u = p.edit.extras.upscale;
-    ImGui::SeparatorText("Upscaling");
-
-    // Only the modes that work are offered. A file that holds another one shows it as the current entry, marked, until the player picks.
-    const int mode = static_cast<int>(u.mode);
-    std::string preview = kUpscaleNames[mode];
-    if (!upscale_available(u.mode)) preview += " (not available)";
-    const bool open = ImGui::BeginCombo("Upscaler##upscale_mode", preview.c_str());
-    tip("FSR 1 (AMD) and NIS (NVIDIA Image Scaling) enlarge the game's picture from a lower render or scene resolution and sharpen it; both run on any GPU. "
-        "NIS covers up to 2x per side, FSR 1 takes over beyond that. FSR 3 and DLSS / DLAA are temporal: they anti-alias the HDR scene using depth, "
-        "camera motion and the game's jitter (switched on with them); DLSS and DLAA need an RTX GPU and apply from the next start.");
-    if (open) {
-        for (extras::UpscaleMode m : kUpscaleOrder) {
-            const int i = static_cast<int>(m);
-            const bool ok = upscale_available(m);
-            if (!ok) ImGui::BeginDisabled();
-            if (ImGui::Selectable(kUpscaleNames[i], i == mode) && i != mode && ok) {
-                u.mode = m;
-                mark(p);
-            }
-            if (!ok) {
-                ImGui::EndDisabled();
-                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", temporal_why(m));
-            }
-        }
-        ImGui::EndCombo();
-    }
-    if ((u.mode == extras::UpscaleMode::Dlss || u.mode == extras::UpscaleMode::Dlaa) && !extras::temporal_dlss_started()) restart_badge();
-
-    if (u.mode == extras::UpscaleMode::Fsr3 || u.mode == extras::UpscaleMode::Dlss) {
-        const int q = static_cast<int>(u.quality);
-        if (ImGui::BeginCombo("Quality##upscale_quality", kUpscaleQualityNames[q])) {
-            for (int i = 0; i < 6; ++i) {
-                if (ImGui::Selectable(kUpscaleQualityNames[i], i == q) && i != q) {
-                    u.quality = static_cast<extras::UpscaleQuality>(i);
-                    mark(p);
-                }
-            }
-            ImGui::EndCombo();
-        }
-        tip("The scene's render size per side: Native 100%, Quality 67%, Balanced 59%, Performance 50%, Ultra performance 33%, Custom the scene resolution "
-            "below. Takes effect where the game renders its scene below the output size; otherwise the upscaler runs as native anti-aliasing.");
-    }
-
-    if (slider("Sharpness", &u.sharpness, 0.0, 1.0, "%.2f")) mark(p);
-    tip("How much FSR 1, NIS or FSR 3 sharpens the upscaled picture; 1 is the sharpest (DLSS has no sharpening).");
-    if (ImGui::SliderInt("Scene resolution##upscale_scene", &u.scene_scale, 25, 100, "%d%%")) mark(p);
-    tip("Renders the 3D scene at this percent of the output size per side; the game scales it up and keeps the HUD and the post effects at full size. 100 turns it off. Applies live.");
-    ImGui::TextDisabled("Or render everything below the window size with the render scale above; the upscaler then fills the rest.");
-}
-
-void latency_group(Page& p) {
-    extras::LatencySettings& l = p.edit.extras.latency;
-    ImGui::SeparatorText("Low latency");   // NVIDIA Reflex or AMD Anti-Lag 2 (nxrt/lowlat.h)
-
-    const int mode = static_cast<int>(l.mode);
-    const bool open = ImGui::BeginCombo("Mode##latency_mode", kLatencyModeNames[mode]);
-    tip("Lowers the delay from input to picture with NVIDIA Reflex or AMD Anti-Lag 2, whichever the GPU has; Boost asks Reflex for its boost mode.");
-    if (open) {
-        for (int i = 0; i < 4; ++i) {
-            if (ImGui::Selectable(kLatencyModeNames[i], i == mode) && i != mode) {
-                l.mode = static_cast<extras::LatencyMode>(i);
-                mark(p);
-            }
-        }
-        ImGui::EndCombo();
-    }
-    restart_badge();
-
-    if (ImGui::SliderInt("Frames ahead##latency_ahead", &l.frames_ahead, -1, 3, l.frames_ahead < 0 ? "no limit" : "%d")) mark(p);
-    tip("With the mode on, the game starts simulating a frame only when at most this many earlier frames are still on their way to the screen. 1 keeps the game's frame queue short; 0 is the shortest delay and costs frame rate.");
-    restart_badge();
-    if (ImGui::Checkbox("Log timings##latency_log", &l.log_timings)) mark(p);
-    tip("Writes one line of latency timings to the log every second.");
-    restart_badge();
-
-    if (const extras::LowLatency* ll = extras::lowlat()) {
-        const extras::LowLatency::Stats st = ll->stats();
-        ImGui::Text("%s: enabled %s, input to present %.2f ms, driver input to GPU end %.2f ms, sleep %.2f ms", ll->backend_name(),
-                    yes_no(st.enabled), st.input_to_present_ms, st.input_to_gpu_ms, st.sleep_ms_avg);
-    } else {
-        ImGui::TextDisabled("Not running: the renderer has not started its low-latency part yet, or the mode is off.");
-    }
-}
-
-// The monitor list ("1: name (1920x1080 @ 144 Hz)"), read again every couple of seconds while the page is open.
 void refresh_monitors(Page& p) {
     const double now = ImGui::GetTime();
     if (p.monitors_at >= 0.0 && now - p.monitors_at < 2.0) return;
@@ -746,298 +348,6 @@ void refresh_monitors(Page& p) {
     }
 }
 
-void window_group(const LiveStatus& live, Page& p) {
-    DisplaySettings& d = p.edit.display;
-    ImGui::SeparatorText("Window");
-    const int mode = window_mode_index(d.window_mode);
-    if (ImGui::BeginCombo("Window mode", kWindowModeNames[mode])) {
-        for (int i = 0; i < kWindowModeCount; ++i) {
-            if (ImGui::Selectable(kWindowModeNames[i], i == mode) && i != mode) {
-                d.window_mode = kWindowModeKeys[i];
-                mark(p);
-            }
-        }
-        ImGui::EndCombo();
-    }
-    tip("Borderless fullscreen keeps the desktop resolution and switches instantly. Exclusive fullscreen takes over the display. Alt+Enter flips between windowed and fullscreen in the game.");
-
-    refresh_monitors(p);
-    {
-        char fallback[48];
-        const char* preview = "Automatic (where the window is)";
-        if (d.monitor > 0) {
-            if (d.monitor <= static_cast<int>(p.monitors.size())) {
-                preview = p.monitors[static_cast<std::size_t>(d.monitor - 1)].c_str();
-            } else {
-                std::snprintf(fallback, sizeof fallback, "%d: not connected", d.monitor);
-                preview = fallback;
-            }
-        }
-        if (ImGui::BeginCombo("Monitor", preview)) {
-            if (ImGui::Selectable("Automatic (where the window is)", d.monitor <= 0) && d.monitor > 0) {
-                d.monitor = 0;
-                mark(p);
-            }
-            for (std::size_t i = 0; i < p.monitors.size(); ++i) {
-                const int number = static_cast<int>(i) + 1;
-                if (ImGui::Selectable(p.monitors[i].c_str(), d.monitor == number) && d.monitor != number) {
-                    d.monitor = number;
-                    mark(p);
-                }
-            }
-            ImGui::EndCombo();
-        }
-        tip("The display the window moves to. Fullscreen modes use this display.");
-    }
-
-    int preset = -1;
-    for (int i = 0; i < kSizePresetCount; ++i)
-        if (kSizePresets[i][0] == d.width && kSizePresets[i][1] == d.height) preset = i;
-    char size_label[48];
-    std::snprintf(size_label, sizeof size_label, "%d x %d%s", d.width, d.height, preset < 0 ? " (custom)" : "");
-    if (ImGui::BeginCombo("Window size", size_label)) {
-        for (int i = 0; i < kSizePresetCount; ++i) {
-            char name[32];
-            std::snprintf(name, sizeof name, "%d x %d", kSizePresets[i][0], kSizePresets[i][1]);
-            if (ImGui::Selectable(name, i == preset) && i != preset) {
-                d.width = kSizePresets[i][0];
-                d.height = kSizePresets[i][1];
-                mark(p);
-            }
-        }
-        ImGui::EndCombo();
-    }
-    tip("The size of the game window in windowed mode. It changes at once when the window is windowed; in fullscreen it is the size the window returns to.");
-    if (int_field("Width##win_w", &d.width, 320, 16384, 1, 100)) mark(p);
-    if (int_field("Height##win_h", &d.height, 320, 16384, 1, 100)) mark(p);
-    if (live.width > 0 && (live.width != d.width || live.height != d.height)) {
-        if (ImGui::Button("Use the current window size")) {
-            d.width = live.width;
-            d.height = live.height;
-            mark(p);
-        }
-        ImGui::SameLine();
-        ImGui::TextDisabled("now %d x %d", live.width, live.height);
-    }
-    if (ImGui::Checkbox("Keep the 16:9 picture, letterbox the rest", &d.keep_aspect)) mark(p);
-}
-
-void framerate_group(UiHost& host, const LiveStatus& live, Page& p) {
-    DisplaySettings& d = p.edit.display;
-    ImGui::SeparatorText("Frame rate");
-    if (ImGui::Checkbox("Vsync", &d.vsync)) mark(p);
-    tip("Off: no forced vsync, lowest latency, works well with G-Sync / FreeSync together with a frame limit. On: the display paces the game.");
-
-    char cap[32];
-    fps_label(d.fps_cap, cap, sizeof cap);
-    if (ImGui::BeginCombo("Frame limit", cap)) {
-        for (int fps : kFpsChoices) {
-            char name[32];
-            fps_label(fps, name, sizeof name);
-            if (ImGui::Selectable(name, fps == d.fps_cap) && fps != d.fps_cap) {
-                d.fps_cap = fps;
-                mark(p);
-            }
-        }
-        ImGui::EndCombo();
-    }
-    tip("Refresh rate follows the display. With vsync on, a limit only counts when it is below the refresh rate.");
-    ImGui::BeginDisabled(live.refresh_hz <= 0.0f);
-    if (ImGui::Button("Just under the refresh rate")) {
-        d.fps_cap = static_cast<int>(std::floor(nxrt::suggest_vrr_cap(live.refresh_hz)));
-        mark(p);
-    }
-    ImGui::EndDisabled();
-    ImGui::SameLine();
-    if (live.refresh_hz > 0.0f) ImGui::TextDisabled("display %.2f Hz", live.refresh_hz);
-    else ImGui::TextDisabled("display refresh rate unknown");
-
-    fps_group(host, p);
-}
-
-void resolution_group(Page& p) {
-    DisplaySettings& d = p.edit.display;
-    ImGui::SeparatorText("Resolution");
-    bool autos = d.render_scale <= 0;
-    if (ImGui::Checkbox("Automatic render scale", &autos)) {
-        d.render_scale = autos ? 0 : 100;
-        mark(p);
-    }
-    tip("Auto renders at the size of the window (never below the game's own 1080p). Turn it off to pick a percentage.");
-    restart_badge();
-    if (!autos) {
-        if (ImGui::SliderInt("Render scale", &d.render_scale, 25, 400, "%d%%")) mark(p);
-        tip("The game's internal resolution as a percentage of its own size (100% = 1920 x 1080). Above 100% renders more pixels than the console did.");
-        restart_badge();
-    }
-}
-
-// ---- Graphics -----------------------------------------------------------------------------------------------------------------------
-
-// The game's quality preset (kDisplayOptQuality): picking one writes its view distance, texture LOD bias and anisotropy; changing one of
-// those afterwards makes it Custom.
-constexpr const char* kQualityIds[] = {"switch2", "high", "ultra", "custom"};
-constexpr const char* kQualityNames[] = {"Switch 2 (console)", "High", "Ultra", "Custom"};
-constexpr int kQualityCount = 4;
-
-void quality_preset_combo(Page& p, const GamePlay* gp) {
-    DisplaySettings& d = p.edit.display;
-    int sel = kQualityCount - 1;
-    for (int i = 0; i < kQualityCount; ++i)
-        if (d.quality_preset == kQualityIds[i]) sel = i;
-    if (ImGui::BeginCombo("Quality preset", kQualityNames[sel])) {
-        for (int i = 0; i < kQualityCount - 1; ++i) {
-            if (ImGui::Selectable(kQualityNames[i], i == sel) && i != sel && gp->quality_preset && gp->quality_preset(kQualityIds[i], d)) mark(p);
-        }
-        ImGui::EndCombo();
-    }
-    tip("Sets the view distance, texture LOD bias and anisotropy together. Switch 2 is the console's picture.");
-}
-
-void picture_group(Page& p) {
-    DisplaySettings& d = p.edit.display;
-    const GamePlay* gp = game_play();
-    const unsigned opts = gp ? gp->display_options : 0u;
-    ImGui::SeparatorText("Picture");
-
-    if (opts & kDisplayOptAspect) {
-        const int aspect_sel = aspect_index(d.aspect, p.aspect_custom);
-        if (ImGui::BeginCombo("Aspect ratio", kAspectNames[aspect_sel])) {
-            for (int i = 0; i < kAspectNameCount; ++i) {
-                if (ImGui::Selectable(kAspectNames[i], i == aspect_sel) && i != aspect_sel) {
-                    if (i == kAspectCustom) {
-                        p.aspect_custom = true;
-                        if (d.aspect <= 0.0) d.aspect = kAspectValues[1];   // Custom starts at 16:9
-                    } else {
-                        p.aspect_custom = false;
-                        d.aspect = kAspectValues[i];                       // Auto is index 0, value 0
-                    }
-                    mark(p);
-                }
-            }
-            ImGui::EndCombo();
-        }
-        restart_badge();
-        if (aspect_sel == kAspectCustom && slider("Custom aspect ratio", &d.aspect, 1.0, 5.0, "%.2f")) mark(p);
-    }
-
-    ImGui::TextUnformatted("Fixed render size (0 = follow the window)");
-    ImGui::SetNextItemWidth(px(120.0f));
-    if (render_size_field("##render_w", &d.render_width)) mark(p);
-    ImGui::SameLine();
-    ImGui::TextUnformatted("x");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(px(120.0f));
-    if (render_size_field("##render_h", &d.render_height)) mark(p);
-    restart_badge();
-    tip("Renders at exactly this size instead of the window size times the render scale (Display page).");
-
-    if (opts & kDisplayOptFov) {
-        if (slider("Field of view offset (degrees)", &d.fov_offset, -30.0, 40.0, "%.1f")) mark(p);
-        tip("Degrees added to the vertical field of view of every game camera. 0 is the game's own.");
-    }
-    if (ImGui::Checkbox("Dynamic resolution", &d.dynamic_resolution)) mark(p);
-    tip("The game's own dynamic resolution: it lowers the render size when the GPU is late. Off keeps the full size.");
-
-    const bool quality = (opts & kDisplayOptQuality) != 0;
-    if (quality) quality_preset_combo(p, gp);
-    auto custom = [&] {
-        if (quality) d.quality_preset = "custom";
-        mark(p);
-    };
-    if (quality) {
-        if (slider("View distance", &d.view_distance, 1.0, 4.0, "x%.2f")) custom();
-        tip("Multiplies the camera's far clip: terrain and large scenery reach farther. 1 is the console's.");
-    }
-    int aniso_sel = 0;
-    for (int i = 0; i < kAnisoCount; ++i)
-        if (kAnisoValues[i] == d.anisotropy) aniso_sel = i;
-    if (ImGui::BeginCombo("Texture anisotropy", kAnisoNames[aniso_sel])) {
-        for (int i = 0; i < kAnisoCount; ++i) {
-            if (ImGui::Selectable(kAnisoNames[i], i == aniso_sel) && i != aniso_sel) {
-                d.anisotropy = kAnisoValues[i];
-                custom();
-            }
-        }
-        ImGui::EndCombo();
-    }
-    tip("Sharper textures at a slant. Game default keeps what the game asks for; the other entries are a minimum on every filtering sampler.");
-    if (slider("Texture LOD bias", &d.lod_bias, -2.0, 2.0, "%.2f")) custom();
-    tip("Negative values pick sharper texture levels, positive values softer ones.");
-    if (opts & kDisplayOptBloom) {
-        if (ImGui::Checkbox("Bloom", &d.bloom)) mark(p);
-    }
-    if (opts & kDisplayOptChromatic) {
-        if (ImGui::Checkbox("Chromatic aberration", &d.chromatic_aberration)) mark(p);
-    }
-}
-
-void gpu_group(Page& p) {
-    DisplaySettings& d = p.edit.display;
-    ImGui::SeparatorText("GPU and shaders");
-    int astc_sel = 1;
-    for (int i = 0; i < kAstcCount; ++i)
-        if (d.astc_quality == kAstcValues[i]) astc_sel = i;
-    if (ImGui::BeginCombo("Texture compression quality", kAstcNames[astc_sel])) {
-        for (int i = 0; i < kAstcCount; ++i) {
-            if (ImGui::Selectable(kAstcNames[i], i == astc_sel) && i != astc_sel) {
-                d.astc_quality = kAstcValues[i];
-                mark(p);
-            }
-        }
-        ImGui::EndCombo();
-    }
-    restart_badge();
-    tip("The game's textures are ASTC, which this GPU cannot sample, so they are converted. Fast: the quick BC7 conversion. High: the same at first, then a background thread "
-        "re-encodes each texture slowly into the texture cache, so later runs are sharper (more disk space, no frame cost). Uncompressed: RGBA8, sharpest, 4 times the video memory "
-        "of BC7. [gfx] astc_quality in the ini wins over this.");
-    if (ImGui::Checkbox("Faster GPU memory (uses more video memory)", &d.fast_gpu_memory)) mark(p);
-    tip("Keeps device-local copies of the memory the draws read: faster, costs up to 2 GiB of video memory. [nvn] pool_mirror in the ini wins over this.");
-    restart_badge();
-    if (ImGui::Checkbox("Fewer GPU pipeline waits", &d.fewer_gpu_waits)) mark(p);
-    tip("No full barrier after render passes that only wrote their own targets. [nvn] pass_barriers in the ini wins over this.");
-    restart_badge();
-    if (ImGui::Checkbox("Prepare shaders ahead (pipeline prewarm)", &d.shader_prewarm)) mark(p);
-    tip("Builds the pipelines that earlier runs recorded when the game loads a program, on background threads, so draws do not stall on a first compile. [nvn] prewarm in the ini wins over this.");
-    restart_badge();
-    if (const int left = gfx::shader_backlog(); left > 0) ImGui::TextDisabled("Preparing shaders: %d left", left);
-    else ImGui::TextDisabled("No shaders waiting to be prepared");
-}
-
-// Colour controls of the present step (nxrt/extras.h PictureSettings). They show live while dragged; Apply and save keeps them.
-void color_group(Page& p) {
-    extras::PictureSettings& c = p.edit.extras.picture;
-    ImGui::SeparatorText("Colour");
-    bool changed = false;
-    if (ImGui::Button("Neutral##pic_neutral")) changed = extras::picture_preset("neutral", &c);
-    tip("The game's own picture, untouched.");
-    ImGui::SameLine();
-    if (ImGui::Button("Vivid##pic_vivid")) changed = extras::picture_preset("vivid", &c);
-    tip("A modest boost: contrast 1.10, saturation 1.15, black level -0.03.");
-    changed |= slider("Contrast##pic_contrast", &c.contrast, 0.5, 1.5, "%.2f");
-    tip("Spreads the tones away from mid grey; 1 is the game's own.");
-    changed |= slider("Saturation##pic_saturation", &c.saturation, 0.0, 2.0, "%.2f");
-    tip("Colour intensity; 0 is grey, 1 is the game's own.");
-    changed |= slider("Black level##pic_black", &c.black, -0.5, 0.25, "%.3f");
-    tip("Below 0 pulls the darkest tones down to black (against a hazy, washed-out look); above 0 lifts them. White stays. 0 is the game's own.");
-    changed |= slider("Gamma##pic_gamma", &c.gamma, 0.5, 2.0, "%.2f");
-    tip("Mid-tone brightness: above 1 brightens, below 1 darkens. Black and white stay. 1 is the game's own.");
-    if (changed) {
-        extras::set_picture_live(c);
-        mark(p);
-    }
-    ImGui::TextDisabled(c.neutral() ? "Neutral: the picture is presented as the game drew it." : "Applies live; Apply and save keeps it.");
-}
-
-void graphics_page(Page& p) {
-    hdr_group(p);
-    picture_group(p);
-    color_group(p);
-    gpu_group(p);
-}
-
-// ---- Audio --------------------------------------------------------------------------------------------------------------------------
-
 void load_audio_devices(Page& p) {
     p.audio_devices.clear();
     for (const audio::OutputDevice& d : audio::list_output_devices())
@@ -1045,307 +355,962 @@ void load_audio_devices(Page& p) {
     p.audio_loaded = true;
 }
 
-void audio_page(Page& p) {
-    AudioSettings& a = p.edit.audio;
-    ImGui::SeparatorText("Volume");
-    float pct = static_cast<float>(a.volume * 100.0);
-    if (ImGui::SliderFloat("Master volume", &pct, 0.0f, 100.0f, "%.0f%%")) {
-        a.volume = std::clamp(static_cast<double>(pct), 0.0, 100.0) / 100.0;
-        mark(p);
-    }
-    tip("The volume of everything the game plays, applied as a gain in the audio output. [audio] volume in the ini or NXRT_AUDIO_VOLUME wins at the start.");
-    if (ImGui::Checkbox("Mute when the window is not in focus", &a.mute_unfocused)) mark(p);
-
-    ImGui::SeparatorText("Output");
-    if (!p.audio_loaded) load_audio_devices(p);
-    const bool is_default = a.device.empty() || a.device == "default";
-    const char* preview = is_default ? "System default" : a.device.c_str();
-    if (ImGui::BeginCombo("Output device", preview)) {
-        if (ImGui::Selectable("System default", is_default) && !is_default) {
-            a.device = "default";
-            mark(p);
-        }
-        for (const std::string& name : p.audio_devices) {
-            if (ImGui::Selectable(name.c_str(), !is_default && a.device == name) && a.device != name) {
-                a.device = name;
-                mark(p);
-            }
-        }
-        ImGui::EndCombo();
-    }
-    restart_badge();
-    tip("Where the sound plays. The game opens its audio device once, so a new choice takes effect at the next start. [audio] device in the ini wins over this.");
-    if (ImGui::Button("Refresh the device list")) load_audio_devices(p);
-    ImGui::SameLine();
-    ImGui::TextDisabled("%d devices", static_cast<int>(p.audio_devices.size()));
-    if (!is_default && std::find(p.audio_devices.begin(), p.audio_devices.end(), a.device) == p.audio_devices.end())
-        ImGui::TextColored(kOrange, "'%s' is not connected: the system default is used.", a.device.c_str());
+int window_mode_index(const std::string& mode) {
+    for (int i = 0; i < kWindowModeCount; ++i)
+        if (mode == kWindowModeKeys[i]) return i;
+    return 0;
 }
 
-void display_page(UiHost& host, const LiveStatus& live, Page& p) {
-    window_group(live, p);
-    framerate_group(host, live, p);
-    resolution_group(p);
-    upscale_group(p);
-    latency_group(p);
-
-    ImGui::SeparatorText("Live");
-    ImGui::Text("Window: %s, present mode: %s", cstr(live.window_mode), cstr(live.present_mode));
-    ImGui::Text("Display %.2f Hz, window %d x %d, %.1f fps", live.refresh_hz, live.width, live.height, live.fps);
+void fps_label_text(int fps, char* buf, std::size_t n) {
+    if (fps < 0) std::snprintf(buf, n, "%s", tr("跟随显示器刷新率", "Refresh rate"));
+    else if (fps == 0) std::snprintf(buf, n, "%s", tr("无限制", "Unlimited"));
+    else std::snprintf(buf, n, "%d fps", fps);
 }
 
-// ---- Bindings -----------------------------------------------------------------------------------------------------------------------
+// ---- Two-pane card-row engine (adapted from totk-pc-recomp option_rows.cpp, MIT) ----------------------------------------------------
+struct DescInfo {
+    std::string title;
+    std::string body;
+    bool restart = false;
+    bool live = false;
+    bool valid = false;
+};
 
-std::string input_button_text(const Binding& b, bool waiting) {
-    if (waiting) return "press a key...";
-    if (b.in.kind == InKind::None) return "<none>";
-    const std::string name = input_name(b.in);
-    return name.empty() ? "?" : name;
+struct PaneState {
+    DescInfo hover;
+    DescInfo focus;
+    DescInfo first;
+    DescInfo shown;
+    float bottom_reserve = 0.0f;
+    bool held = false;
+};
+
+PaneState g_pane;
+
+void record_desc(const char* title, const char* body, bool restart, bool live, bool hov, bool foc) {
+    DescInfo d;
+    d.title = title ? title : "";
+    d.body = body ? body : "";
+    d.restart = restart;
+    d.live = live;
+    d.valid = true;
+    if (hov) g_pane.hover = d;
+    if (foc) g_pane.focus = d;
+    if (!g_pane.first.valid) g_pane.first = d;
 }
 
-void bindings_tab(UiHost& host, Page& p) {
-    if (ImGui::BeginCombo("Context", ctx_name(p.ctx))) {
-        for (int c = 0; c < kCtxCount; ++c) {
-            const Ctx ctx = static_cast<Ctx>(c);
-            if (ImGui::Selectable(ctx_name(ctx), ctx == p.ctx) && ctx != p.ctx) {
-                stop_rebind(host, p);
-                p.ctx = ctx;
-            }
-        }
-        ImGui::EndCombo();
-    }
-
-    constexpr ImGuiTableFlags kFlags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY;
-    int remove = -1;
-    if (ImGui::BeginTable("bindings", 5, kFlags, ImVec2(0.0f, px(320.0f)))) {
-        ImGui::TableSetupColumn("Input");
-        ImGui::TableSetupColumn("Action");
-        ImGui::TableSetupColumn("Trigger", ImGuiTableColumnFlags_WidthFixed, px(110.0f));
-        ImGui::TableSetupColumn("ms", ImGuiTableColumnFlags_WidthFixed, px(90.0f));
-        ImGui::TableSetupColumn("##remove", ImGuiTableColumnFlags_WidthFixed, px(32.0f));
-        ImGui::TableSetupScrollFreeze(0, 1);
-        ImGui::TableHeadersRow();
-
-        for (std::size_t i = 0; i < p.edit.bindings.size(); ++i) {
-            Binding& b = p.edit.bindings[i];
-            if (b.ctx != p.ctx) continue;
-            const int row = static_cast<int>(i);
-            ImGui::PushID(row);
-            ImGui::TableNextRow();
-
-            ImGui::TableSetColumnIndex(0);
-            const bool waiting = p.rebind == row;
-            const std::vector<int> clash = conflicts_of(p, row);
-            const std::string label = input_button_text(b, waiting) + "##in";
-            if (waiting) ImGui::PushStyleColor(ImGuiCol_Button, kPressed);
-            else if (!clash.empty()) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.65f, 0.38f, 0.10f, 1.0f));
-            const bool clicked = ImGui::Button(label.c_str(), ImVec2(-FLT_MIN, 0.0f));
-            if (waiting || !clash.empty()) ImGui::PopStyleColor();
-            if (!clash.empty() && ImGui::IsItemHovered()) {
-                std::string who;
-                for (int c : clash) who += std::string(who.empty() ? "" : ", ") + act_label(p.edit.bindings[static_cast<std::size_t>(c)].act);
-                ImGui::SetItemTooltip("Also bound here to: %s", who.c_str());
-            }
-            if (clicked) {
-                stop_fps_capture(host, p);
-                set_notice(p, "", false);
-                p.rebind = row;
-                host.begin_capture();
-            }
-
-            ImGui::TableSetColumnIndex(1);
-            ImGui::SetNextItemWidth(-FLT_MIN);
-            if (ImGui::BeginCombo("##act", act_label(b.act))) {
-                for (int a = 0; a < kActCount; ++a) {
-                    const Act act = static_cast<Act>(a);
-                    if (ImGui::Selectable(act_label(act), act == b.act) && act != b.act) {
-                        b.act = act;
-                        mark(p);
-                    }
-                }
-                ImGui::EndCombo();
-            }
-
-            ImGui::TableSetColumnIndex(2);
-            ImGui::SetNextItemWidth(-FLT_MIN);
-            if (ImGui::BeginCombo("##trig", trig_name(b.trig))) {
-                for (Trig t : kTrigChoices) {
-                    if (ImGui::Selectable(trig_name(t), t == b.trig) && t != b.trig) {
-                        b.trig = t;
-                        mark(p);
-                    }
-                }
-                ImGui::EndCombo();
-            }
-
-            ImGui::TableSetColumnIndex(3);
-            const bool timed = b.trig == Trig::Tap || b.trig == Trig::Hold || b.trig == Trig::DoubleTap;
-            ImGui::BeginDisabled(!timed);
-            ImGui::SetNextItemWidth(-FLT_MIN);
-            if (int_field("##ms", &b.ms, 0, 5000, 0, 0)) mark(p);
-            ImGui::EndDisabled();
-
-            ImGui::TableSetColumnIndex(4);
-            if (ImGui::SmallButton("x")) remove = row;
-            ImGui::PopID();
-        }
-        ImGui::EndTable();
-    }
-
-    if (remove >= 0) {
-        if (p.rebind == remove) stop_rebind(host, p);
-        else if (p.rebind > remove) --p.rebind;
-        p.edit.bindings.erase(p.edit.bindings.begin() + remove);
-        mark(p);
-    }
-
-    if (ImGui::Button("Add binding")) {
-        Binding b;
-        b.in = InputId{};
-        b.ctx = p.ctx;
-        b.act = Act::Primary;
-        b.trig = Trig::Press;
-        b.ms = 0;
-        p.edit.bindings.push_back(b);
-        stop_fps_capture(host, p);
-        set_notice(p, "", false);
-        p.rebind = static_cast<int>(p.edit.bindings.size()) - 1;
-        host.begin_capture();
-        mark(p);
-    }
-    // Inputs used twice in one context with the same trigger (their rows are orange): both actions happen when it is pressed.
-    int shown = 0;
-    for (std::size_t i = 0; i < p.edit.bindings.size() && shown < 6; ++i) {
-        const Binding& b = p.edit.bindings[i];
-        if (b.ctx != p.ctx) continue;
-        for (int c : conflicts_of(p, static_cast<int>(i))) {
-            if (c < static_cast<int>(i)) continue;   // each pair once
-            ImGui::TextColored(kOrange, "%s is bound to %s and to %s", input_name(b.in).c_str(), act_label(b.act),
-                               act_label(p.edit.bindings[static_cast<std::size_t>(c)].act));
-            if (++shown >= 6) break;
-        }
-    }
-    ImGui::TextWrapped("Click an input and press the key or mouse button (or turn the wheel) to bind it, Escape cancels. "
-                       "Bindings of a context win over the 'all' layer for the same input. Action 'none' switches an input off in that context.");
+void pane_begin(const char* id, float bottom_reserve) {
+    g_pane.bottom_reserve = bottom_reserve;
+    g_pane.hover.valid = false;
+    g_pane.focus.valid = false;
+    g_pane.first.valid = false;
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    avail.y = std::max(px(120.0f), avail.y - bottom_reserve);
+    ImGui::PushID(id);
+    ImGui::BeginChild("##rows_pane", ImVec2(avail.x * 0.59f, avail.y), ImGuiChildFlags_NavFlattened);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, px(7.0f)));
 }
 
-// ---- Switch layout ------------------------------------------------------------------------------------------------------------------
+void pane_end(const LiveStatus& live) {
+    ImGui::PopStyleVar();
+    ImGui::EndChild();
 
-void switch_tab(Page& p) {
-    // The cycling actions by the game's names (mpr: beam_next and beam_prev ... beam_1 to beam_4).
-    const std::string help = std::string("What each action presses on the Switch pad: buttons A B X Y L R ZL ZR PLUS MINUS UP DOWN LEFT RIGHT LSTICK RSTICK "
-                                         "and stick directions LS_UP LS_DOWN LS_LEFT LS_RIGHT RS_UP RS_DOWN RS_LEFT RS_RIGHT, joined by +. ") +
-                             act_info(Act::SetANext).name + " and " + act_info(Act::SetAPrev).name + " have no fixed output (they pick " +
-                             act_info(Act::SetA1).name + " to " + act_info(Act::SetA4).name + ").";
-    ImGui::TextWrapped("%s", help.c_str());
-    if (ImGui::BeginTable("switch_out", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-        ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, px(150.0f));
-        ImGui::TableSetupColumn("Output");
-        ImGui::TableHeadersRow();
-        for (int a = 1; a < kActCount; ++a) {
-            const bool bad = !p.out_err[a].empty();
-            ImGui::PushID(a);
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            ImGui::TextUnformatted(act_info(static_cast<Act>(a)).name);
+    if (g_pane.hover.valid) g_pane.shown = g_pane.hover;
+    else if (g_pane.focus.valid) g_pane.shown = g_pane.focus;
+    else if (!g_pane.shown.valid && g_pane.first.valid) g_pane.shown = g_pane.first;
 
-            ImGui::TableSetColumnIndex(1);
-            ImGui::SetNextItemWidth(-FLT_MIN);
-            if (bad) {
-                ImGui::PushStyleColor(ImGuiCol_Border, kRed);
-                ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
-            }
-            if (ImGui::InputText("##out", p.out_text[a], sizeof p.out_text[a])) {
-                Output o;
-                std::string err;
-                if (parse_output(p.out_text[a], &o, &err)) {
-                    p.edit.out[a] = o;
-                    p.out_err[a].clear();
-                    mark(p);
-                } else {
-                    p.out_err[a] = err;   // the previous valid output stays in the working copy
-                }
-            }
-            if (bad) {
-                ImGui::PopStyleVar();
+    ImGui::SameLine(0.0f, 0.0f);
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    avail.y = std::max(px(120.0f), avail.y - g_pane.bottom_reserve);
+    const float gap = px(22.0f);
+    ImGui::GetWindowDrawList()->AddLine(ImVec2(p.x + gap * 0.5f, p.y + px(4.0f)),
+                                        ImVec2(p.x + gap * 0.5f, p.y + avail.y - px(4.0f)), kColGoldLine, 1.0f);
+
+    ImGui::SetCursorScreenPos(ImVec2(p.x + gap, p.y));
+    ImGui::BeginChild("##desc_pane", ImVec2(0.0f, avail.y), 0, ImGuiWindowFlags_NoNav);
+
+    // Top: Option explanation card
+    const float status_h = px(155.0f);
+    const float desc_h = std::max(px(100.0f), avail.y - status_h - px(12.0f));
+    {
+        const ImVec2 cp = ImGui::GetCursorScreenPos();
+        const float cw = ImGui::GetContentRegionAvail().x;
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        dl->AddRectFilled(cp, ImVec2(cp.x + cw, cp.y + desc_h), IM_COL32(8, 16, 28, 150), px(10.0f));
+        dl->AddRect(cp, ImVec2(cp.x + cw, cp.y + desc_h), IM_COL32(60, 125, 145, 95), px(10.0f), 0, 1.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(px(14.0f), px(12.0f)));
+        ImGui::BeginChild("##desc_inner", ImVec2(cw, desc_h), ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_NoNav);
+        ImGui::PopStyleVar();
+        if (g_pane.shown.valid) {
+            ImGui::PushStyleColor(ImGuiCol_Text, kGold);
+            ImGui::TextWrapped("%s", g_pane.shown.title.c_str());
+            ImGui::PopStyleColor();
+            if (g_pane.shown.restart) {
+                ImGui::PushStyleColor(ImGuiCol_Text, kOrange);
+                ImGui::TextUnformatted(tr("● 需重启游戏后生效", "● Applies after restart"));
+                ImGui::PopStyleColor();
+            } else if (g_pane.shown.live) {
+                ImGui::PushStyleColor(ImGuiCol_Text, kEmerald);
+                ImGui::TextUnformatted(tr("● 修改后实时生效", "● Applies live"));
                 ImGui::PopStyleColor();
             }
-            if (!p.out_err[a].empty()) ImGui::TextColored(kRed, "%s", p.out_err[a].c_str());
-            ImGui::PopID();
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextUnformatted(g_pane.shown.body.c_str());
+            ImGui::PopTextWrapPos();
         }
-        ImGui::EndTable();
+        ImGui::EndChild();
     }
-    if (ImGui::Button("Reset this table to the defaults")) {
-        for (int a = 1; a < kActCount; ++a) {
-            Output o;
-            if (parse_output(act_info(static_cast<Act>(a)).default_out, &o)) p.edit.out[a] = o;
+
+    ImGui::Dummy(ImVec2(0.0f, px(6.0f)));
+
+    // Bottom: Live status card
+    {
+        const ImVec2 cp = ImGui::GetCursorScreenPos();
+        const float cw = ImGui::GetContentRegionAvail().x;
+        const float ch = std::max(px(110.0f), ImGui::GetContentRegionAvail().y);
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        dl->AddRectFilled(cp, ImVec2(cp.x + cw, cp.y + ch), IM_COL32(8, 16, 28, 165), px(10.0f));
+        dl->AddRect(cp, ImVec2(cp.x + cw, cp.y + ch), IM_COL32(72, 220, 194, 80), px(10.0f), 0, 1.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(px(14.0f), px(10.0f)));
+        ImGui::BeginChild("##status_inner", ImVec2(cw, ch), ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_NoNav);
+        ImGui::PopStyleVar();
+
+        ImGui::PushStyleColor(ImGuiCol_Text, kEmerald);
+        ImGui::TextUnformatted(tr("实时运行状态", "Live Status"));
+        ImGui::PopStyleColor();
+        ImGui::Separator();
+        ImGui::Text("%s: %d x %d  (%.1f fps)", tr("画面", "Output"), live.width, live.height, live.fps);
+        ImGui::Text("%s: %.1f Hz  |  %s", tr("显示器", "Display"), live.refresh_hz, cstr(live.present_mode));
+        const extras::HdrState hs = extras::hdr_state();
+        ImGui::Text("HDR: %s  (%s)", hs.scene_hdr ? tr("开", "On") : tr("关", "Off"), extras::output_kind_name(hs.output));
+        const nvn::DlssLiveInfo dli = nvn::dlss_live_info();
+        const char* up_txt = !dli.active_name.empty() ? dli.active_name.c_str()
+                           : (!dli.upscaler.empty() ? dli.upscaler.c_str() : "-");
+        ImGui::Text("%s: %s", tr("3D 超分", "3D Upscaler"), up_txt);
+        const int backlog = gfx::shader_backlog();
+        if (backlog > 0) ImGui::TextColored(kOrange, "%s: %d", tr("后台着色器编译剩余", "Shaders left"), backlog);
+        else ImGui::TextColored(kDimText, "%s", tr("着色器缓存已就绪", "Shader cache ready"));
+        if (live.pads > 0) ImGui::TextColored(kDimText, "%s: %s", tr("手柄", "Pad"), live.pad_name.c_str());
+        else ImGui::TextColored(kDimText, "%s", tr("手柄: 未连接 (键鼠模式)", "Pad: None (KB/Mouse)"));
+
+        ImGui::EndChild();
+    }
+
+    ImGui::EndChild();
+    ImGui::PopID();
+}
+
+void card_group(const char* zh, const char* en) {
+    ImGui::Spacing();
+    const char* title = tr(zh, en);
+    ImGui::PushStyleColor(ImGuiCol_Text, kGold);
+    ImGui::TextUnformatted(title);
+    ImGui::PopStyleColor();
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const float w = ImGui::GetContentRegionAvail().x;
+    ImGui::GetWindowDrawList()->AddLine(ImVec2(p.x, p.y - px(2.0f)), ImVec2(p.x + w, p.y - px(2.0f)),
+                                        IM_COL32(240, 198, 92, 90), 1.0f);
+    ImGui::Dummy(ImVec2(0.0f, px(2.0f)));
+}
+
+// Core interactive option card. Returns: -1 step down, +1 step up, 2 clicked/A, 0 none.
+int draw_card_raw(const char* id, const char* label, const char* value, const char* desc,
+                  bool arrows, bool restart, bool live, bool accent_val, bool disabled, float progress = -1.0f) {
+    const float fs = ImGui::GetFontSize();
+    const float w = ImGui::GetContentRegionAvail().x;
+    const float h = (restart || live) ? fs * 2.45f : fs * 2.15f;
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+
+    ImGui::PushID(id);
+    const bool clicked = ImGui::InvisibleButton("##card", ImVec2(w, h));
+    const bool hov = ImGui::IsItemHovered();
+    const bool foc = ImGui::IsItemFocused();
+    ImGui::PopID();
+
+    int step = (clicked && !disabled) ? 2 : 0;
+    g_pane.held = false;
+    if (foc && !disabled) {
+        if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow) || ImGui::IsKeyPressed(ImGuiKey_GamepadDpadLeft)) step = -1;
+        if (ImGui::IsKeyPressed(ImGuiKey_RightArrow) || ImGui::IsKeyPressed(ImGuiKey_GamepadDpadRight)) step = 1;
+        static const ImGuiKey kStepKeys[] = {ImGuiKey_LeftArrow, ImGuiKey_RightArrow, ImGuiKey_GamepadDpadLeft, ImGuiKey_GamepadDpadRight};
+        for (ImGuiKey k : kStepKeys) {
+            if (ImGui::GetKeyData(k)->DownDuration > 0.7f) g_pane.held = true;
+            ImGui::SetKeyOwner(k, ImGui::GetItemID());
         }
-        refresh_out_text(p);
+    }
+
+    record_desc(label, desc, restart, live, hov, foc);
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImFont* font = ImGui::GetFont();
+    const float r = px(9.0f);
+    const float pad = px(15.0f);
+    const bool hi = hov || foc;
+
+    const ImU32 bg = disabled ? IM_COL32(10, 16, 26, 95)
+                              : hi ? IM_COL32(28, 78, 92, 130) : IM_COL32(10, 20, 34, 155);
+    const ImU32 brd = disabled ? IM_COL32(80, 95, 110, 45)
+                               : hi ? kColGold : IM_COL32(72, 145, 168, 70);
+    dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), bg, r);
+    dl->AddRect(p, ImVec2(p.x + w, p.y + h), brd, r, 0, hi ? 1.8f : 1.0f);
+
+    // Optional progress bar along bottom inside card (for sliders)
+    if (progress >= 0.0f) {
+        const float t = std::clamp(progress, 0.0f, 1.0f);
+        const float by = p.y + h - px(4.5f);
+        const float bx0 = p.x + pad;
+        const float bx1 = p.x + w - pad;
+        dl->AddRectFilled(ImVec2(bx0, by), ImVec2(bx1, by + px(2.5f)), IM_COL32(255, 255, 255, 28), px(2.0f));
+        if (t > 0.001f)
+            dl->AddRectFilled(ImVec2(bx0, by), ImVec2(bx0 + (bx1 - bx0) * t, by + px(2.5f)),
+                              hi ? kColGold : kColEmerald, px(2.0f));
+    }
+
+    const float ty = p.y + ((restart || live) ? fs * 0.28f : (h - fs) * 0.5f);
+    const float ny = p.y + fs * 1.42f;
+    float right = p.x + w - pad;
+
+    if (arrows && value && value[0]) {
+        const float aw = fs * 0.36f;
+        const float agap = fs * 0.45f;
+        const float cy = ty + fs * 0.50f;
+        const float val_w = ImGui::CalcTextSize(value).x;
+        const float rx = right - aw;
+        const float lx = rx - agap - val_w - agap - aw;
+        const ImU32 ac = disabled ? kColGrey : hi ? kColGold : IM_COL32(150, 185, 200, 220);
+        dl->AddTriangleFilled(ImVec2(lx, cy), ImVec2(lx + aw, cy - aw * 0.8f), ImVec2(lx + aw, cy + aw * 0.8f), ac);
+        dl->AddTriangleFilled(ImVec2(rx + aw, cy), ImVec2(rx, cy - aw * 0.8f), ImVec2(rx, cy + aw * 0.8f), ac);
+        if (clicked && !disabled) {
+            const float mx = ImGui::GetIO().MousePos.x;
+            if (mx >= lx - agap * 1.5f && mx <= lx + aw + agap) step = -1;
+            else if (mx >= rx - agap && mx <= rx + aw + agap * 1.5f) step = 1;
+        }
+        right = rx - agap;
+    }
+
+    if (value && value[0]) {
+        const float vw = ImGui::CalcTextSize(value).x;
+        const ImU32 vc = disabled ? kColGrey : accent_val ? kColEmerald : kColWhite;
+        dl->AddText(ImVec2(right - vw, ty), vc, value);
+    }
+
+    if (restart || live) {
+        const float small = fs * 0.72f;
+        const char* tag = restart ? tr("重启生效", "Restart") : tr("实时生效", "Live");
+        const float tw = font->CalcTextSizeA(small, FLT_MAX, 0.0f, tag).x;
+        dl->AddText(font, small, ImVec2(p.x + w - pad - tw, ny), restart ? kColOrange : kColDim, tag);
+    }
+
+    // Label on the left
+    const ImU32 lc = disabled ? kColGrey : kColWhite;
+    dl->AddText(ImVec2(p.x + pad, ty), lc, label);
+    return step;
+}
+
+bool card_toggle(const char* id, const char* lzh, const char* len, const char* dzh, const char* den,
+                 bool* val, bool restart = false, bool live = false) {
+    const char* vtext = *val ? tr("开启", "On") : tr("关闭", "Off");
+    const int s = draw_card_raw(id, tr(lzh, len), vtext, tr(dzh, den), true, restart, live, *val, false);
+    if (s != 0) {
+        *val = !(*val);
+        return true;
+    }
+    return false;
+}
+
+bool card_choice(const char* id, const char* lzh, const char* len, const char* dzh, const char* den,
+                 int* idx, const char* const* zh_names, const char* const* en_names, int count,
+                 bool restart = false, bool live = false) {
+    if (count <= 0) return false;
+    *idx = std::clamp(*idx, 0, count - 1);
+    const char* cur = g_zh ? zh_names[*idx] : en_names[*idx];
+    const int s = draw_card_raw(id, tr(lzh, len), cur, tr(dzh, den), true, restart, live, false, false);
+    if (s == -1) {
+        *idx = (*idx + count - 1) % count;
+        return true;
+    }
+    if (s == 1 || s == 2) {
+        *idx = (*idx + 1) % count;
+        return true;
+    }
+    return false;
+}
+
+bool card_choice_vec(const char* id, const char* lzh, const char* len, const char* dzh, const char* den,
+                     int* idx, const std::vector<std::string>& items, bool restart = false) {
+    const int count = static_cast<int>(items.size());
+    if (count <= 0) return false;
+    *idx = std::clamp(*idx, 0, count - 1);
+    std::string disp = items[static_cast<std::size_t>(*idx)];
+    if (disp.size() > 26) disp = disp.substr(0, 23) + "...";
+    const int s = draw_card_raw(id, tr(lzh, len), disp.c_str(), tr(dzh, den), count > 1, restart, false, false, false);
+    if (count > 1 && s == -1) {
+        *idx = (*idx + count - 1) % count;
+        return true;
+    }
+    if (count > 1 && (s == 1 || s == 2)) {
+        *idx = (*idx + 1) % count;
+        return true;
+    }
+    return false;
+}
+
+bool card_slider_f(const char* id, const char* lzh, const char* len, const char* dzh, const char* den,
+                   double* val, double lo, double hi, double step, const char* fmt,
+                   bool restart = false, bool live = false) {
+    char buf[64];
+    std::snprintf(buf, sizeof buf, fmt, *val);
+    const float prog = (hi > lo) ? static_cast<float>((*val - lo) / (hi - lo)) : 0.0f;
+    const int s = draw_card_raw(id, tr(lzh, len), buf, tr(dzh, den), true, restart, live, false, false, prog);
+    if (s == -1 || s == 1 || s == 2) {
+        const double mult = g_pane.held ? 5.0 : 1.0;
+        const double delta = (s == -1 ? -1.0 : 1.0) * step * mult;
+        double nv = *val + delta;
+        if (s == 2 && nv > hi + 1e-6) nv = lo;
+        nv = std::clamp(nv, lo, hi);
+        if (std::fabs(nv - *val) > 1e-7) {
+            *val = nv;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool card_slider_i(const char* id, const char* lzh, const char* len, const char* dzh, const char* den,
+                   int* val, int lo, int hi, int step, const char* fmt,
+                   bool restart = false, bool live = false, const char* special_zero = nullptr, int min_nonzero = 0) {
+    char buf[64];
+    if (special_zero && *val <= 0) std::snprintf(buf, sizeof buf, "%s", special_zero);
+    else std::snprintf(buf, sizeof buf, fmt, *val);
+    const float prog = (hi > lo) ? static_cast<float>(std::max(0, *val - lo)) / static_cast<float>(hi - lo) : 0.0f;
+    const int s = draw_card_raw(id, tr(lzh, len), buf, tr(dzh, den), true, restart, live, false, false, prog);
+    if (s == -1 || s == 1 || s == 2) {
+        const int mult = g_pane.held ? 5 : 1;
+        int nv = *val + (s == -1 ? -1 : 1) * step * mult;
+        if (special_zero && min_nonzero > 0) {
+            if (*val <= 0 && (s == 1 || s == 2)) nv = min_nonzero;
+            else if (*val > 0 && nv < min_nonzero) nv = 0;
+        }
+        if (s == 2 && nv > hi) nv = lo;
+        nv = std::clamp(nv, lo, hi);
+        if (nv != *val) {
+            *val = nv;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool card_button(const char* id, const char* lzh, const char* len, const char* dzh, const char* den,
+                 const char* right_text = "", bool disabled = false) {
+    const int s = draw_card_raw(id, tr(lzh, len), right_text, tr(dzh, den), false, false, true, true, disabled);
+    return s == 2 && !disabled;
+}
+
+// ---- Tab 0: Display -----------------------------------------------------------------------------------------------------------------
+void tab_display(const LiveStatus& live, Page& p, float bottom_h) {
+    DisplaySettings& d = p.edit.display;
+    extras::LatencySettings& l = p.edit.extras.latency;
+
+    pane_begin("tab_display", bottom_h);
+
+    card_group("窗口与分辨率", "Window & Resolution");
+    if (card_choice("game_res", "游戏 3D 分辨率 / 输出", "Game 3D resolution",
+                    "切换游戏内部 3D 渲染与主机输出分辨率（写入 nxrt.ini，重启生效）。切到 1080p/1440p 原生（不超分）会自动联动关闭超分，切到超分档位会自动联动 FSR 3.1.6；之后仍可在「画质」页自由微调。",
+                    "Sets XC2 internal 3D render and output resolution in nxrt.ini (takes effect on restart). Auto-links Native (No Upscale) to Off and upscale presets to FSR 3.1.6 (still freely adjustable in Graphics).",
+                    &p.edit.game3d.res_preset, kGameResZh, kGameResEn, kGameResCount, true)) {
+        const int rp = p.edit.game3d.res_preset;
+        if (rp == 1 || rp == 2) {
+            p.edit.game3d.upscaler = "bilinear";
+        } else if (rp >= 3 && p.edit.game3d.upscaler == "bilinear") {
+            p.edit.game3d.upscaler = "fsr3";
+            if (p.edit.game3d.fsr_version.empty()) p.edit.game3d.fsr_version = "3.1";
+        }
         mark(p);
     }
-}
 
-// ---- Status -------------------------------------------------------------------------------------------------------------------------
-
-// Live view only: nothing here touches the working copy.
-void status_tab(const LiveStatus& live) {
-    ImGui::Text("Context: %s", ctx_name(live.ctx));
-    ImGui::Text("Aim: %s", cstr(live.aim));
-    ImGui::Text("Mouse captured: %s", yes_no(live.mouse_captured));
-    ImGui::Text("Pitch: %.1f degrees", live.pitch_deg);
-    if (live.input_calls == 0) ImGui::TextDisabled("ProcessInput calls: 0 (the game has not reached gameplay yet)");
-    else ImGui::Text("ProcessInput calls: %llu", static_cast<unsigned long long>(live.input_calls));
-
-    ImGui::SeparatorText("Switch pad output");
-    for (int i = 0; i < kSwitchButtonCount; ++i) {
-        const bool on = (live.out.buttons & hid::btn(kSwitchButtons[i].bit)) != 0;
-        ImGui::PushID(i);
-        ImGui::PushStyleColor(ImGuiCol_Button, on ? kPressed : kReleased);
-        ImGui::Button(kSwitchButtons[i].name, ImVec2(px(56.0f), 0.0f));
-        ImGui::PopStyleColor();
-        ImGui::PopID();
-        if (i % 8 != 7) ImGui::SameLine();
+    int wmode = window_mode_index(d.window_mode);
+    if (card_choice("wmode", "显示模式", "Window mode",
+                    "无边框全屏可瞬间切换且支持 F11 / Alt+Enter 快捷切换；独占全屏会直接接管显示器。",
+                    "Borderless fullscreen switches instantly (F11 / Alt+Enter). Exclusive takes over the display.",
+                    &wmode, kWindowModeZh, kWindowModeEn, kWindowModeCount)) {
+        d.window_mode = kWindowModeKeys[wmode];
+        mark(p);
     }
-    ImGui::Text("LS (%5.2f, %5.2f)   RS (%5.2f, %5.2f)", live.out.lx, live.out.ly, live.out.rx, live.out.ry);
 
-    ImGui::SeparatorText("Gamepad");
-    if (live.pads == 0) ImGui::TextUnformatted("No gamepad open.");
-    else ImGui::Text("%d open: %s", live.pads, live.pad_name.c_str());
-    ImGui::Text("Gyro: %s    Rumble: %s", yes_no(live.pad_gyro), yes_no(live.pad_rumble));
+    refresh_monitors(p);
+    {
+        std::vector<std::string> mons;
+        mons.emplace_back(tr("自动 (当前窗口所在显示器)", "Auto (current display)"));
+        for (const std::string& m : p.monitors) mons.push_back(m);
+        int mon = std::clamp(d.monitor, 0, static_cast<int>(mons.size()) - 1);
+        if (card_choice_vec("mon", "目标显示器", "Monitor",
+                            "选择窗口和全屏模式显示的物理显示器。",
+                            "Choose which physical monitor to display the game on.",
+                            &mon, mons)) {
+            d.monitor = mon;
+            mark(p);
+        }
+    }
+
+    int preset = 3;   // default 2560x1440
+    for (int i = 0; i < kSizePresetCount; ++i)
+        if (kSizePresets[i][0] == d.width && kSizePresets[i][1] == d.height) preset = i;
+    if (card_choice("wsize", "窗口尺寸 (仅窗口模式)", "Window size (windowed)",
+                    "仅控制窗口模式下的窗口边框大小（重启后会记住），不改变上方游戏 3D 分辨率。",
+                    "Windowed-mode client size (remembered on restart); does not change 3D render resolution above.",
+                    &preset, kSizeLabels, kSizeLabels, kSizePresetCount)) {
+        d.width = kSizePresets[preset][0];
+        d.height = kSizePresets[preset][1];
+        mark(p);
+    }
+
+    if (live.width > 0 && (live.width != d.width || live.height != d.height)) {
+        char cur_sz[48];
+        std::snprintf(cur_sz, sizeof cur_sz, "%d x %d", live.width, live.height);
+        if (card_button("use_cur_sz", "使用当前窗口尺寸", "Use current window size",
+                        "把当前实际窗口宽高直接填入上面的窗口尺寸设置。",
+                        "Copy the current window dimensions into the setting above.", cur_sz)) {
+            d.width = live.width;
+            d.height = live.height;
+            mark(p);
+        }
+    }
+
+    if (card_toggle("keep_ar", "保持 16:9 画面比例", "Keep 16:9 aspect ratio",
+                    "在非 16:9 屏幕上两侧/上下留黑边，避免画面拉伸变形。点击应用后实时生效。",
+                    "Letterbox / pillarbox on non-16:9 displays instead of stretching. Applies live.", &d.keep_aspect)) {
+        mark(p);
+    }
+
+    card_group("帧率与同步", "Frame Rate & Sync");
+    if (card_toggle("vsync", "垂直同步 (VSync)", "VSync",
+                    "开启（推荐）：使用 FIFO 呈现模式，消除画面撕裂并防止 AMD 显卡交换链竞态。关闭：使用 Immediate 模式以获得最低延迟。",
+                    "On (recommended on AMD): FIFO presentation prevents tearing and swapchain races. Off: lowest latency.",
+                    &d.vsync)) {
+        mark(p);
+    }
+
+    {
+        int fidx = 0;
+        for (int i = 0; i < kFpsChoiceCount; ++i)
+            if (kFpsChoices[i] == d.fps_cap) fidx = i;
+        std::vector<std::string> flabels;
+        flabels.reserve(kFpsChoiceCount);
+        for (int i = 0; i < kFpsChoiceCount; ++i) {
+            char b[48];
+            fps_label_text(kFpsChoices[i], b, sizeof b);
+            flabels.emplace_back(b);
+        }
+        if (card_choice_vec("fps_cap", "帧率上限", "Frame limit",
+                            "限制游戏运行帧率。注：在 60Hz 启动下最高封顶 60 fps（保证游戏速度正常），向下限帧（如 30 fps）实时生效。",
+                            "Caps frame rate. Note: capped at launch rate (60 fps) to preserve real-time game speed; lower caps apply live.",
+                            &fidx, flabels)) {
+            d.fps_cap = kFpsChoices[fidx];
+            mark(p);
+        }
+    }
+
+    if (live.refresh_hz > 0.0f) {
+        char vrr[48];
+        const int cap = static_cast<int>(std::floor(nxrt::suggest_vrr_cap(live.refresh_hz)));
+        std::snprintf(vrr, sizeof vrr, "%d fps", cap);
+        if (card_button("vrr_cap", "一键设为 VRR 最佳上限", "Set VRR-friendly cap",
+                        "根据当前显示器刷新率自动设为略低于刷新率的帧数上限，配合 FreeSync / G-Sync 减少输入延迟。",
+                        "Automatically sets the cap slightly below display refresh rate for FreeSync / G-Sync.", vrr)) {
+            d.fps_cap = cap;
+            mark(p);
+        }
+    }
+
+    card_group("低延迟", "Low Latency");
+    int lmode = static_cast<int>(l.mode);
+    if (card_choice("lat_mode", "低延迟模式 (Anti-Lag 2 / Reflex)", "Low latency mode",
+                    "启用 AMD Anti-Lag 2 或 NVIDIA Reflex 降低从手柄/键鼠输入到屏幕显示的延迟。",
+                    "Reduces input-to-display latency via AMD Anti-Lag 2 or NVIDIA Reflex.",
+                    &lmode, kLatencyZh, kLatencyEn, 4, true)) {
+        l.mode = static_cast<extras::LatencyMode>(lmode);
+        mark(p);
+    }
+    if (card_slider_i("lat_ahead", "预渲染帧数上限", "Frames ahead",
+                      "低延迟开启时允许提前排队的帧数。-1 为不限制，1 兼顾流畅与延迟，0 延迟最低但可能略降帧率。",
+                      "Maximum frames queued ahead when low latency is active (-1 = unlimited).",
+                      &l.frames_ahead, -1, 3, 1, "%d", true, false, tr("不限制", "No limit"))) {
+        mark(p);
+    }
+
+    pane_end(live);
 }
 
-// ---- Controls and Game --------------------------------------------------------------------------------------------------------------
+// ---- Tab 1: Graphics ----------------------------------------------------------------------------------------------------------------
+void tab_graphics(const LiveStatus& live, Page& p, float bottom_h) {
+    DisplaySettings& d = p.edit.display;
+    Game3dSettings& g3d = p.edit.game3d;
+    extras::PictureSettings& pic = p.edit.extras.picture;
+    extras::HdrSettings& hdr = p.edit.extras.hdr;
+    extras::UpscaleSettings& up = p.edit.extras.upscale;
 
-// The Controls page: the button prompt style on top, then mouse, keyboard bindings, gamepad, the Switch layout and the live status.
-void controls_page(UiHost& host, const LiveStatus& live, Page& p) {
-    prompts_row(live, p);
+    pane_begin("tab_graphics", bottom_h);
+
+    card_group("3D 超分与抗锯齿 (点击应用实时热切换)", "3D Upscaler & AA (Live Hot-Switch)");
+    {
+        int gidx = game3d_up_index(g3d);
+        if (card_choice("dlss_up", "3D 超分器 / FSR 版本", "3D Upscaler / FSR version",
+                        "直接切换 XC2 游戏内 3D 超分引擎，点「应用并保存」后无需重启立即热切换并写入 nxrt.ini。RX 6700 XT 上 4K 原生 FSR 3.1.6 稳 60fps；FSR 4.1.2 已自动开启防崩保护（4K 原生约 35fps，配 1440p->4K 更流畅）。",
+                        "Live hot-switch for XC2's 3D upscaler/AA (saves to nxrt.ini). FSR 3.1.6 runs 60fps at 4K on RX 6700 XT; FSR 4.1.2 auto-enables crash protection.",
+                        &gidx, kGame3dUpZh, kGame3dUpEn, kGame3dUpCount, false, true)) {
+            set_game3d_up_index(g3d, gidx);
+            mark(p);
+        }
+        if (card_slider_f("dlss_sharp", "3D 超分锐度 (FSR RCAS)", "3D Upscaler sharpness",
+                          "控制 FSR 3.1.6 / 4.1.2 / 2.3.4 内置锐化强度（0.00 关闭，1.00 最强，推荐 0.40 ~ 0.60），点应用后实时生效且不卡顿。",
+                          "FSR RCAS sharpening strength (0.00 off, 1.00 max, 0.40-0.60 recommended). Applies live.",
+                          &g3d.sharpness, 0.0, 1.0, 0.05, "%.2f", false, true)) {
+            mark(p);
+        }
+    }
+
+    card_group("画面色调 (拖动实时生效)", "Colour Grading (Live)");
+    if (card_button("pic_neutral", "恢复原版色调", "Preset: Neutral",
+                    "将对比度、饱和度、黑位、伽马恢复为游戏原始输出，实时生效。",
+                    "Resets contrast, saturation, black level and gamma to untouched game output.",
+                    pic.neutral() ? tr("当前", "Active") : "")) {
+        if (extras::picture_preset("neutral", &pic)) {
+            extras::set_picture_live(pic);
+            mark(p);
+        }
+    }
+    if (card_button("pic_vivid", "鲜艳通透预设", "Preset: Vivid",
+                    "适度提升通透度：对比度 1.10、饱和度 1.15、黑位 -0.03，可有效消除画面灰蒙感，实时生效。",
+                    "Modest boost: contrast 1.10, saturation 1.15, black level -0.03. Live preview.")) {
+        if (extras::picture_preset("vivid", &pic)) {
+            extras::set_picture_live(pic);
+            mark(p);
+        }
+    }
+    if (card_slider_f("pic_con", "对比度", "Contrast",
+                      "拉大明暗反差。1.00 为游戏原版默认值，修改时画面实时变化。",
+                      "Spreads tones from mid-grey; 1.00 is untouched. Applies live.",
+                      &pic.contrast, 0.50, 1.50, 0.02, "%.2f", false, true)) {
+        extras::set_picture_live(pic);
+        mark(p);
+    }
+    if (card_slider_f("pic_sat", "饱和度", "Saturation",
+                      "调整画面色彩鲜艳程度。0.00 为黑白，1.00 为原版，推荐 1.00~1.20。",
+                      "Colour intensity; 1.00 is untouched. Applies live.",
+                      &pic.saturation, 0.00, 2.00, 0.05, "%.2f", false, true)) {
+        extras::set_picture_live(pic);
+        mark(p);
+    }
+    if (card_slider_f("pic_blk", "黑位调整", "Black level",
+                      "设为负值（如 -0.03）可压暗发灰的暗部，让夜景和阴影更通透；0.00 为原版。",
+                      "Negative pulls hazy shadows toward pure black; 0.00 is untouched.",
+                      &pic.black, -0.25, 0.25, 0.01, "%+.2f", false, true)) {
+        extras::set_picture_live(pic);
+        mark(p);
+    }
+    if (card_slider_f("pic_gam", "伽马亮度", "Gamma",
+                      "调整中间调亮度：大于 1.00 画面更亮，小于 1.00 更暗，不影响纯黑和纯白。",
+                      "Mid-tone brightness; 1.00 is untouched.",
+                      &pic.gamma, 0.50, 2.00, 0.05, "%.2f", false, true)) {
+        extras::set_picture_live(pic);
+        mark(p);
+    }
+
+    card_group("贴图与渲染优化", "Textures & Rendering");
+    int aniso = 0;
+    for (int i = 0; i < kAnisoCount; ++i)
+        if (kAnisoValues[i] == d.anisotropy) aniso = i;
+    if (card_choice("aniso", "各向异性过滤", "Anisotropic filtering",
+                    "大幅提升地面、石板和远景斜向贴图的清晰度，几乎无性能损耗（推荐 8x 或 16x）。",
+                    "Sharpens angled ground and distant textures at almost zero GPU cost (8x/16x recommended).",
+                    &aniso, kAnisoZh, kAnisoEn, kAnisoCount)) {
+        d.anisotropy = kAnisoValues[aniso];
+        mark(p);
+    }
+    if (card_slider_f("lod_bias", "贴图 LOD 偏移", "Texture LOD bias",
+                      "负值（如 -0.50）会优先选用更清晰的贴图细节，正值更柔和。原生 1440p / 4K 下 0.00 ~ -0.50 最佳。",
+                      "Negative values select sharper mip levels; 0.00 to -0.50 is ideal at 1440p / 4K.",
+                      &d.lod_bias, -2.0, 2.0, 0.25, "%+.2f")) {
+        mark(p);
+    }
+    int astc = 1;
+    for (int i = 0; i < kAstcCount; ++i)
+        if (d.astc_quality == kAstcValues[i]) astc = i;
+    if (card_choice("astc", "ASTC 贴图转码质量", "ASTC texture quality",
+                    "PC 显卡不支持主机 ASTC 压缩，需转码为 BC7。「高质量」会在后台精编并缓存到磁盘，画质与显存最均衡。",
+                    "Converts Switch ASTC textures to BC7. High re-encodes cleanly in background and caches to disk.",
+                    &astc, kAstcZh, kAstcEn, kAstcCount, true)) {
+        d.astc_quality = kAstcValues[astc];
+        mark(p);
+    }
+    if (card_toggle("prewarm", "后台着色器预热", "Shader pipeline prewarm",
+                    "启动时在后台提前编译历史记录的渲染管线，大幅减少跑图进新区域时的首次编译卡顿。",
+                    "Precompiles previously seen pipelines on background threads to reduce area-load stutter.",
+                    &d.shader_prewarm, true)) {
+        mark(p);
+    }
+    if (card_toggle("fast_vram", "显存镜像加速", "Faster GPU memory",
+                    "在独立显存保留常用缓冲副本（需额外最多 2 GiB 显存）。nxrt.ini 中的 [nvn] 设置优先于此项。",
+                    "Keeps device-local copies of frequently read buffers. [nvn] in nxrt.ini takes priority.",
+                    &d.fast_gpu_memory, true)) {
+        mark(p);
+    }
+    if (card_toggle("barriers", "精简管线屏障", "Fewer GPU waits",
+                    "减少冗余渲染屏障以略微提升性能；如遇老驱动花屏可关闭（使用完整屏障）。",
+                    "Reduces redundant barriers for slightly higher speed; turn off if driver artifacts appear.",
+                    &d.fewer_gpu_waits, true)) {
+        mark(p);
+    }
+
+    card_group("后处理窗口缩放锐化 (可选)", "Post-Present Spatial Upscale (Optional)");
+    {
+        int sidx = 0;
+        for (int i = 0; i < kSpatialUpCount; ++i)
+            if (kSpatialUpModes[i] == up.mode) sidx = i;
+        if (card_choice("up_mode", "窗口空间锐化器", "Spatial window sharpener",
+                        "仅当游戏输出分辨率低于屏幕/窗口尺寸时触发（例如 1080p/1440p 游戏拉伸到 4K 全屏）；1:1 真原生输出时保持关闭即可。",
+                        "Applies FSR 1 or NIS when upscaling a smaller game output to a larger window (no-op at 1:1 native).",
+                        &sidx, kSpatialUpZh, kSpatialUpEn, kSpatialUpCount)) {
+            up.mode = kSpatialUpModes[sidx];
+            mark(p);
+        }
+    }
+    if (up.mode == extras::UpscaleMode::Fsr1 || up.mode == extras::UpscaleMode::Nis) {
+        if (card_slider_f("up_sharp", "空间锐化强度", "Spatial sharpness",
+                          "调整 FSR 1 / NIS 窗口后处理锐化强度（0.00 关闭，1.00 最强）。",
+                          "Sharpening strength for post-present FSR 1 / NIS.",
+                          &up.sharpness, 0.0, 1.0, 0.05, "%.2f")) {
+            mark(p);
+        }
+    }
+
+    card_group("HDR 高动态范围输出", "HDR Output");
+    int hmode = static_cast<int>(hdr.mode);
+    if (card_choice("hdr_mode", "HDR 模式", "HDR mode",
+                    "开启需显示器及 Windows 系统均开启 HDR。「Switch 2 原生 HDR」使用游戏原版 HDR 色调映射参数。",
+                    "Requires an HDR display with Windows HDR enabled.",
+                    &hmode, kHdrModeZh, kHdrModeEn, 4, true)) {
+        hdr.mode = static_cast<extras::HdrMode>(hmode);
+        mark(p);
+    }
+    int hfmt = static_cast<int>(hdr.format);
+    if (card_choice("hdr_fmt", "HDR 信号格式", "HDR format",
+                    "发送给显示器的信号格式：HDR10 或 scRGB，自动会优先选用显示器原生支持的 HDR10。",
+                    "Signal format sent to display (HDR10 or scRGB).",
+                    &hfmt, kHdrFmtZh, kHdrFmtEn, 3, true)) {
+        hdr.format = static_cast<extras::HdrFormat>(hfmt);
+        mark(p);
+    }
+    int peak = static_cast<int>(std::lround(hdr.peak_nits));
+    if (card_slider_i("hdr_peak", "HDR 峰值亮度", "HDR peak brightness",
+                      "高光能达到的最大亮度（尼特），设为自动则直接读取显示器上报的峰值亮度。",
+                      "Maximum highlight brightness in nits (Auto reads display capability).",
+                      &peak, 0, 2000, 50, "%d nits", false, false, tr("自动", "Auto"), 200)) {
+        hdr.peak_nits = peak;
+        mark(p);
+    }
+    int paper = static_cast<int>(std::lround(hdr.paper_white_nits));
+    if (card_slider_i("hdr_paper", "HDR 纸白亮度", "HDR paper white",
+                      "普通白色与 UI 的亮度（尼特），自动会跟随 Windows SDR 内容亮度设置。",
+                      "Standard white & UI luminance in nits.",
+                      &paper, 0, 500, 10, "%d nits", false, false, tr("自动", "Auto"), 80)) {
+        hdr.paper_white_nits = paper;
+        mark(p);
+    }
+    if (card_slider_f("hdr_boost", "HDR 高光增强", "HDR highlight boost",
+                      "控制高光向峰值亮度扩展的幅度，0.00 接近 SDR，1.00 标准 HDR。",
+                      "Expands highlights toward peak brightness.",
+                      &hdr.highlight_boost, 0.0, 2.0, 0.10, "%.2f")) {
+        mark(p);
+    }
+
+    pane_end(live);
+}
+
+// ---- Tab 2: Audio -------------------------------------------------------------------------------------------------------------------
+void tab_audio(const LiveStatus& live, Page& p, float bottom_h) {
+    AudioSettings& a = p.edit.audio;
+    if (!p.audio_loaded) load_audio_devices(p);
+
+    pane_begin("tab_audio", bottom_h);
+
+    card_group("音量控制", "Volume");
+    int vol_pct = static_cast<int>(std::lround(a.volume * 100.0));
+    if (card_slider_i("vol", "主音量", "Master volume",
+                      "控制游戏整体输出音量（0% 静音 ~ 100% 满音量）。",
+                      "Master audio output gain (0% to 100%).",
+                      &vol_pct, 0, 100, 5, "%d%%")) {
+        a.volume = std::clamp(vol_pct, 0, 100) / 100.0;
+        mark(p);
+    }
+    if (card_toggle("mute_bg", "切出窗口时自动静音", "Mute when unfocused",
+                    "当你 Alt+Tab 切换到桌面或其他软件时自动静音，切回游戏自动恢复。",
+                    "Automatically mutes game audio when the window loses focus.", &a.mute_unfocused)) {
+        mark(p);
+    }
+
+    card_group("输出设备", "Output Device");
+    {
+        std::vector<std::string> devs;
+        devs.emplace_back(tr("系统默认设备", "System default"));
+        int cur = 0;
+        for (std::size_t i = 0; i < p.audio_devices.size(); ++i) {
+            devs.push_back(p.audio_devices[i]);
+            if (a.device == p.audio_devices[i]) cur = static_cast<int>(i) + 1;
+        }
+        if (card_choice_vec("adev", "音频输出设备", "Output device",
+                            "选择播放游戏声音的扬声器或耳机设备。更改输出设备需重启游戏生效。",
+                            "Selects the audio output device (takes effect on next launch).",
+                            &cur, devs, true)) {
+            a.device = cur == 0 ? "default" : p.audio_devices[static_cast<std::size_t>(cur - 1)];
+            mark(p);
+        }
+    }
+    {
+        char cnt[48];
+        std::snprintf(cnt, sizeof cnt, tr("共 %d 个设备", "%d devices"), static_cast<int>(p.audio_devices.size()));
+        if (card_button("refresh_audio", "刷新音频设备列表", "Refresh audio devices",
+                        "如果刚插入耳机或切换了声卡，点击此项重新扫描可用输出设备。",
+                        "Rescans available Windows audio output devices.", cnt)) {
+            load_audio_devices(p);
+            set_notice(p, tr("音频设备列表已刷新", "Audio device list refreshed"), false);
+        }
+    }
+
+    pane_end(live);
+}
+
+// ---- Tab 3: Controls ----------------------------------------------------------------------------------------------------------------
+void tab_controls(UiHost& host, const LiveStatus& live, Page& p, float bottom_h) {
+    (void)host;
+    PadSettings& pad = p.edit.pad;
+
+    pane_begin("tab_controls", bottom_h);
+
+    card_group("手柄参数设置 (应用后实时生效)", "Gamepad Tuning (Live)");
+    if (card_toggle("abxy_lbl", "按键按标识映射 (Xbox A = Switch A)", "Buttons by label (A=A)",
+                    "开启：Xbox 手柄下键 A 对应 Switch A（确认）、右键 B 对应取消。关闭：按任天堂物理位置，右键对应 A（确认）、下键对应 B（取消）。",
+                    "On: Xbox bottom A acts as Switch A. Off: Nintendo positional layout (east button = Switch A).",
+                    &pad.label_abxy, false, true)) {
+        mark(p);
+    }
+    if (card_slider_f("ls_dz", "左摇杆死区", "Left stick dead zone",
+                      "过滤左摇杆（移动）中心轻微漂移，数值越大需要推得越远才开始响应。",
+                      "Filters minor left-stick drift near centre.", &pad.stick_deadzone, 0.0, 0.50, 0.02, "%.2f", false, true)) {
+        mark(p);
+    }
+    if (card_slider_f("rs_dz", "右摇杆死区", "Right stick dead zone",
+                      "过滤右摇杆（旋转视角）中心轻微漂移。",
+                      "Filters minor right-stick drift near centre.", &pad.right_deadzone, 0.0, 0.50, 0.02, "%.2f", false, true)) {
+        mark(p);
+    }
+    if (card_slider_f("look_s", "右摇杆视角灵敏度", "Right-stick look sensitivity",
+                      "控制手柄右摇杆旋转镜头的速度倍率（0.25x ~ 3.00x，实时生效）。",
+                      "Multiplier for right-stick camera rotation speed (0.25x - 3.00x).", &pad.look_sens, 0.25, 3.00, 0.05, "%.2fx", false, true)) {
+        mark(p);
+    }
+    if (card_toggle("pad_invy", "反转手柄垂直视角", "Invert right-stick Y",
+                    "开启后右摇杆向上推会向下看（实时生效）。",
+                    "Pushing right stick up looks down (applies live).", &pad.invert_y, false, true)) {
+        mark(p);
+    }
+    if (card_toggle("rumble", "手柄震动反馈", "Controller rumble",
+                    "开启或关闭游戏内对手柄发送的震动反馈（实时生效）。",
+                    "Enables or disables gamepad vibration (applies live).", &pad.rumble, false, true)) {
+        mark(p);
+    }
+    if (card_slider_f("rumble_s", "震动强度", "Rumble strength",
+                      "调整手柄震动的强弱（0.00x 静音 ~ 1.00x 标准强度，实时生效）。",
+                      "Scales gamepad vibration intensity (0.00x - 1.00x).", &pad.rumble_scale, 0.0, 1.0, 0.10, "%.2fx", false, true)) {
+        mark(p);
+    }
+
     ImGui::Spacing();
-    if (ImGui::BeginTabBar("controls_tabs")) {
-        if (ImGui::BeginTabItem("Mouse")) {
-            mouse_tab(p);
-            ImGui::EndTabItem();
+    if (ImGui::CollapsingHeader(tr("实时手柄 / 键盘输入状态测试", "Live Switch Pad Monitor"), ImGuiTreeNodeFlags_DefaultOpen)) {
+        for (int i = 0; i < kSwitchButtonCount; ++i) {
+            const bool on = (live.out.buttons & hid::btn(kSwitchButtons[i].bit)) != 0;
+            ImGui::PushID(i);
+            ImGui::PushStyleColor(ImGuiCol_Button, on ? kPressed : kReleased);
+            ImGui::Button(kSwitchButtons[i].name, ImVec2(px(58.0f), 0.0f));
+            ImGui::PopStyleColor();
+            ImGui::PopID();
+            if (i % 8 != 7) ImGui::SameLine();
         }
-        if (ImGui::BeginTabItem("Keyboard and mouse buttons")) {
-            bindings_tab(host, p);
-            ImGui::EndTabItem();
+        ImGui::Text("LS (%.2f, %.2f)   RS (%.2f, %.2f)", live.out.lx, live.out.ly, live.out.rx, live.out.ry);
+    }
+
+    card_group("当前键位速查表 (实时映射)", "Active Controls Reference");
+    card_button("kb_move", "角色移动 (左摇杆)", "Move (Left Stick)",
+                "键盘 WASD 或方向键控制左摇杆移动；连接手柄后直接用左摇杆。",
+                "Keyboard WASD or Arrow keys control Left Stick.", "WASD / 方向键");
+    card_button("kb_cam", "旋转视角 (右摇杆)", "Camera (Right Stick)",
+                "键盘 I / J / K / L 控制视角转动；连接手柄后直接用右摇杆。",
+                "Keyboard I / J / K / L control Right Stick camera.", "I / J / K / L");
+    card_button("kb_abxy", "确认 / 取消 / 功用键 (A B X Y)", "Face Buttons (A B X Y)",
+                "空格或回车 = A（确认），退格或 Esc = B（取消），U = X（快传/菜单），O = Y。",
+                "Space/Enter = A, Backspace/Esc = B, U = X, O = Y.", "Space / Back / U / O");
+    card_button("kb_shld", "肩键与扳机 (L / R / ZL / ZR)", "Shoulders & Triggers",
+                "Q = L，E = R，数字键 1 = ZL，数字键 2 = ZR。",
+                "Q = L, E = R, 1 = ZL, 2 = ZR.", "Q / E / 1 / 2");
+    card_button("kb_sys", "菜单 / 地图 / 摇杆下压", "PLUS / MINUS / L3 / R3",
+                "Tab 或 + = PLUS（主菜单），- = MINUS，Shift = 左摇杆按下，Ctrl = 右摇杆按下；手柄同时按 - 与 + 可呼出本 F1 菜单。",
+                "Tab/+ = PLUS, - = MINUS, Shift/Ctrl = L3/R3. Gamepad MINUS + PLUS toggles F1 menu.", "Tab / - / Shift / Ctrl");
+
+    pane_end(live);
+}
+
+// ---- Tab 4: Overlay, Hotkeys & Language ---------------------------------------------------------------------------------------------
+void tab_overlay(UiHost& host, const LiveStatus& live, Page& p, float bottom_h) {
+    const FpsSettings fps = host.settings().fps;
+
+    pane_begin("tab_overlay", bottom_h);
+
+    card_group("帧率与性能监控 (实时生效)", "Performance Overlay (Live)");
+    bool show = fps.show;
+    if (card_toggle("fps_show", "显示帧率监控", "Show FPS counter",
+                    "在屏幕角落实时显示当前帧率，也可随时按 F10 开关。",
+                    "Shows a live frame rate counter in the corner (hotkey F10).", &show, false, true)) {
+        FpsSettings f = fps;
+        f.show = show;
+        set_fps_live(host, f);
+    }
+
+    int corner = static_cast<int>(fps.corner);
+    if (card_choice("fps_corner", "监控显示位置", "Overlay corner",
+                    "选择帧率监控卡片停靠在屏幕的哪一个角落。",
+                    "Selects which corner displays the FPS counter.",
+                    &corner, kCornerZh, kCornerEn, kCornerCount, false, true)) {
+        FpsSettings f = fps;
+        f.corner = static_cast<Corner>(corner);
+        set_fps_live(host, f);
+    }
+
+    int detail = std::clamp(fps.detail, 0, kFpsDetailCount - 1);
+    if (card_choice("fps_detail", "监控信息详细度", "Counter detail",
+                    "可选仅显示 FPS、简洁统计，或开启「详细性能监控面板」实时查看 GPU/显存/CPU/内存、帧时间曲线、渲染管线耗时与当前分辨率/超分状态。",
+                    "Choose compact FPS-only counter or the full Detailed Performance HUD (GPU/VRAM/CPU/RAM, frame-time graph, pipeline timings, resolution & scaling).",
+                    &detail, kFpsDetailZh, kFpsDetailEn, kFpsDetailCount, false, true)) {
+        FpsSettings f = fps;
+        f.detail = detail;
+        set_fps_live(host, f);
+    }
+
+    bool in_shots = fps.in_screenshots;
+    if (card_toggle("fps_shots", "截图时包含帧率监控", "Include counter in screenshots",
+                    "关闭（推荐）：按 F12 截图时会保存纯净无遮挡的游戏画面。",
+                    "Off (recommended) keeps F12 screenshots clean without the FPS counter.", &in_shots, false, true)) {
+        FpsSettings f = fps;
+        f.in_screenshots = in_shots;
+        set_fps_live(host, f);
+    }
+
+    {
+        const std::string key = input_name(fps.key);
+        const char* right = p.fps_capture ? tr("请按键盘按键...", "Press a key...") : (key.empty() ? "F10" : key.c_str());
+        if (card_button("fps_key", "更改帧率监控快捷键", "Change FPS hotkey",
+                        "点击后按任意键盘按键即可替换默认的 F10 帧率开关快捷键，按 Esc 取消。",
+                        "Click and press any keyboard key to rebind the FPS overlay toggle.", right)) {
+            stop_rebind(host, p);
+            p.fps_capture = true;
+            host.begin_capture();
         }
-        if (ImGui::BeginTabItem("Gamepad")) {
-            pad_tab(live, p);
-            ImGui::EndTabItem();
+    }
+
+    card_group("菜单外观与语言", "Menu & Language");
+    {
+        static const char* const kLangs[] = {"简体中文", "English"};
+        int lang = g_zh ? 0 : 1;
+        if (card_choice("menu_lang", "菜单界面语言", "Menu language",
+                        "在简体中文与英文之间实时切换当前 F1 设置菜单的显示语言，并自动保存到 controls.ini。",
+                        "Switches the F1 settings menu between Simplified Chinese and English (saved automatically).",
+                        &lang, kLangs, kLangs, 2, false, true)) {
+            g_zh = (lang == 0);
+            FpsSettings f = fps;
+            f.menu_lang = g_zh ? "zh" : "en";
+            set_fps_live(host, f);
         }
-        if (ImGui::BeginTabItem("Switch layout")) {
-            if (!p.out_tab_open) refresh_out_text(p);
-            p.out_tab_open = true;
-            switch_tab(p);
-            ImGui::EndTabItem();
+    }
+
+    card_group("常用快捷键速查", "Hotkeys Reference");
+    card_button("hk_f1", "打开 / 关闭系统设置菜单", "Toggle settings menu",
+                "随时唤出或隐藏本设置菜单；菜单打开期间自动屏蔽游戏内按键输入，防止误操作。手柄按 - + + 也可呼出。",
+                "Opens or closes this menu while blocking game input. Gamepad: Minus + Plus.", "F1 / Esc");
+    card_button("hk_f10", "开关帧率性能监控", "Toggle FPS counter",
+                "随时在右上角显示或隐藏实时帧率与帧时间监控。",
+                "Toggles the live corner FPS overlay.", "F10");
+    card_button("hk_f11", "切换全屏 / 窗口模式", "Toggle fullscreen",
+                "在无边框全屏与窗口模式之间瞬间切换。",
+                "Instantly toggles borderless fullscreen and windowed mode.", "F11 / Alt+Enter");
+    card_button("hk_f12", "保存无损 PNG 截图", "Save PNG screenshot",
+                "将当前原生高清画面保存为无损 PNG 到 xc2/build/boot/shots_manual/ 目录。",
+                "Saves a lossless PNG screenshot into shots_manual/.", "F12");
+
+    pane_end(live);
+}
+
+// ---- Tab bar helper -----------------------------------------------------------------------------------------------------------------
+void draw_category_tabs(Page& p) {
+    struct TabDef {
+        const char* zh;
+        const char* en;
+    };
+    static const TabDef kTabs[] = {
+        {"显示", "Display"},
+        {"画质", "Graphics"},
+        {"音频", "Audio"},
+        {"控制", "Controls"},
+        {"界面与快捷键", "Overlay"},
+    };
+    constexpr int kTabCount = static_cast<int>(sizeof kTabs / sizeof kTabs[0]);
+
+    const float total_w = ImGui::GetContentRegionAvail().x;
+    const float gap = px(8.0f);
+    const float btn_w = (total_w - gap * (kTabCount - 1)) / static_cast<float>(kTabCount);
+    const float btn_h = px(38.0f);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    for (int i = 0; i < kTabCount; ++i) {
+        if (i > 0) ImGui::SameLine(0.0f, gap);
+        const bool sel = (p.active_tab == i);
+        const ImVec2 pos = ImGui::GetCursorScreenPos();
+        ImGui::PushID(i);
+        const bool clicked = ImGui::InvisibleButton("##cat_tab", ImVec2(btn_w, btn_h));
+        const bool hov = ImGui::IsItemHovered();
+        const bool foc = ImGui::IsItemFocused();
+        ImGui::PopID();
+        if (clicked) {
+            p.active_tab = i;
+            g_pane.shown.valid = false;
+        }
+        const ImU32 bg = sel ? IM_COL32(28, 86, 102, 235)
+                             : (hov || foc) ? IM_COL32(24, 64, 82, 195) : IM_COL32(12, 24, 40, 175);
+        dl->AddRectFilled(pos, ImVec2(pos.x + btn_w, pos.y + btn_h), bg, px(8.0f));
+        if (sel) {
+            dl->AddRect(pos, ImVec2(pos.x + btn_w, pos.y + btn_h), kColGold, px(8.0f), 0, 1.5f);
+            dl->AddRectFilled(ImVec2(pos.x + px(14.0f), pos.y + btn_h - px(3.0f)),
+                              ImVec2(pos.x + btn_w - px(14.0f), pos.y + btn_h), kColGold, px(2.0f));
         } else {
-            p.out_tab_open = false;
+            dl->AddRect(pos, ImVec2(pos.x + btn_w, pos.y + btn_h), IM_COL32(65, 130, 150, 65), px(8.0f), 0, 1.0f);
         }
-        if (ImGui::BeginTabItem("Status")) {
-            status_tab(live);
-            ImGui::EndTabItem();
-        }
-        ImGui::EndTabBar();
+        const char* lbl = tr(kTabs[i].zh, kTabs[i].en);
+        const ImVec2 ts = ImGui::CalcTextSize(lbl);
+        dl->AddText(ImVec2(pos.x + (btn_w - ts.x) * 0.5f, pos.y + (btn_h - ts.y) * 0.5f),
+                    sel ? kColGold : kColWhite, lbl);
+    }
+
+    // L1 / R1 gamepad shoulder buttons switch tabs cleanly
+    if (ImGui::IsKeyPressed(ImGuiKey_GamepadL1, false)) {
+        p.active_tab = (p.active_tab + kTabCount - 1) % kTabCount;
+        g_pane.shown.valid = false;
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_GamepadR1, false)) {
+        p.active_tab = (p.active_tab + 1) % kTabCount;
+        g_pane.shown.valid = false;
     }
 }
 
@@ -1357,59 +1322,108 @@ void draw_settings_page(UiHost& host) {
     if (!p.loaded) {
         p.edit = host.settings();
         p.edit.fps = host.settings().fps;
+        g_zh = (p.edit.fps.menu_lang != "en");
         refresh_out_text(p);
         p.loaded = true;
     }
     poll_capture(host, p);
     const LiveStatus live = host.status();
 
-    if (host.capturing()) ImGui::TextColored(kYellow, "Press the key or mouse button for the binding, Escape cancels");
-    else if (!p.notice.empty()) ImGui::TextColored(p.notice_warn ? kOrange : ImVec4(0.6f, 0.9f, 0.6f, 1.0f), "%s", p.notice.c_str());
-    ImGui::TextDisabled("Settings file: %s", host.settings_path().c_str());
-    if (p.dirty) {
-        ImGui::SameLine();
-        ImGui::TextColored(kOrange, "unsaved changes");
-    }
-    if (ImGui::Button("Apply and save")) apply_now(host, p);
-    tip("Applies the changes to the running game (items marked 'restart' wait for the next start) and writes them to the settings file.");
-    ImGui::SameLine();
-    if (ImGui::Button("Revert")) revert_to_saved(host, p);
-    tip("Drops the changes made since the last Apply and save.");
-    ImGui::SameLine();
-    if (ImGui::Button("Factory defaults")) load_factory(host, p);
-    tip("Loads the factory settings into the page. Nothing changes until Apply and save.");
-    ImGui::Separator();
+    draw_category_tabs(p);
+    ImGui::Dummy(ImVec2(0.0f, px(6.0f)));
 
-    ImGui::PushItemWidth(std::max(px(200.0f), ImGui::GetContentRegionAvail().x * 0.42f));
-    if (ImGui::BeginTabBar("settings_pages")) {
-        if (ImGui::BeginTabItem("Display")) {
-            display_page(host, live, p);
-            ImGui::EndTabItem();
-        }
-        if (ImGui::BeginTabItem("Graphics")) {
-            graphics_page(p);
-            ImGui::EndTabItem();
-        }
-        if (ImGui::BeginTabItem("Controls")) {
-            controls_page(host, live, p);
-            ImGui::EndTabItem();
-        }
-        if (ImGui::BeginTabItem("Audio")) {
-            audio_page(p);
-            ImGui::EndTabItem();
-        }
-        if (const GamePlay* gp = game_play(); gp && gp->tweaks_tab && ImGui::BeginTabItem("Game")) {   // the game's optional looks and start-up tweaks
-            if (gp->tweaks_tab(p.edit)) mark(p);
-            if (fastboot_ui(p.edit.fastboot)) mark(p);   // start-up and menu tweaks (play_ui_fastboot.cpp)
-            ImGui::EndTabItem();
-        }
-        if (ImGui::BeginTabItem("About")) {
-            draw_about_page(host.settings_path());
-            ImGui::EndTabItem();
-        }
-        ImGui::EndTabBar();
+    const float bottom_h = px(56.0f);
+    switch (p.active_tab) {
+        case 0: tab_display(live, p, bottom_h); break;
+        case 1: tab_graphics(live, p, bottom_h); break;
+        case 2: tab_audio(live, p, bottom_h); break;
+        case 3: tab_controls(host, live, p, bottom_h); break;
+        default: tab_overlay(host, live, p, bottom_h); break;
     }
-    ImGui::PopItemWidth();
+
+    // Pinned bottom action bar
+    ImGui::Separator();
+    ImGui::Dummy(ImVec2(0.0f, px(3.0f)));
+
+    if (p.dirty) {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.14f, 0.50f, 0.46f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.18f, 0.64f, 0.58f, 1.0f));
+    }
+    if (ImGui::Button(tr("应用并保存", "Apply & Save"), ImVec2(px(138.0f), px(34.0f)))) apply_now(host, p);
+    if (p.dirty) ImGui::PopStyleColor(2);
+
+    ImGui::SameLine();
+    if (ImGui::Button(tr("放弃修改", "Revert"), ImVec2(px(108.0f), px(34.0f)))) revert_to_saved(host, p);
+    ImGui::SameLine();
+    if (ImGui::Button(tr("恢复默认", "Defaults"), ImVec2(px(108.0f), px(34.0f)))) load_factory(host, p);
+
+    ImGui::SameLine(0.0f, px(16.0f));
+    if (host.capturing()) {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextColored(kGold, "%s", tr("请按下要绑定的按键，按 Esc 取消...", "Press a key to bind, Esc to cancel..."));
+    } else if (p.dirty) {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextColored(kOrange, "%s", tr("● 有未保存的修改", "● Unsaved changes"));
+    } else if (!p.notice.empty()) {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextColored(p.notice_warn ? kOrange : kEmerald, "%s", p.notice.c_str());
+    } else {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextColored(kDimText, "%s", tr("提示：鼠标悬停或方向键选中条目，右侧查看说明", "Tip: hover or select an item for details"));
+    }
+}
+
+void draw_settings_menu(UiHost& host, gfx::Overlay& ov) {
+    static bool lang_init = false;
+    if (!lang_init) {
+        lang_init = true;
+        g_zh = (host.settings().fps.menu_lang != "en");
+    }
+    static int last_frame = -2;
+    const int frame = ImGui::GetFrameCount();
+    const bool opened = frame != last_frame + 1;
+    last_frame = frame;
+    if (!opened && !host.capturing() && !ImGui::IsAnyItemActive() && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopup) &&
+        (ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false))) {
+        ov.request_hide();
+    }
+
+    const ImVec2 disp = ImGui::GetIO().DisplaySize;
+    ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0.0f, 0.0f), disp, IM_COL32(3, 8, 16, 155));
+
+    const float em = ImGui::GetFontSize();
+    const float w = std::min(disp.x - 2.5f * em, std::max(54.0f * em, disp.x * 0.74f));
+    const float h = std::min(disp.y - 2.5f * em, std::max(34.0f * em, disp.y * 0.82f));
+    ImGui::SetNextWindowPos(ImVec2(disp.x * 0.5f, disp.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(w, h), ImGuiCond_Always);
+    if (opened) ImGui::SetNextWindowFocus();
+
+    constexpr ImGuiWindowFlags kFlags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
+                                        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
+    if (ImGui::Begin("##xc2_settings_modal", nullptr, kFlags)) {
+        // Custom sleek top header bar
+        ImGui::PushStyleColor(ImGuiCol_Text, kGold);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(tr("异度神剑 2  ·  系统设置", "Xenoblade Chronicles 2  ·  Settings"));
+        ImGui::PopStyleColor();
+
+        const float close_w = px(92.0f);
+        const float lang_w = px(96.0f);
+        const float right_x = ImGui::GetWindowContentRegionMax().x;
+        ImGui::SameLine(std::max(px(260.0f), right_x - close_w - lang_w - px(10.0f)));
+        if (ImGui::Button(g_zh ? "EN / 中文" : "中文 / EN", ImVec2(lang_w, 0.0f))) {
+            g_zh = !g_zh;
+            FpsSettings f = host.settings().fps;
+            f.menu_lang = g_zh ? "zh" : "en";
+            set_fps_live(host, f);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(tr("关闭 (F1)", "Close (F1)"), ImVec2(close_w, 0.0f))) ov.request_hide();
+
+        ImGui::Dummy(ImVec2(0.0f, px(4.0f)));
+        draw_settings_page(host);
+    }
+    ImGui::End();
 }
 
 }  // namespace nxrt::play

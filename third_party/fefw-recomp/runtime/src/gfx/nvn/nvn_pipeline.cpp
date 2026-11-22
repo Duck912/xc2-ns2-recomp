@@ -438,32 +438,48 @@ static std::vector<SpvOutputSlot> missing_outputs(const ShaderInfo* producer, co
 }
 
 // The module of `producer` to use in a pipeline whose next stage is `consumer`: the translated one, or a copy with the outputs the
-// consumer reads and the producer lacks. Null on a Vulkan error.
-static VkShaderModule producer_module(const ShaderInfo* producer, const ShaderInfo* consumer, const std::vector<SpvIntSlot>& ints = {}) {
+// consumer reads and the producer lacks (and for geometry shaders, with its input primitive execution mode rewritten to match `gs_topo`).
+// Null on a Vulkan error.
+static VkShaderModule producer_module(const ShaderInfo* producer, const ShaderInfo* consumer, const std::vector<SpvIntSlot>& ints = {},
+                                      uint32_t gs_topo = 0xffu) {
     const std::vector<SpvOutputSlot> missing = missing_outputs(producer, consumer);
-    if (missing.empty() && ints.empty()) return shader_module(producer);
+    const bool check_gs = producer->stage == ShaderStage::Geometry && gs_topo != 0xffu;
+    if (missing.empty() && ints.empty() && !check_gs) return shader_module(producer);
     std::vector<uint32_t> id;
     for (const SpvOutputSlot& m : missing) id.push_back(m.location * 4 + static_cast<uint32_t>(m.type));
     for (const SpvIntSlot& n : ints) id.push_back(0x80000000u | (n.location * 2 + (n.is_signed ? 1u : 0u)));
+    if (check_gs) id.push_back(0x40000000u | gs_topo);
     std::lock_guard<std::recursive_mutex> lk(g_module_mu);
     auto it = g_variants.find({producer, id});
     if (it != g_variants.end()) return it->second;
     VkShaderModule m = VK_NULL_HANDLE;
     std::vector<uint32_t> base_words;
     const std::vector<uint32_t>* words = &producer->spirv;
+    bool gs_patched = false;
+    if (check_gs) {
+        std::vector<uint32_t> topo_words;
+        if (spirv_gs_input_topology(*words, gs_topo, topo_words)) {
+            base_words = std::move(topo_words);
+            words = &base_words;
+            gs_patched = true;
+            NXLOG_I(kTag, "%s: geometry input topology rewritten for VkPrimitiveTopology %u (%zu words)", producer->hash.c_str(), gs_topo, base_words.size());
+        }
+    }
     if (!ints.empty()) {
         // integer vertex attributes: the shader gets the raw bits the console delivers (nvn_spirv_patch.h)
-        if (!spirv_int_attributes(producer->spirv, ints, base_words)) {
+        std::vector<uint32_t> int_words;
+        if (!spirv_int_attributes(*words, ints, int_words)) {
             NXLOG_E(kTag, "%s: the integer vertex attributes could not be patched in; draws with this shader are skipped", producer->hash.c_str());
             g_variants[{producer, id}] = VK_NULL_HANDLE;
             return VK_NULL_HANDLE;
         }
+        base_words = std::move(int_words);
         words = &base_words;
-        if (missing.empty()) {
-            m = create_module(base_words, producer->hash.c_str());
-            g_variants[{producer, id}] = m;
-            return m;
-        }
+    }
+    if (missing.empty()) {
+        m = (gs_patched || !ints.empty()) ? create_module(*words, producer->hash.c_str()) : shader_module(producer);
+        g_variants[{producer, id}] = m;
+        return m;
     }
     std::vector<uint32_t> patched;
     // a passthrough geometry shader: the hardware forwards the attributes of the input vertices, the translation has no code for it
@@ -473,7 +489,7 @@ static VkShaderModule producer_module(const ShaderInfo* producer, const ShaderIn
         NXLOG_D(kTag, "%s: %zu outputs added for the next stage%s", producer->hash.c_str(), missing.size(), pass ? " (copied from the input vertices)" : "");
     } else {
         NXLOG_W(kTag, "%s: the %zu varyings the next stage reads could not be added; the unpatched module is used", producer->hash.c_str(), missing.size());
-        m = shader_module(producer);
+        m = (gs_patched || !ints.empty()) ? create_module(*words, producer->hash.c_str()) : shader_module(producer);
     }
     g_variants[{producer, id}] = m;
     return m;
@@ -675,7 +691,8 @@ bool resolve_stage_modules(const GraphicsKey& key, StageModules* out) {
             out->m[0] = m;
             continue;
         }
-        VkShaderModule m = (i == feeder && key.stage[1]) ? producer_module(key.stage[i], key.stage[1], i == 0 ? int_slots : std::vector<SpvIntSlot>())
+        VkShaderModule m = (i == 2) ? producer_module(key.stage[2], (i == feeder && key.stage[1]) ? key.stage[1] : nullptr, {}, key.topology)
+                           : (i == feeder && key.stage[1]) ? producer_module(key.stage[i], key.stage[1], i == 0 ? int_slots : std::vector<SpvIntSlot>())
                            : (i == 0 && !int_slots.empty()) ? producer_module(key.stage[i], nullptr, int_slots)
                            : (i == 1 && key.no_out)      ? no_output_module(key.stage[i])
                            : (i == 1 && key.logic_op_enable && key_int_colour(key)) ? fs_int_output_module(key.stage[i])

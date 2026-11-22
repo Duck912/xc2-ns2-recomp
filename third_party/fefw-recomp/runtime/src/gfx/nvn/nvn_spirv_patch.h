@@ -71,6 +71,13 @@ std::vector<SpvIntSlot> spirv_predict_int_inputs(const std::vector<uint32_t>& in
 // untouched) otherwise; the caller then uses spirv_add_outputs.
 bool spirv_gs_passthrough(const std::vector<uint32_t>& in, const std::vector<SpvOutputSlot>& slots, std::vector<uint32_t>& out);
 
+// Rewrites a geometry shader's input primitive ExecutionMode (InputPoints / InputLines / Triangles / ...) and the length of its
+// Input interface arrays (gl_in[], per-vertex Location inputs[]) to match `vk_topology` (VkPrimitiveTopology). Necessary because
+// console geometry shaders take their input primitive from the draw call, so the offline translator defaults to Triangles even for
+// POINT_LIST draws; passing POINT_LIST into a Triangles GS triggers AMD RDNA2 NGG hangs and screen corruption. Returns false (out
+// untouched) if the module is not a geometry shader or already matches `vk_topology`.
+bool spirv_gs_input_topology(const std::vector<uint32_t>& in, uint32_t vk_topology, std::vector<uint32_t>& out);
+
 // Moves the fragment output at Location 1 to Location 0, Index 1. False (out untouched) when the module has no such output.
 bool spirv_dual_source_output(const std::vector<uint32_t>& in, std::vector<uint32_t>& out);
 

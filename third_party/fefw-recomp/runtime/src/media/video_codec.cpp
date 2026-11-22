@@ -81,7 +81,7 @@ void movie_adec_film_end();     // movie_adec.cpp: this placeholder track ends w
 
 namespace nxrt::media {
 
-#if NXRT_HAVE_LIBVPX
+#if NXRT_HAVE_LIBVPX || NXRT_HAVE_DAV1D
 namespace {
 
 #define A(i) (c->x[i])
@@ -294,7 +294,9 @@ struct Decoder {
     uint32_t id = 0;
     int codec = 9;   // 8 VP8, 9 VP9, 10 AV1 (dav1d; the SDK 3.0.1 movie library decodes AV1)
     std::mutex mu;
+#if NXRT_HAVE_LIBVPX
     vpx_codec_ctx_t vpx{};
+#endif
     bool vpx_ok = false;
 #if NXRT_HAVE_DAV1D
     Dav1dContext* av1 = nullptr;
@@ -404,6 +406,7 @@ bool fence_done(uint64_t w0, uint64_t seq) {
     return s.filled && s.filled_gen >= gen;
 }
 
+#if NXRT_HAVE_LIBVPX
 bool vpx_open(Decoder& d) {
     vpx_codec_dec_cfg_t cfg{};
     cfg.threads = static_cast<unsigned>(g_threads);
@@ -416,6 +419,14 @@ void vpx_close(Decoder& d) {
     if (d.vpx_ok) vpx_codec_destroy(&d.vpx);
     d.vpx_ok = false;
 }
+#else
+bool vpx_open(Decoder& d) {
+    note_error("decoder %u: VP%d requested but runtime was built without libvpx", d.id, d.codec);
+    d.vpx_ok = false;
+    return false;
+}
+void vpx_close(Decoder& d) { d.vpx_ok = false; }
+#endif
 #if NXRT_HAVE_DAV1D
 void av1_close(Decoder& d) {
     if (d.av1) dav1d_close(&d.av1);
@@ -467,6 +478,7 @@ std::vector<uint64_t> take_reached(uint32_t dec, uint64_t /*done*/) {
 }
 
 // ---- picture conversion -----------------------------------------------------------------------------------------------------------
+#if NXRT_HAVE_LIBVPX
 Picture to_nv12(const vpx_image_t* img, int64_t pts) {
     Picture p;
     p.w = static_cast<uint16_t>((img->d_w + 1) & ~1u);
@@ -488,6 +500,7 @@ Picture to_nv12(const vpx_image_t* img, int64_t pts) {
     }
     return p;
 }
+#endif
 
 // Copies `p` into the pool's image. The picture decides the pool's size: the preference the library computed is not needed for
 // the copy, and the frame properties reported to it come from the same picture, so a stale or rounded preference cannot crop it.
@@ -826,6 +839,7 @@ void decode_into(Decoder& d, const uint8_t* data, size_t size, int64_t pts, std:
         return;
     }
 #endif
+#if NXRT_HAVE_LIBVPX
     if (!d.vpx_ok && !vpx_open(d)) return;
     const vpx_codec_err_t e = vpx_codec_decode(&d.vpx, data, static_cast<unsigned>(size), nullptr, 0);
     if (e != VPX_CODEC_OK)
@@ -845,6 +859,9 @@ void decode_into(Decoder& d, const uint8_t* data, size_t size, int64_t pts, std:
         out.push_back(std::move(p));
         s_decoded++;
     }
+#else
+    note_error("decoder %u: VP%d packet received but runtime was built without libvpx", d.id, d.codec);
+#endif
 }
 
 // ---- nn::codec handlers -----------------------------------------------------------------------------------------------------------
@@ -1091,7 +1108,11 @@ void create_decoder(::Ctx* c, int codec, uint32_t w, uint32_t h) {
         NXLOG_I("vcodec", "AV1 decoder %u created (%ux%u max) on dav1d %s (%d threads)", d->id, w, h, dav1d_version(), g_threads);
     else
 #endif
+#if NXRT_HAVE_LIBVPX
         NXLOG_I("vcodec", "VP%d decoder %u created (%ux%u max) on libvpx %s", codec, d->id, w, h, vpx_codec_version_str());
+#else
+        NXLOG_W("vcodec", "VP%d decoder %u created (%ux%u max) without libvpx", codec, d->id, w, h);
+#endif
     RET(0);
 }
 void init_vp9_tm(::Ctx* c) { create_decoder(c, 9, static_cast<uint16_t>(A(4)), static_cast<uint16_t>(A(5))); }
@@ -1918,9 +1939,12 @@ bool install_video_codec_hle() {
             module_override_symbol(im.name);
         }
         g_enabled = true;
-#if NXRT_HAVE_DAV1D
+#if NXRT_HAVE_LIBVPX && NXRT_HAVE_DAV1D
         NXLOG_I("vcodec", "nn::codec VP9/VP8 (libvpx %s) and AV1 (dav1d %s) decoders on the host (%d threads): %zu imports routed",
                 vpx_codec_version_str(), dav1d_version(), g_threads, sizeof kImports / sizeof kImports[0]);
+#elif NXRT_HAVE_DAV1D
+        NXLOG_I("vcodec", "nn::codec AV1 decoder on the host (dav1d %s, %d threads; built without libvpx): %zu imports routed",
+                dav1d_version(), g_threads, sizeof kImports / sizeof kImports[0]);
 #else
         NXLOG_I("vcodec", "nn::codec VP9/VP8 decoders on the host (libvpx %s, %d threads): %zu imports routed", vpx_codec_version_str(), g_threads,
                 sizeof kImports / sizeof kImports[0]);

@@ -521,7 +521,7 @@ std::vector<TraceDrawRec> g_trace_recs;
 // after the frame ("occ #<draw> <samples> samples"). A draw that the game submitted but whose fragments the depth, stencil or alpha test
 // all killed shows 0 samples, which is what separates "the game never submitted this piece" from "we drew it and lost it" - the question a
 // hole in the frame leaves open (HANDOVER 18.7/19). Costs one query per draw for the traced frame only.
-constexpr uint32_t kDrawOccMax = 2048;
+constexpr uint32_t kDrawOccMax = 8192;
 VkQueryPool g_docc_pool = VK_NULL_HANDLE;
 uint32_t g_docc_used = 0;
 std::vector<std::pair<int, uint32_t>> g_docc_list;   // (draw number, query index) in submission order
@@ -568,11 +568,11 @@ struct DrawOccScope {
 void draw_occ_report() {
     if (!g_docc_on || !g_docc_pool || g_docc_list.empty()) return;
     const uint32_t n = g_docc_used;
-    std::vector<uint32_t> res(n, 0);
+    std::vector<uint64_t> res(n, 0);
     // The counts become available once the submission that holds the queries has run. That is normally the present's own submission;
     // if it is a frame behind (submit batching), the report simply waits for the next present instead of stalling the render thread.
     finish();   // a diagnostic run: wait for the submission so the query results are there (no later present reports them)
-    const VkResult r = vkGetQueryPoolResults(vkdev(), g_docc_pool, 0, n, n * sizeof(uint32_t), res.data(), sizeof(uint32_t), 0);
+    const VkResult r = vkGetQueryPoolResults(vkdev(), g_docc_pool, 0, n, n * sizeof(uint64_t), res.data(), sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
     static int waits = 0;
     if (r == VK_NOT_READY) {
         if (++waits < 240) return;   // about 4 s of presents
@@ -587,7 +587,7 @@ void draw_occ_report() {
         g_docc_list.clear();
         return;
     }
-    for (const auto& e : g_docc_list) NXLOG_I("nvn.trace", "occ #%d %u samples", e.first, e.second < n ? res[e.second] : 0);
+    for (const auto& e : g_docc_list) NXLOG_I("nvn.trace", "occ #%d %llu samples", e.first, static_cast<unsigned long long>(e.second < n ? res[e.second] : 0));
     NXLOG_I(kTag, "draw_occ: %u draws measured in the traced frame", static_cast<unsigned>(g_docc_list.size()));
     g_docc_list.clear();
 }
@@ -2411,7 +2411,16 @@ VkDescriptorSet build_set(const ProgLayout& pl, uint32_t set) {
                         bi = {br.buffer, br.offset, std::min<VkDeviceSize>(bind.size ? bind.size : br.avail, br.avail)};
                         if (br.ok && mirror_capture_on()) {   // [nvn] mirror_capture: reads and writes go through the pool's copy
                             static const bool ro_cap = nxrt::config_get_bool("nvn", "gfx_ssbo_readonly", true);
-                            const bool wr = !(ro_cap && d.nvn_stage != kCompute && !b.written);
+                            // [nvn] mirror_gfx_storage_writeback (default on; XC2 NS2 turns it off, xc2_boot.cpp): off keeps what a graphics
+                            // stage writes into storage in the copy - not written back to the pool, and the CPU's pages there are not left out
+                            // of the next capture. A written binding counts its whole range, while the GPU writes a few words of it: XC2 NS2's
+                            // effects update their particles from vertex shaders (points, no fragment shader) in ranges of about 300 KiB that
+                            // the game also writes on the CPU. A game a frame ahead ([nvn] present_ahead) wrote the next frame's words there
+                            // while the GPU still ran: the capture left those pages out and the write-back then put the old range back over
+                            // them, so the effects missed their CPU updates every few frames (the waterfall mist blinking at render_scale 3,
+                            // where the GPU runs long enough to overlap). The write-back went from ~65 to ~1 MB per second.
+                            static const bool gfx_wb = nxrt::config_get_bool("nvn", "mirror_gfx_storage_writeback", true);
+                            const bool wr = !(ro_cap && d.nvn_stage != kCompute && !b.written) && (gfx_wb || d.nvn_stage == kCompute);
                             const BufRef cr = mirror_capture_bind(bind.addr, bi.range, wr);
                             if (cr.ok && cr.buffer != br.buffer) {
                                 bi.buffer = cr.buffer;
@@ -4106,8 +4115,8 @@ bool begin_draw(int mode, bool indexed, int index_type, VkPrimitiveTopology* top
                                  // vertex streams, render-target memory and every sampled texture, per draw
         // [nvn] trace_ubo_bytes = N (NXRT_NVN_TRACE_UBO_BYTES, default 768, at most 65536): how many leading bytes of each uniform block the trace prints
         static const uint64_t ubo_bytes = static_cast<uint64_t>(std::clamp<int64_t>(nxrt::config_get_int("nvn", "trace_ubo_bytes", 768), 16, 65536));
-        for (int stg = kVertex; stg <= kFragment; ++stg)
-        for (uint32_t slot = 0; slot < 16; ++slot) {    // the first words of every uniform block bound to the vertex and the fragment stage
+        for (int stg = kVertex; stg <= kGeometry; ++stg)
+        for (uint32_t slot = 0; slot < 16; ++slot) {    // the first words of every uniform block bound to the vertex, fragment and geometry stages
             const GState::Bind& ub = S.ubo[stg][slot];
             if (!ub.addr) continue;
             BufRef ur = resolve_buffer(ub.addr, std::min<uint64_t>(ub.size, ubo_bytes));
@@ -4116,7 +4125,8 @@ bool begin_draw(int mode, bool indexed, int index_type, VkPrimitiveTopology* top
                 const uint32_t* w = reinterpret_cast<const uint32_t*>(ub.addr);
                 for (uint32_t i = 0; i * 4 < ubo_bytes && i * 4 < ub.size; ++i) { char t[16]; std::snprintf(t, sizeof t, " %08x", w[i]); words += t; }
             }
-            TRACE("    %s ubo%u %llx/%llu%s:%s", stg == kVertex ? "vs" : "fs", slot, static_cast<unsigned long long>(ub.addr), static_cast<unsigned long long>(ub.size), ur.ok ? "" : " (outside every pool)", words.c_str());
+            const char* sn = stg == kVertex ? "vs" : stg == kFragment ? "fs" : "gs";
+            TRACE("    %s ubo%u %llx/%llu%s:%s", sn, slot, static_cast<unsigned long long>(ub.addr), static_cast<unsigned long long>(ub.size), ur.ok ? "" : " (outside every pool)", words.c_str());
             // [nvn] trace_ubo_dir = <dir>: the whole uniform block as a file (the log line above stops at ~2 KB, and the probe
             // constants fp_c6 sit at byte 1536 of an 8704-byte block). One file per (stage, slot, draw shader); the last draw wins.
             static const std::string ubo_dir = nxrt::config_get_str("nvn", "trace_ubo_dir", "");
@@ -4493,9 +4503,10 @@ bool quad_split_candidate(uint32_t mode, uint32_t count, uint32_t instances) {
     const char* why = nullptr;
     const std::vector<ShaderIo>& vin = vs->refl.vertex_inputs();
     if (instances != 1) why = "more than one instance";
-    else if (quads < 4 || quads > 16) why = "not 4 to 16 quads";
+    else if (quads < 1 || quads > 16) why = "not 1 to 16 quads";
     else if (vin.size() != 1 || vin[0].location != 0) why = "the vertex shader reads more than a position at location 0";
     else if (!vs->refl.builtins_in.empty()) why = "the vertex shader reads a built-in";
+    else if (quads < 4 && !S.ds.depth_test) why = "1-3 quads without depth test";
     if (first_time_key("quad_split " + vs->hash)) {
         if (why) NXLOG_I(kTag, "quad_split: vs %s draws %u quads (of %u): not subdivided, %s", vs->hash.c_str(), quads, count, why);
         else NXLOG_I(kTag, "quad_split: vs %s draws %u quads (of %u): qualifies%s", vs->hash.c_str(), quads, count,
@@ -4505,14 +4516,12 @@ bool quad_split_candidate(uint32_t mode, uint32_t count, uint32_t instances) {
 }
 
 // The subdivision itself (port of xc2-recomp's quad_split, runtime/vk_exec_draw.c, azlekayn's patch in issue #39): a QUADS draw
-// of 4 to 16 quads whose vertex shader reads only a float3 position at location 0 becomes an n x n grid of triangles per quad, the
-// grid's positions blended from the quad's corners (exact for a flat quad). XC2's cloud sea draws the whole sea as six quads tens
-// of thousands of units wide, and AMD (Mesa) interpolates the vertex outputs across those triangles imprecisely, so the sea's
-// distance and colour shimmer with the game's sub-pixel camera jitter (measured: the flicker sits in the outer ring and the
-// corners, HANDOVER 90). corner holds the 4 * quads vertex numbers, base vertex already added. False: the caller draws it as usual.
-// The grid a QUADS draw splits into does not change while its corner positions do not: the cloud sea's quads are static and only the
-// camera moves. The blended vertices and the index list are kept, so a draw pays the interpolation once and a memcpy per frame
-// afterwards (HANDOVER 90.20; the upload itself still goes through the frame's arena, which is what keeps this simple).
+// of 1 to 16 quads whose vertex shader reads only a float3 position at location 0 becomes an n x n grid of triangles per quad, the
+// grid's positions blended from the quad's corners (exact for a flat quad). XC2's cloud sea draws both its 5-6 quad box and its
+// 1-quad 40,000-unit horizontal raymarch/depth sheets (vs 818474df / vs 34fe41df) as huge QUADS spanning w=0; without subdivision,
+// AMD's triangle interpolator warps screen UV by +/-4..10 px across the sheet and jumps wildly on 1-ULP camera changes, creating
+// dark silhouette ghosts next to railings/objects. For 1..3 quads, we also require varying corner Z so 2D screen-space quads
+// (constant z=0.5) are left untouched. corner holds the 4 * quads vertex numbers, base vertex already added. False: draw as usual.
 struct QuadSplitGrid {
     std::vector<uint8_t> verts;
     std::vector<uint32_t> idx;
@@ -4521,7 +4530,7 @@ std::unordered_map<uint64_t, QuadSplitGrid> g_qs_grids;
 
 bool quad_split_draw(uint32_t quads, const std::vector<uint32_t>& corner, uint32_t base_instance) {
     const int split = quad_split_n();
-    if (!split || quads < 4 || quads > 16 || corner.size() < size_t(quads) * 4) return false;
+    if (!split || quads < 1 || quads > 16 || corner.size() < size_t(quads) * 4) return false;
     if (!S.attr_count || !S.stage[kVertex]) return false;
     const VertexAttribInfo& at = S.attr[0];
     if (at.format != 0x22 || at.stream < 0 || at.stream >= 16) return false;   // 0x22 = R32G32B32_SFLOAT: a bare position
@@ -4530,8 +4539,21 @@ bool quad_split_draw(uint32_t quads, const std::vector<uint32_t>& corner, uint32
     if (si.divisor || si.stride < at.relative_offset + 12) return false;
     const uint8_t* base = vb.addr ? static_cast<const uint8_t*>(host_ptr(vb.addr)) : nullptr;
     if (!base) return false;
-    const uint32_t g = uint32_t(split) + 1, nv = quads * g * g, ni = quads * uint32_t(split) * uint32_t(split) * 6;
     const size_t stride = static_cast<size_t>(si.stride);
+    // For 1..3 quads, skip flat screen-space quads (constant Z across all 4 corners, e.g. z=0.5 NDC quads).
+    if (quads < 4) {
+        bool has_3d_z = false;
+        for (uint32_t k = 0; k < quads && !has_3d_z; ++k) {
+            float c0[3], cj[3];
+            std::memcpy(c0, base + uint64_t(corner[4 * k]) * stride + at.relative_offset, 12);
+            for (int j = 1; j < 4; ++j) {
+                std::memcpy(cj, base + uint64_t(corner[4 * k + uint32_t(j)]) * stride + at.relative_offset, 12);
+                if (std::fabs(cj[2] - c0[2]) > 1e-4f) { has_3d_z = true; break; }
+            }
+        }
+        if (!has_3d_z) return false;
+    }
+    const uint32_t g = uint32_t(split) + 1, nv = quads * g * g, ni = quads * uint32_t(split) * uint32_t(split) * 6;
     // The key covers everything the grid depends on: the grid size, the stream layout and the corner positions themselves.
     uint64_t h = 1469598103934665603ull;
     auto mix = [&h](const void* d, size_t n) {
@@ -4547,7 +4569,7 @@ bool quad_split_draw(uint32_t quads, const std::vector<uint32_t>& corner, uint32
         for (int j = 0; j < 4; ++j) mix(base + uint64_t(corner[4 * k + uint32_t(j)]) * stride + at.relative_offset, 12);
     auto found = g_qs_grids.find(h);
     if (found == g_qs_grids.end()) {
-        if (g_qs_grids.size() >= 8) g_qs_grids.clear();   // a handful of cloud-sea draws; never grow without bound
+        if (g_qs_grids.size() >= 32) g_qs_grids.clear();   // a handful of cloud-sea draws; never grow without bound
         QuadSplitGrid gr;
         gr.verts.assign(static_cast<size_t>(nv) * stride, 0);
         for (uint32_t k = 0; k < quads; ++k) {
@@ -4573,7 +4595,8 @@ bool quad_split_draw(uint32_t quads, const std::vector<uint32_t>& corner, uint32
                     gr.idx[m++] = a; gr.idx[m++] = b; gr.idx[m++] = cc; gr.idx[m++] = a; gr.idx[m++] = cc; gr.idx[m++] = dd;
                 }
         found = g_qs_grids.emplace(h, std::move(gr)).first;
-        NXLOG_I(kTag, "quad_split: grid built for %u quads (n = %d): %u vertices, %u triangles", quads, split, nv, ni / 3);
+        NXLOG_I(kTag, "quad_split: grid built for %u quads (vs %s, n = %d): %u vertices, %u triangles",
+                quads, S.stage[kVertex]->hash.c_str(), split, nv, ni / 3);
     }
     const QuadSplitGrid& grid = found->second;
     UploadAlloc vbuf = F->upload(uint64_t(grid.verts.size()), 16);
@@ -4766,7 +4789,8 @@ void do_draw_arrays(const P_DrawArrays& p) {
         // QUADS / QUAD_STRIP / POLYGON / LINE_LOOP: generate an index buffer
         std::vector<uint32_t> in(p.count);
         for (uint32_t k = 0; k < p.count; ++k) in[k] = p.first + k;
-        if (conv == PrimConversion::Quads && quad_split_draw(p.count / 4, in, p.base_instance)) return;   // [nvn] quad_split
+        if (conv == PrimConversion::Quads && quad_split_candidate(p.mode, p.count, inst) &&
+            quad_split_draw(p.count / 4, in, p.base_instance)) return;   // [nvn] quad_split
         const std::vector<uint32_t> idx = convert_prim_indices(conv, in);
         if (idx.empty()) return;
         if (!bind_u32_indices(idx)) return;
@@ -4988,8 +5012,7 @@ void do_draw_elements(const P_DrawElements& p) {
             else std::memcpy(&v, src + i * 4, 4);
             in[i] = v;
         }
-        if (conv == PrimConversion::Quads) quad_split_candidate(p.mode, p.count, std::max<uint32_t>(1, p.instance_count));   // [nvn] quad_split: qualifies?
-        if (conv == PrimConversion::Quads) {   // [nvn] quad_split: the corners with the base vertex added
+        if (conv == PrimConversion::Quads && quad_split_candidate(p.mode, p.count, std::max<uint32_t>(1, p.instance_count))) {   // [nvn] quad_split: qualifies?
             std::vector<uint32_t> corner(in.begin(), in.begin() + static_cast<std::ptrdiff_t>(std::min<size_t>(in.size(), 64)));
             for (uint32_t& v : corner) v += static_cast<uint32_t>(p.base_vertex);
             if (quad_split_draw(static_cast<uint32_t>(in.size() / 4), corner, p.base_instance)) return;
@@ -5314,6 +5337,52 @@ bool report_counter(uint64_t address, uint64_t* out) {
     if (!hit.pool || hit.pool->is_virtual || !hit.pool->base || hit.offset + 8 > hit.pool->size) return false;
     std::memcpy(out, host_ptr(address), 8);
     return true;
+}
+
+void do_write_memory(uint64_t gpu_addr, const void* data, uint32_t size);
+
+// A counter report whose counter word is a query's result: the placeholder (counter 0, the timestamp), the result over the counter word
+// (query < 0: none), and with stamp_after the timestamp again (the feedback query's second result lands on it).
+// With [nvn] mirror_capture the GPU reads the pool through its device-local copy, so the result has to land there (the cloud sea and fog
+// volumes were not drawn when it went to the pool only). The report is assembled in the copy and then copied to the pool in one piece:
+// written into the pool as a placeholder and completed only by the write-back at the end of the submission, the game's memory read
+// "0 samples passed, new timestamp" for most of the frame, and a game a frame ahead ([nvn] present_ahead) culled the effects behind those
+// queries (flames, smoke and water reflections flickering in and out).
+void report_from_query(uint64_t address, uint64_t timestamp, VkQueryPool qp, int query, bool stamp_after) {
+    struct { uint64_t counter, timestamp; } rep = {0, timestamp};
+    constexpr VkQueryResultFlags kFlags = VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT;
+    g_reports[address] = kReportUnknown;   // the query result lands on the GPU
+    if (mirror_capture_on()) {
+        const BufRef pool = resolve_buffer(address, sizeof rep);
+        const BufRef copy = pool.ok ? mirror_capture_bind(address, sizeof rep, true) : BufRef{};
+        if (copy.ok && copy.buffer != pool.buffer) {
+            end_pass();
+            memory_barrier(F->cb);
+            gpu_wrote(address, sizeof rep, kWriteUpdate);
+            vkCmdUpdateBuffer(F->cb, copy.buffer, copy.offset, sizeof rep, &rep);
+            if (query >= 0) {
+                memory_barrier(F->cb);
+                vkCmdCopyQueryPoolResults(F->cb, qp, static_cast<uint32_t>(query), 1, copy.buffer, copy.offset, 16, kFlags);
+                if (stamp_after) {
+                    memory_barrier(F->cb);
+                    vkCmdUpdateBuffer(F->cb, copy.buffer, copy.offset + 8, 8, &rep.timestamp);
+                }
+            }
+            memory_barrier(F->cb);
+            const VkBufferCopy c{copy.offset, pool.offset, sizeof rep};
+            vkCmdCopyBuffer(F->cb, copy.buffer, pool.buffer, 1, &c);
+            memory_barrier(F->cb);
+            gstamp("report");
+            return;
+        }
+    }
+    do_write_memory(address, &rep, sizeof rep);
+    if (query < 0) return;
+    const BufRef b = resolve_buffer(address, sizeof rep);
+    if (!b.ok) return;
+    vkCmdCopyQueryPoolResults(F->cb, qp, static_cast<uint32_t>(query), 1, b.buffer, b.offset, 16, kFlags);
+    memory_barrier(F->cb);
+    if (stamp_after) do_write_memory(address + 8, &rep.timestamp, 8);
 }
 
 bool conditional_render_enabled(uint32_t mode, uint64_t address) {
@@ -6039,17 +6108,7 @@ void run_list(const CmdList& list, int depth) {
                         g_occ_last = g_occ_active;
                         g_occ_active = -1;
                     }
-                    if (p.address) {
-                        rep.counter = 0;
-                        g_reports[p.address] = kReportUnknown;   // the query result lands on the GPU
-                        do_write_memory(p.address, &rep, sizeof rep);
-                        BufRef b = resolve_buffer(p.address, sizeof rep);
-                        if (b.ok && g_occ_last >= 0) {
-                            vkCmdCopyQueryPoolResults(F->cb, g_occ_pool, static_cast<uint32_t>(g_occ_last), 1, b.buffer, b.offset, 16,
-                                                      VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
-                            memory_barrier(F->cb);
-                        }
-                    }
+                    if (p.address) report_from_query(p.address, rep.timestamp, g_occ_pool, g_occ_last, false);
                     break;
                 }
                 if (p.type == NVN_COUNTER_TYPE_PRIMITIVES_GENERATED || p.type == NVN_COUNTER_TYPE_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN) {
@@ -6059,18 +6118,8 @@ void run_list(const CmdList& list, int depth) {
                         cw_end_query(cw, &cw == &g_cw[1]);
                         cw.last = cw.active;
                         cw.active = -1;
-                        if (p.address) {
-                            rep.counter = 0;
-                            g_reports[p.address] = kReportUnknown;   // the result lands on the GPU
-                            do_write_memory(p.address, &rep, sizeof rep);
-                            BufRef b = resolve_buffer(p.address, sizeof rep);
-                            if (b.ok) {
-                                // the feedback query has two results (written, needed): the second would land on the timestamp word, which is written again after it
-                                vkCmdCopyQueryPoolResults(F->cb, cw.pool, static_cast<uint32_t>(cw.last), 1, b.buffer, b.offset, 16, VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
-                                memory_barrier(F->cb);
-                                if (&cw == &g_cw[1]) do_write_memory(p.address + 8, &rep.timestamp, 8);
-                            }
-                        }
+                        // the feedback query has two results (written, needed): the second lands on the timestamp word, written again after it
+                        if (p.address) report_from_query(p.address, rep.timestamp, cw.pool, cw.last, &cw == &g_cw[1]);
                         break;
                     }
                     rep.counter = p.type == NVN_COUNTER_TYPE_PRIMITIVES_GENERATED ? g_prims_generated : g_prims_xfb;
