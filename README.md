@@ -1,5 +1,7 @@
 # Xenoblade Chronicles 2 · Nintendo Switch 2 Edition — static recompilation for Windows
 
+**English** · [中文](README.zh-CN.md)
+
 Ahead-of-time ("static") recompilation of the **Switch 2 program of Xenoblade Chronicles 2 – Nintendo Switch 2
 Edition**, running on Windows x86-64 through Vulkan. No emulator: the game's own modules are lifted to C++ and
 linked against a small Switch runtime.
@@ -16,7 +18,6 @@ linked against a small Switch runtime.
 
 > **Before reporting anything, update to 0.2.0 or newer** — earlier builds carry problems that are already fixed
 > (the 720p internal render, the add-on `0/romfs` layout, the film hand-back, F1 not opening the settings page).
-> **报 issue 前请先确认版本是 0.2.0 或更新**，旧版本的问题有几条已经修掉了。
 
 ## Status (v0.2.0)
 
@@ -159,22 +160,4 @@ This is an independent, non-commercial fan project. It is not affiliated with, s
 *Xenoblade Chronicles 2* was developed by MONOLITH SOFT. This repository contains no game code, no game assets and no
 keys, and gives no help in obtaining them.
 
-本项目是独立的非商业粉丝项目，与任天堂没有任何关联，也未获得任天堂的认可。《异度之刃 2》、Nintendo Switch 与
-Nintendo Switch 2 是任天堂的商标；《异度之刃 2》由 MONOLITH SOFT 开发。仓库中不含任何游戏代码、游戏资源或密钥，也不提供
-任何获取途径。
 
-## 中文说明
-
-《异度之刃 2（Nintendo Switch 2 Edition）》**Switch 2 程序的静态重编译**（Windows + Vulkan）：把游戏的 NSO 模块整体
-举升成 C++，再链接一个通用 Switch 运行时（NVN/NVN2 → Vulkan 重放层）。不是模拟器。
-
-* **目标**：application `0100E95004038000`（与 NS1 版同一个 title）的 **program 1**，即 `0400E95004038001`，
-  SDK 21.4.4、NVN2 231.39、游戏版本 **3.0.1**；附加内容 id 为 `0100E95004039001`…`063`。
-* **仓库里没有任何游戏代码、资源或密钥**；需要你自己的 dump，构建产物（含举升后的游戏代码）不随仓库分发。
-* **当前版本 v0.2.0**：能启动、读档、进野外与过场；多数区域 59–60 fps，最重的大平原 43–52 fps；4K 过场正常播放，
-  叠在实时过场上的影片播完会交还场景。已知问题见 `docs/COMPATIBILITY.md`。
-* **游戏内**：F1 设置页 · F10 帧率 · F11 / Alt+Enter 全屏；文本语言在启动器里选（11 种），语音为日/英。
-* **遇到问题**：启动器 → **录一份报告**，会把日志打成 `work\reports\report-<时间>.zip`，附在 issue 里即可（不含游戏数据）。
-* **运行时来自 [Goldoire 的 fefw-recomp](https://github.com/Goldoire/fefw-recomp)**，我们的分支在
-  `third_party/fefw-recomp`，改动逐条记在它的 `MODIFICATIONS.md`。影片/音频的宿主接管思路来自
-  [@capibawa 的 nxnative](https://github.com/capibawa/nxnative/tree/xc2-ns2-profile)。
