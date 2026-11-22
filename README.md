@@ -144,8 +144,7 @@ glue, the launcher, the film path and the analysis tools.
 * **[@capibawa](https://github.com/capibawa)** — [nxnative, branch `xc2-ns2-profile`](https://github.com/capibawa/nxnative/tree/xc2-ns2-profile):
   the launch switches and the host-side movie/audio takeover this project's film path follows
 * **Everyone who sent a pull request** — credited by name in the release notes of the version their work landed
-  in ([releases](https://github.com/weile10000/xc2-ns2-recomp/releases)). The list here stays short on purpose:
-  this page should not grow one line per contribution.
+  in ([releases](https://github.com/weile10000/xc2-ns2-recomp/releases)).
 * **DeepSeek V4.1 Flash** — pair-programmed this project with its author, from the first lift to this release
 
 ## Licence
@@ -306,8 +305,7 @@ ExeFS (NSO) ──nxrecomp 举升──▶ C++ ──clang-cl──▶ main.lib 
 * **[@capibawa](https://github.com/capibawa)** —— [nxnative 的 `xc2-ns2-profile` 分支](https://github.com/capibawa/nxnative/tree/xc2-ns2-profile)：
   本项目的启动开关与影片/音频的宿主接管思路来自那里
 * **每一位提交过 PR 的人** —— 以 PR 链接署名在其改动落地的那一版发布说明里
-  （[releases](https://github.com/weile10000/xc2-ns2-recomp/releases)）。这里的列表刻意保持简短：这一页不应该
-  每来一个贡献就多一行
+  （[releases](https://github.com/weile10000/xc2-ns2-recomp/releases)）
 * **DeepSeek V4.1 Flash** —— 与作者结对完成本项目，从第一次举升到这一版
 
 ## 许可
