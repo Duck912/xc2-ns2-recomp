@@ -27,7 +27,9 @@
 // guest os::EventType at +0 (40 bytes) that the guest's own MultiWait waits on; a fence handle is {kSyncMarker | decoder id, sequence}.
 // Fences of a decoder complete in sequence order, so "done" is sequence <= the decoder's last completed sequence; any handle that is not
 // one of ours counts as reached (nxrt has no GPU syncpoints: NVN runs on the host).
+#include "nxrt/diag.h"
 #include <windows.h>
+#include <fstream>
 
 #include <algorithm>
 #include <array>
@@ -1563,10 +1565,25 @@ void release_output(::Ctx* c) {   // (dec, index, pre-fence)
                 NXLOG_I("vcodec", "release #%u: decoder %u index %u gen %llu -> pend %zu fifo %zu", k, d->id,
                         static_cast<uint32_t>(A(1)), static_cast<unsigned long long>(gen), n_pend, n_fifo);
         }
-        // If this is the end-of-stream output coming back, the client did not treat it as the end: say so with its caller.
-        if (had_eos)
+        // If this is the end-of-stream output coming back, the client did not treat it as the end: say so with its caller, and
+        // write down where the player's threads are. Without the stack this reads as "the film ended and the player ignored
+        // it", which says nothing about what the player is waiting for (measured on a 4060 Laptop, 2026-11-22: the second
+        // film's end was delivered and released, then the player sent message 1 nine times and stopped).
+        if (had_eos) {
+            static std::atomic<uint32_t> n_unhandled{0};
             NXLOG_W("vcodec", "decoder %u: the client released the end-of-stream buffer %u without acting on it, lr 0x%llx", d->id,
                     static_cast<uint32_t>(A(1)), (unsigned long long)c->x[30]);
+            if (n_unhandled.fetch_add(1, std::memory_order_relaxed) < 4) {
+                media_dump_state("eos-unhandled");
+                const std::string dump = nxrt::diag_thread_dump();
+                std::ofstream f("eos_unhandled.txt", std::ios::binary | std::ios::trunc);
+                if (f) {
+                    f << "end of stream released unhandled by decoder " << d->id << ", lr 0x" << std::hex
+                      << static_cast<unsigned long long>(c->x[30]) << std::dec << "\n" << dump;
+                }
+                NXLOG_W("vcodec", "eos_unhandled.txt written (%zu bytes)", dump.size());
+            }
+        }
     }
     RET(0);
 }
