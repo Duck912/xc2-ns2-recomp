@@ -82,7 +82,7 @@ export const en = {
     'play.addToSteam': 'Add to Steam',
     'play.updateSteam': 'Update Steam shortcut',
     'play.addToSteamHint': 'Adds xc2_boot.exe to Steam as a non-Steam game (Steam runs it with Proton), for Big Picture and the Steam Deck\'s Game Mode.',
-    'play.footer': 'In the game: F1 opens the runtime\'s settings overlay. Settings here edit nxrt.ini and controls.ini and apply at the next start.',
+    'play.footer': 'In the game: F1 opens the settings page - window and size, upscaling, HDR, audio, pad, the FPS counter (F10) and fullscreen (F11). What you change there is saved to controls.ini and mostly applies at once; the settings on this page write nxrt.ini and take effect at the next start.',
 
     // ----- setup -----
     'setup.title': 'Setup',

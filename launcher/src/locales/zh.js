@@ -81,7 +81,7 @@ export const zh = {
     'play.addToSteam': '添加到 Steam',
     'play.updateSteam': '更新 Steam 快捷方式',
     'play.addToSteamHint': '把 xc2_boot.exe 作为非 Steam 游戏添加到 Steam（Steam 用 Proton 运行），可在大屏幕模式和 Steam Deck 的游戏模式中启动。',
-    'play.footer': '游戏内：F1 打开运行时的设置浮层。此处设置会写入 nxrt.ini 与 controls.ini，下次启动生效。',
+    'play.footer': '游戏内：F1 打开设置页——窗口与尺寸、超分、HDR、音频、手柄、帧率监控（F10）与全屏（F11）。那里改的值存进 controls.ini，多数立即生效；本页设置写入 nxrt.ini，下次启动生效。',
 
     // ----- 构建 -----
     'setup.title': '构建',

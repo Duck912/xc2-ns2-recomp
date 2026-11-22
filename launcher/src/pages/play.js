@@ -57,7 +57,8 @@ export async function render(el, ctx) {
       <div class="page">
         <div class="hero">
           <h1>${esc(t('play.title'))}</h1>
-          <p class="dim">${esc(t('play.intro'))}</p>
+          <p class="dim lead">${esc(t('play.intro'))}</p>
+          <p class="faint note">${esc(t('play.footer'))}</p>
         </div>
         ${problems.map((p) => `<div class="banner danger">${icon('circle-x')}<div>${esc(p)}</div></div>`).join('')}
         ${problems.length && ov.repo_ok ? `<div><button class="btn primary" id="to-setup">${icon(chosen ? 'hammer' : 'folder-open')}${esc(t(chosen ? 'play.openSetup' : 'play.chooseFiles'))}</button></div>` : ''}
@@ -91,7 +92,6 @@ export async function render(el, ctx) {
             ${steam.available ? `<button class="btn" id="add-steam" title="${esc(t('play.addToSteamHint'))}" ${ov.exe_exists && !addingSteam ? '' : 'disabled'}>${icon(addingSteam ? 'loader-circle' : 'gamepad-2', addingSteam ? 'spin' : '')}${esc(t(steam.added ? 'play.updateSteam' : 'play.addToSteam'))}</button>` : ''}
           </div>
         </div>
-        <p class="faint">${esc(t('play.footer'))}</p>
       </div>`;
     refreshIcons();
     el.querySelector('#play')?.addEventListener('click', () => api('play').catch((e) => toast(errText(e), 'error')));
