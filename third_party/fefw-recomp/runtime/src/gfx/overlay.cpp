@@ -545,6 +545,7 @@ std::unique_ptr<Overlay> Overlay::create(const Context& ctx, std::string* error)
         c[ImGuiCol_WindowBg] = ImVec4(0.055f, 0.085f, 0.135f, 0.94f);
         c[ImGuiCol_ChildBg] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
         c[ImGuiCol_PopupBg] = ImVec4(0.06f, 0.10f, 0.16f, 0.97f);
+        c[ImGuiCol_ModalWindowDimBg] = ImVec4(0.02f, 0.035f, 0.06f, 0.60f);   // behind a dialog: the window colour, darker (the default is a light grey veil)
         c[ImGuiCol_Border] = ImVec4(0.22f, 0.46f, 0.54f, 0.45f);
         c[ImGuiCol_Text] = ImVec4(0.94f, 0.96f, 0.98f, 1.0f);
         c[ImGuiCol_TextDisabled] = ImVec4(0.58f, 0.66f, 0.74f, 1.0f);

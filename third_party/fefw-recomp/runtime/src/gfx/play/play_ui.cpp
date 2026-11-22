@@ -5,6 +5,7 @@
 // Two-pane card-row interaction & layout adapted from totk-pc-recomp (runtime/ui/option_rows.cpp & menu.cpp,
 // MIT License, https://github.com/valentderah/totk-pc-recomp) and SavageWindRecomp (MIT License).
 #include "play_ui.h"
+#include "play_selftest.h"
 
 #include <algorithm>
 #include <cfloat>
@@ -14,6 +15,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "imgui.h"
@@ -1504,8 +1506,29 @@ void draw_settings_menu(UiHost& host, gfx::Overlay& ov) {
 
         const float close_w = px(92.0f);
         const float lang_w = px(96.0f);
+        const float quit_w = px(104.0f);
         const float right_x = ImGui::GetWindowContentRegionMax().x;
-        ImGui::SameLine(std::max(px(260.0f), right_x - close_w - lang_w - px(10.0f)));
+        ImGui::SameLine(std::max(px(260.0f), right_x - close_w - lang_w - quit_w - px(18.0f)));
+        // Quit game: play mode's own exit (exit_process: pending settings saved, the pipeline cache written, the log flushed), after a
+        // confirmation - a stray click must not end a session. On a thread of its own: this runs inside the menu's frame on the render
+        // thread, and exit_process takes the settings lock the menu may hold.
+        if (ImGui::Button(tr("退出游戏", "Quit game"), ImVec2(quit_w, 0.0f))) ImGui::OpenPopup("##quit_confirm");
+        if (ImGui::BeginPopupModal("##quit_confirm", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar)) {
+            ImGui::TextUnformatted(tr("退出游戏？上次存档之后的进度将会丢失。", "Quit the game? Progress since your last save is lost."));
+            ImGui::Dummy(ImVec2(0.0f, px(6.0f)));
+            if (ImGui::Button(tr("退出", "Quit"), ImVec2(px(104.0f), 0.0f)))
+                std::thread([] { exit_process(0, "pass", "quit from the F1 menu"); }).detach();
+            ImGui::SameLine();
+            // Cancel, Esc, or a click anywhere outside the dialog closes it. Outside is where the press landed against the dialog's
+            // rectangle, not ImGui's hover state: in play that reads "not hovered" even on the dialog's own buttons.
+            const ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize(), cp = ImGui::GetIO().MouseClickedPos[ImGuiMouseButton_Left];
+            const bool outside = !ImGui::IsWindowAppearing() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+                                 (cp.x < wp.x || cp.y < wp.y || cp.x >= wp.x + ws.x || cp.y >= wp.y + ws.y);
+            if (ImGui::Button(tr("取消", "Cancel"), ImVec2(px(104.0f), 0.0f)) || ImGui::IsKeyPressed(ImGuiKey_Escape) || outside)
+                ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
+        }
+        ImGui::SameLine();
         if (ImGui::Button(g_zh ? "EN / 中文" : "中文 / EN", ImVec2(lang_w, 0.0f))) {
             g_zh = !g_zh;
             FpsSettings f = host.settings().fps;
