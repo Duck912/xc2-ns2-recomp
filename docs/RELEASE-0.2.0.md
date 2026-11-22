@@ -9,9 +9,10 @@ live scene and have to hand that scene back, and its player is guest code we can
 
 
 > **Before you read on.** This release adds a lot at once — a settings page, native resolutions, NVIDIA support, the film
-> hand-back — so some defects we have not hit are probably still in it. If you find one, please open an issue with the log
-> (`tools\report.py` gathers it into one file); every report is read. Whatever it turns up, this update is the step that
-> makes the 1.0 path possible.
+> hand-back — so some defects we have not hit are probably still in it. If you find one, press **Record a report** in the
+> launcher (the Play page, or About): it starts the game once more with the diagnostics on, you play until it happens again,
+> and closing the window packs the logs into `work\reports`. Attach that zip to the issue — every one is read. Whatever it
+> turns up, this update is the step that makes the 1.0 path possible.
 
 ## Which file do I download?
 
@@ -142,8 +143,8 @@ NS2 版不是“换了图标的 NS1”。它的过场是 **4K AV1**；它的回�
 
 
 > **写在前面。** 这次更新一次性加了很多东西——设置界面、原生分辨率、N 卡支持、影片交还——所以难免有我们没测到的缺陷。
-> 碰到请开 issue 并附日志（`tools\report.py` 会打成一个包），每一条我们都会看。无论如何，这次更新都是通向正式版的
-> 重要基石。
+> 碰到请点启动器里的**录制一份报告**（Play 页或关于页）：它会带诊断重启一次游戏，玩到问题再次出现后关掉窗口，日志就会
+> 打包进 `work\reports`。把那个 zip 附到 issue 里，每一条我们都会看。无论如何，这次更新都是通向正式版的重要基石。
 
 ## 我该下哪个文件？
 
