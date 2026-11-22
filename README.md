@@ -8,6 +8,10 @@ Switch runtime ([third_party/fefw-recomp](third_party/fefw-recomp)) whose NVN im
 game's graphics API on Vulkan. Shaders are translated from Maxwell / Ampere SASS to SPIR-V by Ryujinx's
 translator, driven by our offline harness.
 
+> **Before reporting anything, update to 0.2.0 or newer** — the builds before it carry problems that are already fixed
+> (the 720p internal render, the add-on `0/romfs` layout, the film hand-back, F1 not opening the settings page).
+> **报 issue 前请先确认版本是 0.2.0 或更新**，旧版本的问题有几条已经修掉了。
+
 > **This repository contains no game code and no game assets.**
 > It is the toolchain, the runtime and the project's documentation. You need your own legally acquired copy
 > of the game — see *What you must supply* below.
