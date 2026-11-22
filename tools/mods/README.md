@@ -6,7 +6,7 @@ Everything the mod work needs lives here, so a future round finds it in one plac
 | file | what | state |
 |---|---|---|
 | `asset_index.py` | **M0**: one table of every file the game can read — romfs, `bf2.ard`, add-on content | works |
-| `mod_check.py` | which files of a mod exist in a dump, which are missing, which differ (needs M0) | not started |
+| `mod_check.py` | **M0.5**: for each file of a mod — `same` / `differs` / `only-archive` / `absent`, and where the game reads it from | works |
 | `mod_pack.py` | validates and packs a mod folder (manifest, path escapes, no game data) | not started |
 
 ## What it reads
@@ -30,6 +30,26 @@ work/mods/assets-summary.json  counts, bytes, per-kind totals, what was skipped 
 tools\python\python.exe tools\mods\asset_index.py --romfs "<dump>\base\romfs" --out work\mods
 tools\python\python.exe tools\mods\asset_index.py --romfs "<dump>\base\romfs" --no-archive   # fast, loose files only
 ```
+
+## Checking a mod (M0.5)
+
+```powershell
+tools\python\python.exe tools\mods\mod_check.py --mod "<mod folder>" --catalog work\mods\assets.tsv
+```
+
+A mod may be the overlay itself or a folder holding `romfs/`. Paths are compared with one spelling: `/`
+separators, no leading slash, lower case — the archive stores `//ma61a/cache/texture/RK050`, which no Windows
+folder can hold, and the console is case-sensitive while Windows is not.
+
+| status | meaning |
+|---|---|
+| `same` | the path exists and size and sha256 match the dump (the mod does not change it) |
+| `differs` | the path exists, content differs — what a working replacement looks like |
+| `only-archive` | the path exists only inside `bf2.ard`; until M2 an overlay cannot replace it |
+| `absent` | no such path in this dump — an NS1 layout, a different version, or a typo (exit code 1) |
+| `no-hash` | the dump side was not hashed (above the catalog's `--hash-limit-mb`) |
+
+Report: `work/mods/mods-report.json` (the 50 first absent and only-archive paths, plus every file's record).
 
 ## The contract the later milestones rely on
 

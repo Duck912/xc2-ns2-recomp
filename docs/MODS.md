@@ -159,6 +159,7 @@ committed.
 | step | what | state |
 |---|---|---|
 | M0 | the asset catalog: romfs + `bf2.ard` + add-on content → `work/mods/assets.tsv` | **built** (`tools/mods/asset_index.py`) |
+| M0.5 | the porting check: `tools/mods/mod_check.py` says, per file, `same` / `differs` / `only-archive` / `absent` | **built** |
 | M1 | `mods\<name>\romfs\` overlay for loose files, load report, order and switches | not started |
 | M1.5 | the emulator layouts above | not started |
 | M2 | the archive index in the runtime: files inside `bf2.ard`, the "not found" check | not started |
