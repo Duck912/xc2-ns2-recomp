@@ -82,10 +82,23 @@ const SECTIONS = [
       { id: 'log_path', type: 'path', label: 'settings.logPath.label', sec: 'log', key: 'path', def: 'nxrt.log',
         placeholder: 'settings.logPath.placeholder', hint: 'settings.logPath.hint' },
       // The game's own language: it follows the console's, so the value is a Switch code (zh-CN is a Windows locale
-      // code and the game falls back to English with it).
-      { id: 'game_lang', type: 'select', label: 'settings.gameLang.label', sec: 'system', key: 'language', def: 'zh-Hans',
-        options: [['zh-Hans', 'settings.gameLang.zhHans'], ['zh-Hant', 'settings.gameLang.zhHant'],
-                  ['en-US', 'settings.gameLang.en'], ['ja', 'settings.gameLang.ja']],
+      // The game's own text language. Every value below is one the retail 3.0.1 title lists as supported
+      // (NXRT_TITLE_SUPPORTED_LANGUAGES, written by setup); voice is Japanese and English whatever is chosen.
+      { id: 'game_lang', type: 'select', label: 'settings.gameLang.label', sec: 'system', key: 'language', def: 'auto',
+        options: [['auto', 'settings.gameLang.auto'],
+                  ['Japanese', 'settings.gameLang.japanese'],
+                  ['AmericanEnglish', 'settings.gameLang.americanEnglish'],
+                  ['BritishEnglish', 'settings.gameLang.britishEnglish'],
+                  ['French', 'settings.gameLang.french'],
+                  ['German', 'settings.gameLang.german'],
+                  ['Italian', 'settings.gameLang.italian'],
+                  ['Spanish', 'settings.gameLang.spanish'],
+                  ['LatinAmericanSpanish', 'settings.gameLang.latinSpanish'],
+                  ['Korean', 'settings.gameLang.korean'],
+                  ['Chinese', 'settings.gameLang.chinese'],
+                  ['Taiwanese', 'settings.gameLang.taiwanese'],
+                  ['SimplifiedChinese', 'settings.gameLang.simplifiedChinese'],
+                  ['TraditionalChinese', 'settings.gameLang.traditionalChinese']],
         hint: 'settings.gameLang.hint' },
     ],
   },

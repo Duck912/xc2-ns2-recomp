@@ -235,6 +235,8 @@ export const zh = {
     'settings.gameLang.korean': '한국어（韩语）',
     'settings.gameLang.simplifiedChinese': '简体中文',
     'settings.gameLang.traditionalChinese': '繁體中文',
+    'settings.gameLang.chinese': '中文',
+    'settings.gameLang.taiwanese': '繁體中文（台湾）',
 
     // 帧率
     'settings.fps60.label': '60 帧游玩',
@@ -432,11 +434,5 @@ export const zh = {
     'settings.logPath.label': '日志文件',
     'settings.logPath.placeholder': 'nxrt.log',
     'settings.logPath.hint': '运行时把日志写在这里，相对运行目录。',
-  'settings.gameLang.label': '游戏语言',
-  'settings.gameLang.zhHans': '简体中文',
-  'settings.gameLang.zhHant': '繁体中文',
-  'settings.gameLang.en': 'English',
-  'settings.gameLang.ja': '日本語',
-  'settings.gameLang.hint': '游戏内显示的语言。游戏跟随主机语言，所以只有这四种；zh-CN 是 Windows 区域码，游戏不认。',
   },
   };

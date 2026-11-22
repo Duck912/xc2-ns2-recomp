@@ -33,44 +33,60 @@ function Set-Status([string]$phase, [double]$elapsed, [int]$collected, [string]$
 
 $sw = [Diagnostics.Stopwatch]::StartNew()
 Write-Output ('PREFILL: collecting shaders the cache lacks, up to ' + $Seconds + ' s (measured on a 12,104 cache: 24 s)')
-Set-Status 'collect' 0 0 'starting the game headless'
 $env:NXRT_NVN_DUMP_MISSING = $missing
 $env:NXRT_NVN_DS_DEBUG = '1'
-$prevAudio = $env:XC2_301_AUDIO
-$env:XC2_301_AUDIO = ''
-$log = Join-Path $Work 'prefill.log'
-$p = Start-Process -FilePath $Exe -ArgumentList '--exefs', $Exefs, '--link', 'host', '--gfx', 'headless', '--log', $log -PassThru -WindowStyle Hidden
-$env:XC2_301_AUDIO = $prevAudio
-$deadline = (Get-Date).AddSeconds($Seconds)
-$lastReport = 0
-while ((Get-Date) -lt $deadline -and -not $p.HasExited) {
-    Start-Sleep -Milliseconds 500
-    $n = @(Get-ChildItem $missing -Filter 'code_*.bin' -ErrorAction SilentlyContinue).Count
-    Set-Status 'collect' $sw.Elapsed.TotalSeconds $n 'running headless'
-    if ($sw.Elapsed.TotalSeconds - $lastReport -ge 5) {
-        $lastReport = $sw.Elapsed.TotalSeconds
-        Write-Output ('PREFILL: ' + [math]::Round($sw.Elapsed.TotalSeconds) + '/' + $Seconds + ' s, ' + $n + ' block(s) so far')
-    }
-}
+
+# The headless run starts the whole game, so it can die early for reasons that do not repeat: a device loss, or a guest
+# assertion during bring-up (issue #25: svcBreak 6 s in, 12,132 records already loaded, nothing collected). One retry turns
+# "Set up failed" into "it took a little longer" for those, and costs nothing when the first attempt works.
+$attempts = 2
 $killedByUs = $false
-if (-not $p.HasExited) {
-    # it is our own headless run, so closing it here is safe: the real launch comes next
-    $killedByUs = $true
-    $p.Kill(); Start-Sleep -Seconds 2
-    Write-Output ("prefill: stopped the collector after " + $Seconds + " s")
-} else {
-    Write-Output ('prefill: the collector exited on its own (' + $p.ExitCode + ')')
+$exitCode = 0
+$log = Join-Path $Work 'prefill.log'
+$blocks = @()
+for ($attempt = 1; $attempt -le $attempts; $attempt++) {
+    if ($attempt -gt 1) {
+        Write-Output ('PREFILL: attempt ' + $attempt + ' of ' + $attempts + ', the first one exited with ' + $exitCode)
+        Set-Status 'collect' $sw.Elapsed.TotalSeconds 0 ('retrying after exit ' + $exitCode)
+    }
+    $log = if ($attempt -eq 1) { Join-Path $Work 'prefill.log' } else { Join-Path $Work ('prefill-' + $attempt + '.log') }
+    $prevAudio = $env:XC2_301_AUDIO
+    $env:XC2_301_AUDIO = ''
+    $p = Start-Process -FilePath $Exe -ArgumentList '--exefs', $Exefs, '--link', 'host', '--gfx', 'headless', '--log', $log -PassThru -WindowStyle Hidden
+    $env:XC2_301_AUDIO = $prevAudio
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    $lastReport = 0
+    while ((Get-Date) -lt $deadline -and -not $p.HasExited) {
+        Start-Sleep -Milliseconds 500
+        $n = @(Get-ChildItem $missing -Filter 'code_*.bin' -ErrorAction SilentlyContinue).Count
+        Set-Status 'collect' $sw.Elapsed.TotalSeconds $n 'running headless'
+        if ($sw.Elapsed.TotalSeconds - $lastReport -ge 5) {
+            $lastReport = $sw.Elapsed.TotalSeconds
+            Write-Output ('PREFILL: ' + [math]::Round($sw.Elapsed.TotalSeconds) + '/' + $Seconds + ' s, ' + $n + ' block(s) so far')
+        }
+    }
+    $killedByUs = $false
+    if (-not $p.HasExited) {
+        # it is our own headless run, so closing it here is safe: the real launch comes next
+        $killedByUs = $true
+        $p.Kill(); Start-Sleep -Seconds 2
+        Write-Output ("prefill: stopped the collector after " + $Seconds + " s")
+    } else {
+        $exitCode = $p.ExitCode
+        Write-Output ('prefill: the collector exited on its own (' + $exitCode + ')')
+    }
+    $blocks = @(Get-ChildItem $missing -Filter 'code_*.bin' -ErrorAction SilentlyContinue)
+    if ($killedByUs -or $blocks.Count -gt 0 -or $exitCode -eq 0) { break }
 }
 
-$blocks = @(Get-ChildItem $missing -Filter 'code_*.bin' -ErrorAction SilentlyContinue)
 Write-Output ('PREFILL: collected ' + $blocks.Count + ' block(s) in ' + [math]::Round($sw.Elapsed.TotalSeconds, 1) + ' s')
 
 # A collector that died early on its own collected nothing, and writing the marker now would tell every later launch that the
 # cache is complete when it is not. Say so and leave the marker unwritten, so the next launch tries again.
-if (-not $killedByUs -and $p.HasExited -and $p.ExitCode -ne 0 -and $blocks.Count -eq 0) {
-    Set-Status 'failed' $sw.Elapsed.TotalSeconds 0 ('the collector exited with ' + $p.ExitCode)
-    Write-Output ('PREFILL: the collector exited with ' + $p.ExitCode + ' before finding anything; the cache is unchanged')
-    Write-Output 'PREFILL: the next launch will try again - nothing is lost'
+if (-not $killedByUs -and $p.HasExited -and $exitCode -ne 0 -and $blocks.Count -eq 0) {
+    Set-Status 'failed' $sw.Elapsed.TotalSeconds 0 ('the collector exited with ' + $exitCode + ' on ' + $attempts + ' attempt(s)')
+    Write-Output ('PREFILL: the collector exited with ' + $exitCode + ' on all ' + $attempts + ' attempts; the cache is unchanged')
+    Write-Output ('PREFILL: see ' + $log + ' - the next launch will try again, nothing is lost')
     exit 0
 }
 Set-Status 'translate' $sw.Elapsed.TotalSeconds $blocks.Count 'translating'

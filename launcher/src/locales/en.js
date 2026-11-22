@@ -257,6 +257,8 @@ export const en = {
     'settings.gameLang.korean': '한국어 (Korean)',
     'settings.gameLang.simplifiedChinese': '简体中文 (Simplified Chinese)',
     'settings.gameLang.traditionalChinese': '繁體中文 (Traditional Chinese)',
+    'settings.gameLang.chinese': '中文 (Chinese)',
+    'settings.gameLang.taiwanese': '繁體中文 (Taiwan)',
 
     // frame rate
     'settings.fps60.label': '60 fps gameplay',
@@ -433,11 +435,5 @@ export const en = {
     'settings.logPath.label': 'Log file',
     'settings.logPath.placeholder': 'nxrt.log',
     'settings.logPath.hint': 'The runtime writes its log here, relative to the run folder.',
-  'settings.gameLang.label': 'Game language',
-  'settings.gameLang.zhHans': 'Chinese (Simplified)',
-  'settings.gameLang.zhHant': 'Chinese (Traditional)',
-  'settings.gameLang.en': 'English',
-  'settings.gameLang.ja': 'Japanese',
-  'settings.gameLang.hint': 'The language the game itself is shown in. It follows the console language, so only these four are offered; zh-CN is not one of them.',
   },
   };
