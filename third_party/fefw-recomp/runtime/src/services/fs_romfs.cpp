@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <map>
@@ -149,20 +150,39 @@ bool list_has(const std::vector<std::string>& list, const std::string& name) {
     return std::find(list.begin(), list.end(), name) != list.end();
 }
 
-// Where a mod keeps its files: <mod>\romfs first, then the emulator layout <mod>\contents\<id>\romfs. Empty when
-// neither exists.
+// The application id a mod's emulator layout is filed under. The game layer sets [process] program_id (xc2_boot:
+// 0x0100E95004038000); [title] program_id is the older key. 0 means nobody said, and then no id-specific layout is
+// accepted - better to skip a mod than to serve another game's files.
+uint64_t mod_app_id() {
+    if (config_has("process", "program_id")) return static_cast<uint64_t>(config_get_int("process", "program_id", 0));
+    return static_cast<uint64_t>(config_get_int("title", "program_id", 0));
+}
+
+std::string hex16(uint64_t id) {
+    char b[17];
+    std::snprintf(b, sizeof b, "%016llx", static_cast<unsigned long long>(id));
+    return std::string(b);
+}
+
+// Where a mod keeps its files, in the order docs/MODS.md lists the layouts:
+//   <mod>\romfs
+//   <mod>\atmosphere\contents\<app-id>\romfs
+//   <mod>\contents\<app-id>\romfs
+//   <mod>\<app-id>\romfs
+// A layout that names another title id is ignored, so one mod folder can hold content for several games.
 std::filesystem::path mod_romfs_root(const std::filesystem::path& mod) {
     std::error_code ec;
-    const std::filesystem::path plain = mod / "romfs";
-    if (std::filesystem::is_directory(plain, ec)) return plain;
-    const std::filesystem::path contents = mod / "contents";
-    if (std::filesystem::is_directory(contents, ec)) {
-        for (std::filesystem::directory_iterator it(contents, ec), end; !ec && it != end; it.increment(ec)) {
-            const std::filesystem::path inner = it->path() / "romfs";
-            if (std::filesystem::is_directory(inner, ec)) return inner;
-        }
+    auto dir = [&ec](const std::filesystem::path& p) {
+        return std::filesystem::is_directory(p, ec) ? p : std::filesystem::path();
+    };
+    if (std::filesystem::path plain = dir(mod / "romfs"); !plain.empty()) return plain;
+    const uint64_t app = mod_app_id();
+    if (app == 0) return {};
+    const std::string id = hex16(app);
+    for (const char* base : {"atmosphere/contents", "contents"}) {
+        if (std::filesystem::path q = dir(mod / base / id / "romfs"); !q.empty()) return q;
     }
-    return {};
+    return dir(mod / id / "romfs");
 }
 
 Node* find_kid(Node& dir, const std::string& name) {

@@ -39,10 +39,13 @@ def sha256_of(path: Path) -> str:
     return h.hexdigest()
 
 
-def mod_root(mod: Path) -> Path:
-    """A mod may be the overlay itself or an emulator-style folder holding romfs/."""
-    inner = mod / "romfs"
-    return inner if inner.is_dir() else mod
+def mod_root(mod: Path, app_id: str) -> Path:
+    """The same layouts the runtime accepts (fs_romfs.cpp), so the check and the game agree on what a mod is."""
+    for cand in (mod / "romfs", mod / "atmosphere" / "contents" / app_id / "romfs",
+                 mod / "contents" / app_id / "romfs", mod / app_id / "romfs"):
+        if cand.is_dir():
+            return cand
+    return mod
 
 
 def norm(rel: str) -> str:
@@ -108,6 +111,7 @@ def main(argv=None) -> int:
     ap.add_argument("--catalog", default=str(ROOT / "work" / "mods" / "assets.tsv"))
     ap.add_argument("--out", default=str(ROOT / "work" / "mods" / "mods-report.json"))
     ap.add_argument("--json", action="store_true", help="print the report as JSON")
+    ap.add_argument("--app-id", default="0100E95004038000", help="the application id the emulator layouts are filed under")
     a = ap.parse_args(argv)
 
     mod = Path(a.mod)
@@ -117,7 +121,7 @@ def main(argv=None) -> int:
     if not cat_path.is_file():
         raise SystemExit(f"no catalog at {cat_path} - run tools/mods/asset_index.py first")
 
-    root = mod_root(mod)
+    root = mod_root(mod, a.app_id.lower())
     catalog = load_catalog(cat_path)
     files = sorted(p for p in root.rglob("*") if p.is_file())
     if not files:
