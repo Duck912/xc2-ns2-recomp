@@ -158,13 +158,17 @@ enum class Sec { None, Unknown, Meta, Mouse, Pad, PadMap, Timing, Display, Audio
 // factory file, while the launcher's entry labelled "FIFO (vsync)" wrote nothing at all, so the shipped default presented in
 // Immediate and the picture tore (issue 12). The launcher writes the mode now, and this moves an existing file off the old
 // default. A value the player picked themselves stays: the revision in the file has moved past 1 by then.
-constexpr int kRuntimeFactoryRev = 2;
+constexpr int kRuntimeFactoryRev = 3;
 const GameDefaultChange kRuntimeChanges[] = {
     {1, "display", "vsync", "0", "1"},
     // 2 (2026-11-21): [pad] label_abxy was 1, so an Xbox pad's A - the bottom button - pressed Switch A, which sits on the
     // right, and the Arts prompts answered the slot next to the one the player pressed (issue 14). By position the bottom
     // button is the bottom prompt on every pad, and a Switch pad maps the same either way. A player who picked it keeps it.
     {2, "pad", "label_abxy", "1", "0"},
+    // 3 (2026-11-22): [fps] key was F2 in files the first builds of this page wrote, while the page, the reference card
+    // and this build's own default say F10 - so the advertised hotkey did nothing. Files still on F2 move once; a key
+    // the player rebound themselves stays.
+    {3, "fps", "key", "F2", "F10"},
 };
 
 // The factory-defaults revision this build writes ([meta] defaults_rev) and the factory bindings an older controls.ini does not have: the
