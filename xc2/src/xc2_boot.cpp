@@ -696,6 +696,9 @@ static void arm_frame_rate(uint64_t main_base) {
     if (!nxrt::config_has("nvn", "mirror_capture")) nxrt::config_set("nvn", "mirror_capture", "auto");
     if (!nxrt::config_has("nvn", "snapshot_instances")) nxrt::config_set("nvn", "snapshot_instances", "auto");
     if (!nxrt::config_has("nvn", "present_ahead")) nxrt::config_set("nvn", "present_ahead", "auto");
+    // The effects' particle updates (vertex shaders writing storage) stay in the capture's copy: written back, their whole ranges
+    // went over the CPU's next-frame words and the waterfall mist blinked (nvn_replay.cpp, [nvn] mirror_gfx_storage_writeback).
+    if (!nxrt::config_has("nvn", "mirror_gfx_storage_writeback")) nxrt::config_set("nvn", "mirror_gfx_storage_writeback", "0");
     NXLOG_I("xc2", "present_ahead = %s (auto = 1 while [nvn] mirror_capture is on, else 0; [nvn] present_ahead overrides this default)",
             nxrt::config_get_str("nvn", "present_ahead", "").c_str());
     if (fps <= 0) return;

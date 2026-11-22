@@ -2411,7 +2411,16 @@ VkDescriptorSet build_set(const ProgLayout& pl, uint32_t set) {
                         bi = {br.buffer, br.offset, std::min<VkDeviceSize>(bind.size ? bind.size : br.avail, br.avail)};
                         if (br.ok && mirror_capture_on()) {   // [nvn] mirror_capture: reads and writes go through the pool's copy
                             static const bool ro_cap = nxrt::config_get_bool("nvn", "gfx_ssbo_readonly", true);
-                            const bool wr = !(ro_cap && d.nvn_stage != kCompute && !b.written);
+                            // [nvn] mirror_gfx_storage_writeback (default on; XC2 NS2 turns it off, xc2_boot.cpp): off keeps what a graphics
+                            // stage writes into storage in the copy - not written back to the pool, and the CPU's pages there are not left out
+                            // of the next capture. A written binding counts its whole range, while the GPU writes a few words of it: XC2 NS2's
+                            // effects update their particles from vertex shaders (points, no fragment shader) in ranges of about 300 KiB that
+                            // the game also writes on the CPU. A game a frame ahead ([nvn] present_ahead) wrote the next frame's words there
+                            // while the GPU still ran: the capture left those pages out and the write-back then put the old range back over
+                            // them, so the effects missed their CPU updates every few frames (the waterfall mist blinking at render_scale 3,
+                            // where the GPU runs long enough to overlap). The write-back went from ~65 to ~1 MB per second.
+                            static const bool gfx_wb = nxrt::config_get_bool("nvn", "mirror_gfx_storage_writeback", true);
+                            const bool wr = !(ro_cap && d.nvn_stage != kCompute && !b.written) && (gfx_wb || d.nvn_stage == kCompute);
                             const BufRef cr = mirror_capture_bind(bind.addr, bi.range, wr);
                             if (cr.ok && cr.buffer != br.buffer) {
                                 bi.buffer = cr.buffer;
