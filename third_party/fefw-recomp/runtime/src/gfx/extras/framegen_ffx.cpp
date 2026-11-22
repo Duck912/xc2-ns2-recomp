@@ -13,6 +13,7 @@
 #include <string>
 
 #include "extras/framegen.h"
+#include "extras/temporal.h"   // temporal_ffx_available(): the upscaler half of the same SDK release
 #include "nxrt/config.h"
 #include "nxrt/gfx.h"
 #include "nxrt/log.h"
@@ -427,6 +428,15 @@ bool ffx_fg_wanted() {
         if (find_dll().empty()) {
             NXLOG_W(kTag, "[dlss] frame_gen = fsr3: amd_fidelityfx_vk.dll (FidelityFX SDK v1.1.4) not found: put it in upscalers\\fsr3 next to the "
                           "executable or name it in [dlss] frame_gen_dll");
+            return false;
+        }
+        // The frame generation DLL and the upscaler DLL are one SDK release. With the upscaler missing, the game's upscale
+        // falls back to the built-in temporal upscaler while frame generation keeps running on the other DLL, and the two
+        // disagree about the history: on an RX 6800 XT that showed as the minimap, the buttons and the icons jittering
+        // (issue #18). Refuse the mix, and say which DLL is missing.
+        if (!temporal_ffx_available()) {
+            NXLOG_W(kTag, "[dlss] frame_gen = fsr3: amd_fidelityfx_upscaler_vk.dll is not available (the upscale falls back to the "
+                          "built-in temporal one): frame generation off rather than mixing the two (issue #18)");
             return false;
         }
         return true;

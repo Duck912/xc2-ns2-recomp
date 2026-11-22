@@ -569,13 +569,25 @@ std::shared_ptr<fs::RomfsImage> aoc_image(uint64_t id) {
     if (it != cache.end()) return it->second;
     std::string name(16, '0');
     for (int i = 0; i < 16; ++i) name[15 - i] = "0123456789abcdef"[static_cast<unsigned>(id >> (4 * i)) & 0xF];
-    const std::string dir = config_get_str("aoc", "dir", "game/dlc") + "/" + name + "/romfs";
-    auto img = std::make_shared<fs::RomfsImage>();
+    const std::string base = config_get_str("aoc", "dir", "game/dlc") + "/" + name;
+    std::string dir = base + "/romfs";
     std::string err;
+    auto img = std::make_shared<fs::RomfsImage>();
     if (!img->build(dir, &err)) {
-        NXLOG_W("aoc", "add-on content %s: %s (%s)", name.c_str(), err.c_str(), dir.c_str());
-        cache[id] = nullptr;
-        return nullptr;
+        // Some dumps keep an extra "0" level between the content id and romfs - <aoc>/<id>/0/romfs, as in issue #20.
+        // Try that before giving up, and log which one served so a wrong dump is visible in one line.
+        const std::string alt = base + "/0/romfs";
+        std::string err2;
+        auto alt_img = std::make_shared<fs::RomfsImage>();
+        if (!alt_img->build(alt, &err2)) {
+            NXLOG_W("aoc", "add-on content %s: %s (%s; also tried %s: %s)", name.c_str(), err.c_str(), dir.c_str(), alt.c_str(),
+                    err2.c_str());
+            cache[id] = nullptr;
+            return nullptr;
+        }
+        img = alt_img;
+        dir = alt;
+        NXLOG_I("aoc", "add-on content %s: romfs is one level down (%s)", name.c_str(), dir.c_str());
     }
     NXLOG_I("aoc", "add-on content %s served from %s", name.c_str(), dir.c_str());
     cache[id] = img;
