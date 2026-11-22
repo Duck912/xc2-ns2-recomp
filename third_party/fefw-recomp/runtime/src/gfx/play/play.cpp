@@ -555,7 +555,7 @@ void set_window_mode(const std::string& mode) {
         // Restore the player's configured windowed client size (e.g. 2560x1440 on a 4K display) and centre it,
         // since fullscreen startup creates the window at desktop dimensions to avoid a white-box flash.
         platform::set_window_size(st.settings.display.width, st.settings.display.height);
-        if (const int disp = platform::window_display(); disp > 0) platform::move_to_display(disp);
+        platform::center_window();
     }
     st.limiter.reset_schedule();
 }

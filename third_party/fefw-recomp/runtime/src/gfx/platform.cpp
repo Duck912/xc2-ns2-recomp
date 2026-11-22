@@ -529,6 +529,18 @@ bool move_to_display(int number) {
     return ok;
 }
 
+bool center_window() {
+    if (!g_window) return false;
+    if (fullscreen_mode() != FullscreenMode::Windowed) return false;
+    if (window_flag(SDL_WINDOW_MAXIMIZED)) SDL_RestoreWindow(g_window);
+    SDL_SetWindowBordered(g_window, true);
+    const SDL_DisplayID id = SDL_GetDisplayForWindow(g_window);
+    const int pos = id ? SDL_WINDOWPOS_CENTERED_DISPLAY(id) : SDL_WINDOWPOS_CENTERED;
+    const bool ok = SDL_SetWindowPosition(g_window, pos, pos);
+    SDL_SyncWindow(g_window);
+    return ok;
+}
+
 // ---- relative mouse -----------------------------------------------------------------------------------------------
 
 bool set_relative_mouse(bool on) {
