@@ -106,29 +106,27 @@ constexpr const char* kHdrFmtEn[] = {"Auto", "HDR10", "scRGB"};
 constexpr const char* kLatencyZh[] = {"关闭", "自动", "开启", "增强 (Boost)"};
 constexpr const char* kLatencyEn[] = {"Off", "Auto", "On", "Boost"};
 
+// The 3D render quality (play.cpp kRenderQuality, same order): the share of the output (the window's height) the 3D scene renders at.
 constexpr const char* kGameResZh[] = {
-    "4K 真原生 (3840x2160)",
-    "1440p 原生 (2560x1440，不超分)",
-    "1080p 原生 (1920x1080，不超分)",
-    "1080p -> 1440p 超分 (2K 屏推荐)",
-    "1440p -> 4K 超分 (4K 屏推荐)",
-    "1080p -> 4K 超分",
-    "900p -> 4K 超分",
-    "主机原版动态 4K",
+    "原生 / DLAA (100%)",
+    "质量 (67%)",
+    "平衡 (58%)",
+    "性能 (50%)",
+    "超级性能 (33%)",
+    "主机原版 (动态 720p)",
 };
 constexpr const char* kGameResEn[] = {
-    "4K Native (3840x2160)",
-    "1440p Native (2560x1440, No Upscale)",
-    "1080p Native (1920x1080, No Upscale)",
-    "1080p -> 1440p Upscale (2K Display)",
-    "1440p -> 4K Upscale (4K Display)",
-    "1080p -> 4K Upscale",
-    "900p -> 4K Upscale",
-    "Console Dynamic 4K",
+    "Native / DLAA (100%)",
+    "Quality (67%)",
+    "Balanced (58%)",
+    "Performance (50%)",
+    "Ultra Performance (33%)",
+    "Console default (dynamic 720p)",
 };
 constexpr int kGameResCount = static_cast<int>(sizeof kGameResZh / sizeof kGameResZh[0]);
 
 constexpr const char* kGame3dUpZh[] = {
+    "DLSS (NVIDIA)",
     "FSR 3.1.6 (推荐 60fps)",
     "FSR 4.1.2 (ML 高画质)",
     "FSR 2.3.4 (经典版)",
@@ -136,6 +134,7 @@ constexpr const char* kGame3dUpZh[] = {
     "关闭 / 原生直出 (Bilinear)",
 };
 constexpr const char* kGame3dUpEn[] = {
+    "DLSS (NVIDIA)",
     "FSR 3.1.6 (Rec. 60fps)",
     "FSR 4.1.2 (ML High)",
     "FSR 2.3.4 (Classic)",
@@ -143,6 +142,20 @@ constexpr const char* kGame3dUpEn[] = {
     "Off / Native (Bilinear)",
 };
 constexpr int kGame3dUpCount = static_cast<int>(sizeof kGame3dUpZh / sizeof kGame3dUpZh[0]);
+
+// [dlss] preset: the DLSS model (temporal_dlss.cpp). K is the transformer default for DLAA / Quality / Balanced, J is K with less
+// ghosting and more flicker. L and M (the Performance / Ultra Performance models, which Default already picks there) stay ini-only:
+// offered here they read as quality modes, and on DLAA they drew black lines across the picture.
+constexpr const char* kDlssPresetKeys[] = {"default", "K", "J"};
+constexpr const char* kDlssPresetZh[] = {"默认 (由驱动按模式选择)", "模型 K (Transformer，推荐)", "模型 J (Transformer，拖影更少)"};
+constexpr const char* kDlssPresetEn[] = {"Default (driver picks per mode)", "Model K (transformer, recommended)", "Model J (transformer, less ghosting)"};
+constexpr int kDlssPresetCount = static_cast<int>(sizeof kDlssPresetKeys / sizeof kDlssPresetKeys[0]);
+
+int dlss_preset_index(const std::string& k) {
+    for (int i = 0; i < kDlssPresetCount; ++i)
+        if (k == kDlssPresetKeys[i]) return i;
+    return 0;
+}
 
 constexpr const char* kSpatialUpZh[] = {"关闭", "FSR 1 (空间锐化)", "NIS (空间锐化)"};
 constexpr const char* kSpatialUpEn[] = {"Off", "FSR 1 (spatial)", "NIS (spatial)"};
@@ -154,19 +167,21 @@ constexpr extras::UpscaleMode kSpatialUpModes[] = {
 constexpr int kSpatialUpCount = static_cast<int>(sizeof kSpatialUpModes / sizeof kSpatialUpModes[0]);
 
 int game3d_up_index(const Game3dSettings& g) {
-    if (g.upscaler == "taau") return 3;
-    if (g.upscaler == "bilinear") return 4;
-    if (!g.fsr_version.empty() && g.fsr_version[0] == '4') return 1;
-    if (!g.fsr_version.empty() && g.fsr_version[0] == '2') return 2;
-    return 0;
+    if (g.upscaler == "dlss") return 0;
+    if (g.upscaler == "taau") return 4;
+    if (g.upscaler == "bilinear") return 5;
+    if (!g.fsr_version.empty() && g.fsr_version[0] == '4') return 2;
+    if (!g.fsr_version.empty() && g.fsr_version[0] == '2') return 3;
+    return 1;
 }
 
 void set_game3d_up_index(Game3dSettings& g, int idx) {
     switch (idx) {
-        case 0: g.upscaler = "fsr3"; g.fsr_version = "3.1"; break;
-        case 1: g.upscaler = "fsr3"; g.fsr_version = "4.1"; break;
-        case 2: g.upscaler = "fsr3"; g.fsr_version = "2.3"; break;
-        case 3: g.upscaler = "taau"; break;
+        case 0: g.upscaler = "dlss"; break;
+        case 1: g.upscaler = "fsr3"; g.fsr_version = "3.1"; break;
+        case 2: g.upscaler = "fsr3"; g.fsr_version = "4.1"; break;
+        case 3: g.upscaler = "fsr3"; g.fsr_version = "2.3"; break;
+        case 4: g.upscaler = "taau"; break;
         default: g.upscaler = "bilinear"; break;
     }
 }
@@ -720,24 +735,23 @@ void tab_display(const LiveStatus& live, Page& p, float bottom_h) {
     pane_begin("tab_display", bottom_h);
 
     card_group("窗口与分辨率", "Window & Resolution");
-    if (card_choice("game_res", "游戏 3D 分辨率 / 输出", "Game 3D resolution",
-                    "切换游戏内部 3D 渲染与主机输出分辨率（写入 nxrt.ini，重启生效）。切到 1080p/1440p 原生（不超分）会自动联动关闭超分，切到超分档位会自动联动 FSR 3.1.6；之后仍可在「画质」页自由微调。",
-                    "Sets XC2 internal 3D render and output resolution in nxrt.ini (takes effect on restart). Auto-links Native (No Upscale) to Off and upscale presets to FSR 3.1.6 (still freely adjustable in Graphics).",
+    if (card_choice("game_res", "3D 渲染质量", "3D render quality",
+                    "3D 场景按输出分辨率（窗口高度，[am] resolution）的百分比渲染，再由「画质」页的超分器放大到输出：原生 = DLAA / 原生抗锯齿，质量 / 平衡 / 性能 / 超级性能 = 对应的 DLSS / FSR 模式。分辨率固定不再动态下降。写入 nxrt.ini，重启生效。",
+                    "The 3D scene renders at this share of the output (the window's height, [am] resolution) and the upscaler on the Graphics "
+                    "page brings it to the output: Native = DLAA / native AA, Quality / Balanced / Performance / Ultra Performance = the DLSS / "
+                    "FSR modes of those names. The resolution stays fixed (no dynamic drops). Saved to nxrt.ini; takes effect on restart.",
                     &p.edit.game3d.res_preset, kGameResZh, kGameResEn, kGameResCount, true)) {
-        const int rp = p.edit.game3d.res_preset;
-        if (rp == 1 || rp == 2) {
-            p.edit.game3d.upscaler = "bilinear";
-        } else if (rp >= 3 && p.edit.game3d.upscaler == "bilinear") {
-            p.edit.game3d.upscaler = "fsr3";
+        // a quality setting needs a temporal upscaler to reach the output: off (bilinear) becomes DLSS where it runs, else FSR 3.1
+        if (p.edit.game3d.res_preset != kGameResCount - 1 && p.edit.game3d.upscaler == "bilinear") {
+            p.edit.game3d.upscaler = extras::temporal_dlss_started() ? "dlss" : "fsr3";
             if (p.edit.game3d.fsr_version.empty()) p.edit.game3d.fsr_version = "3.1";
         }
         mark(p);
     }
-    // A hint, not a gate: 4K in this list means a 3840x2160 render target or a 4K output, and the mirror capture's copies
-    // (up to ~3.5 GiB when it is on) come on top of it. Measured on a 4060 Laptop (8 GB): the capture asked for 1989 of the
-    // 3584 MiB it wanted, so this is the combination that runs out of video memory first, and the DLC scenes are the ones
-    // that get there. The player can still pick it.
-    if ((p.edit.game3d.res_preset == 0 || p.edit.game3d.res_preset == 4) && nvn::mirror_device_vram() < (10ull << 30)) {
+    // A hint, not a gate: Native at a 4K output renders the scene at 3840x2160, and the mirror capture's copies (up to ~3.5 GiB when it
+    // is on) come on top of it. Measured on a 4060 Laptop (8 GB): the capture asked for 1989 of the 3584 MiB it wanted, so this is the
+    // combination that runs out of video memory first, and the DLC scenes are the ones that get there. The player can still pick it.
+    if (p.edit.game3d.res_preset == 0 && nvn::mirror_device_vram() < (10ull << 30)) {
         ImGui::PushStyleColor(ImGuiCol_Text, kGold);
         ImGui::TextWrapped("%s", tr("注意：这台显卡的显存不到 10 GB，4K 会与 mirror capture 的拷贝（约 3.5 GiB）叠加，"
                                     "附加内容场景最容易撑不住；1440p 更稳。",
@@ -879,7 +893,27 @@ void tab_graphics(const LiveStatus& live, Page& p, float bottom_h) {
             set_game3d_up_index(g3d, gidx);
             mark(p);
         }
-        if (card_slider_f("dlss_sharp", "3D 超分锐度 (FSR RCAS)", "3D Upscaler sharpness",
+        if (g3d.upscaler == "dlss") {
+            // DLSS runs through Streamline, which has to be loaded before the Vulkan device: switching to it live works only when the
+            // game started with it (or with auto and the DLLs there); otherwise the choice is saved and applies at the next start.
+            if (!extras::temporal_dlss_started()) {
+                ImGui::PushStyleColor(ImGuiCol_Text, kGold);
+                ImGui::TextWrapped("%s", extras::temporal_dlss_available()
+                                             ? tr("DLSS 需要在启动时加载：已保存，重启游戏后生效。", "DLSS loads at start-up: saved, it applies after a restart.")
+                                             : tr("找不到 DLSS 文件（upscalers\\streamline）。", "The DLSS files are missing (upscalers\\streamline)."));
+                ImGui::PopStyleColor();
+            }
+            int pidx = dlss_preset_index(g3d.dlss_preset);
+            if (card_choice("dlss_preset", "DLSS 模型", "DLSS model",
+                            "DLSS 使用的 AI 模型，与画质档位无关（档位在「显示」页的「3D 渲染质量」），实时切换。默认 = 驱动按模式自动选择；K 是 Transformer 模型，画质最好；J 拖影更少但更闪。",
+                            "Which AI model DLSS uses - not the quality level (that is 3D render quality on the Display page). Applies live. "
+                            "Default lets the driver choose per mode; K is the transformer model and looks best; J ghosts less but flickers more.",
+                            &pidx, kDlssPresetZh, kDlssPresetEn, kDlssPresetCount, false, true)) {
+                g3d.dlss_preset = kDlssPresetKeys[pidx];
+                mark(p);
+            }
+        }
+        if (g3d.upscaler != "dlss" && card_slider_f("dlss_sharp", "3D 超分锐度 (FSR RCAS)", "3D Upscaler sharpness",
                           "控制 FSR 3.1.6 / 4.1.2 / 2.3.4 内置锐化强度（0.00 关闭，1.00 最强，推荐 0.40 ~ 0.60），点应用后实时生效且不卡顿。",
                           "FSR RCAS sharpening strength (0.00 off, 1.00 max, 0.40-0.60 recommended). Applies live.",
                           &g3d.sharpness, 0.0, 1.0, 0.05, "%.2f", false, true)) {

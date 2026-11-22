@@ -730,11 +730,35 @@ float render_scale_now() {
     return sc;
 }
 
+// [gfx] output_scale (default: render_scale): the scale of the render targets at least [gfx] output_min_width (default 1920) wide - the
+// game's output side (in XC2 NS2 the 1920x1080 set the upscaler writes and the post chain reads) - while the narrower targets (the
+// 1280x720 scene set) keep render_scale. With both, the upscaler's input and output sizes are set apart: a 4K window takes output_scale
+// 2 and render_scale 3 / 2 / 1.74 / 1.5 / 1 for DLAA / Quality / Balanced / Performance / Ultra Performance (the upscaler picks its mode
+// from the ratio). Fixed once read, like render_scale.
+float output_scale_now() {
+    static const float out = [] {
+        const std::string v = nxrt::config_get_str("gfx", "output_scale", "");
+        if (v.empty()) return 0.0f;   // follows render_scale
+        float s = static_cast<float>(std::atof(v.c_str()));
+        if (!(s > 0.0f)) return 0.0f;
+        s = std::clamp(s, 0.25f, 4.0f);
+        s = std::round(s * 1080.0f) / 1080.0f;
+        if (std::fabs(s - 1.0f) < 0.01f) s = 1.0f;
+        NXLOG_I(kTag, "output scale %.3f ([gfx] output_scale, targets from %lld wide)", s,
+                static_cast<long long>(nxrt::config_get_int("gfx", "output_min_width", 1920)));
+        return s;
+    }();
+    return out > 0.0f ? out : render_scale_now();
+}
+
 // The scale a texture gets when its image is made for a render target (after Ryujinx's TextureScaling rules): 2D colour or depth targets
 // of at least 32x32, not block-compressed, not pitch-linear, and not square powers of two (shadow
 // maps, LUTs). Everything else, and every texture first used another way, keeps the NVN size.
 float attachment_scale(const Texture& t) {
-    const float sc = render_scale_now();
+    const float scene = render_scale_now(), out = output_scale_now();
+    if (scene == 1.0f && out == 1.0f) return 1.0f;
+    static const int out_min = static_cast<int>(nxrt::config_get_int("gfx", "output_min_width", 1920));
+    const float sc = t.b.width >= out_min ? out : scene;
     if (sc == 1.0f) return 1.0f;
     const TextureBuilderInfo& b = t.b;
     if (!t.fmt || t.fmt->compressed || t.fmt->block_w != 1 || t.fmt->block_h != 1) return 1.0f;
@@ -1457,7 +1481,11 @@ TexGpu* tex_gpu_attachment(Texture* t) {
 
 TexGpu* tex_gpu_scaled(Texture* t, float scale) { return tex_or_null(t, scale); }
 
-float render_scale() { return render_scale_now(); }
+// Not 1 while any target scales (the scene set or, with [gfx] output_scale, only the output side): the callers ask "is scaling on".
+float render_scale() {
+    const float s = render_scale_now();
+    return s != 1.0f ? s : output_scale_now();
+}
 
 float tex_scale(Texture* t) {
     return (t && t->gpu && !t->gpu->failed) ? t->gpu->scale : 1.0f;

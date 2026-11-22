@@ -52,6 +52,7 @@
 #include "nxrt/runtime.h"
 #include "nxrt/timestep.h"
 #include "nxrt/tt.h"
+#include "extras/temporal.h"
 #include "menu_mouse.h"
 #include "play_engine.h"
 #include "play_game.h"
@@ -343,24 +344,49 @@ void publish_live_pad_config(const PadSettings& p) {
     st.pad_cfg_rumble_scale.store(static_cast<float>(std::clamp(p.rumble_scale, 0.0, 1.0)), std::memory_order_relaxed);
 }
 
+// The 3D render quality of the F1 page (Game3dSettings::res_preset): the upscaler's input as a share of its output. XC2 NS2 renders its
+// scene into a 1280x720 set and upscales into a 1920x1080 set; with the dynamic resolution locked ([upscale] lock_render_size) the
+// runtime scales the two sets apart ([gfx] render_scale for the scene, [gfx] output_scale for the output, nvn_gpu_texture.cpp), so the
+// output lands at the window's height and the input at that times the share - and DLSS / FSR pick their mode from the ratio. Measured
+// against [xc2] native_res (2026-11-22, RTX 5090, 4K): that path held its 3840x2160 target only on the first frame (1080p..1440p after,
+// Performance mode, oversized depth-of-field bokeh); this one renders the chosen size every frame. native_res stays for the ini.
+struct RenderQuality { const char* key; double share; };
+constexpr RenderQuality kRenderQuality[] = {
+    {"native", 1.0}, {"quality", 2.0 / 3.0}, {"balanced", 0.58}, {"performance", 0.5}, {"ultra_performance", 1.0 / 3.0}, {"console", 0.0},
+};
+constexpr int kRenderQualityCount = static_cast<int>(sizeof kRenderQuality / sizeof kRenderQuality[0]);
+
+// The output height the quality is a share of: [am] resolution (the console mode the game renders for, the window's size), else 1080.
+int render_output_height() {
+    const std::string am = config_get_str("am", "resolution", "");
+    const size_t x = am.find_first_of("xX");
+    const int h = x == std::string::npos ? 0 : std::atoi(am.c_str() + x + 1);
+    return h >= 720 && h <= 4320 ? h : 1080;
+}
+
 Game3dSettings hydrate_game3d_from_config() {
     Game3dSettings r;
-    const int64_t nat_res = config_get_int("xc2", "native_res", 0);
-    const int64_t res_cls = config_get_int("xc2", "res_class", 0);
-    const int64_t nat_w = config_get_int("xc2", "native_w", 3840);
-    if (nat_res <= 0) r.res_preset = 7;
-    else if (res_cls == 3) r.res_preset = 2;                       // 1080p native (no 4K upscale)
-    else if (res_cls == 2 && nat_w <= 1920) r.res_preset = 3;      // 1080p -> 1440p upscale
-    else if (res_cls == 2) r.res_preset = 1;                       // 1440p native (no 4K upscale)
-    else if (nat_w <= 1600) r.res_preset = 6;                      // 900p -> 4K upscale
-    else if (nat_w <= 1920) r.res_preset = 5;                      // 1080p -> 4K upscale
-    else if (nat_w <= 2560) r.res_preset = 4;                      // 1440p -> 4K upscale
-    else r.res_preset = 0;                                         // 4K true native
+    const std::string q = config_get_str("upscale", "render_quality", "");
+    r.res_preset = kRenderQualityCount - 1;   // console default
+    for (int i = 0; i < kRenderQualityCount; ++i)
+        if (q == kRenderQuality[i].key) r.res_preset = i;
+    if (q.empty() && config_get_bool("upscale", "lock_render_size", false)) {   // set by hand: the nearest quality to the ini's scales
+        const double scene = config_get_double("gfx", "render_scale", 1.0);
+        const double out = config_get_double("gfx", "output_scale", scene);
+        const double share = out > 0.0 ? (scene * 720.0) / (out * 1080.0) : 0.0;
+        double best = 1e9;
+        for (int i = 0; i + 1 < kRenderQualityCount; ++i) {
+            const double d = std::fabs(std::log(share / kRenderQuality[i].share));
+            if (share > 0.0 && d < best) { best = d; r.res_preset = i; }
+        }
+    }
 
     std::string up = config_get_str("dlss", "upscaler", "fsr3");
     for (char& c : up) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    if (up != "fsr3" && up != "taau" && up != "bilinear") up = (up == "fsr" || up == "auto") ? "fsr3" : "taau";
+    if (up == "auto") up = extras::temporal_dlss_started() ? "dlss" : "fsr3";
+    if (up != "dlss" && up != "fsr3" && up != "taau" && up != "bilinear") up = up == "fsr" ? "fsr3" : "taau";
     r.upscaler = up;
+    r.dlss_preset = extras::dlss_preset_current();
 
     std::string fv = config_get_str("upscale", "fsr_version", "3.1");
     if (fv.rfind("4", 0) == 0) fv = "4.1";
@@ -385,29 +411,27 @@ void apply_game3d_settings(const Game3dSettings& old_g, const Game3dSettings& g3
         const bool ok4 = config_write("upscale", "fsr_follow_size", (!g3d.fsr_version.empty() && g3d.fsr_version[0] == '4') ? "1" : "0", &err);
         if (!ok1 || !ok2 || !ok3 || !ok4) NXLOG_W(kTag, "cannot persist 3D upscaler settings to nxrt.ini: %s", err.c_str());
     }
-    if (g3d.res_preset != old_g.res_preset) {
-        struct PresetDef { const char* am_res; const char* res_cls; const char* nat_res; const char* nat_w; const char* nat_h; };
-        static constexpr PresetDef kPresets[] = {
-            {"3840x2160", "0", "2", "3840", "2160"},   // 0: 4K true native (docked mode 1: 3840x2160)
-            {"2560x1440", "2", "2", "2560", "1440"},   // 1: 1440p native (docked mode 5: 2560x1440, 1:1)
-            {"1920x1080", "3", "2", "1920", "1080"},   // 2: 1080p native (patched mode 5: 1920x1080, 1:1)
-            {"2560x1440", "2", "2", "1920", "1080"},   // 3: 1080p -> 1440p upscale
-            {"3840x2160", "0", "2", "2560", "1440"},   // 4: 1440p -> 4K upscale
-            {"3840x2160", "0", "2", "1920", "1080"},   // 5: 1080p -> 4K upscale
-            {"3840x2160", "0", "2", "1600", "900"},    // 6: 900p -> 4K upscale
-            {"3840x2160", "0", "0", "0",    "0"},      // 7: console dynamic 4K
-        };
-        const int idx = std::clamp(g3d.res_preset, 0, static_cast<int>(sizeof kPresets / sizeof kPresets[0]) - 1);
-        const PresetDef& pr = kPresets[idx];
+    if (g3d.dlss_preset != old_g.dlss_preset) {   // the DLSS model: live, and kept for the next start
+        extras::set_dlss_preset_live(g3d.dlss_preset.c_str());
         std::string err;
-        const bool ok = config_write("am", "resolution", pr.am_res, &err) &&
-                        config_write("xc2", "res_class", pr.res_cls, &err) &&
-                        config_write("xc2", "native_res", pr.nat_res, &err) &&
-                        config_write("xc2", "native_w", pr.nat_w, &err) &&
-                        config_write("xc2", "native_h", pr.nat_h, &err);
-        if (!ok) NXLOG_W(kTag, "cannot persist 3D resolution preset to nxrt.ini: %s", err.c_str());
-        else NXLOG_I(kTag, "3D resolution preset -> %d (%s, res_class=%s, native_res=%s, %sx%s) saved to nxrt.ini (takes effect on restart)",
-                     idx, pr.am_res, pr.res_cls, pr.nat_res, pr.nat_w, pr.nat_h);
+        if (!config_write("dlss", "preset", g3d.dlss_preset, &err)) NXLOG_W(kTag, "cannot persist [dlss] preset to nxrt.ini: %s", err.c_str());
+    }
+    if (g3d.res_preset != old_g.res_preset) {
+        const int idx = std::clamp(g3d.res_preset, 0, kRenderQualityCount - 1);
+        const RenderQuality& rq = kRenderQuality[idx];
+        const int out_h = render_output_height();
+        const bool console = rq.share <= 0.0;
+        char scene[32], out[32];
+        std::snprintf(scene, sizeof scene, "%.4f", console ? 1.0 : out_h * rq.share / 720.0);
+        std::snprintf(out, sizeof out, "%.4f", console ? 1.0 : out_h / 1080.0);
+        std::string err;
+        // native_res off: its hooks and these scales would multiply (a 3840x2160 scene scaled again)
+        const bool ok = config_write("upscale", "render_quality", rq.key, &err) && config_write("gfx", "render_scale", scene, &err) &&
+                        config_write("gfx", "output_scale", out, &err) && config_write("upscale", "lock_render_size", console ? "0" : "1", &err) &&
+                        config_write("xc2", "native_res", "0", &err) && config_write("xc2", "res_class", "0", &err);
+        if (!ok) NXLOG_W(kTag, "cannot persist the 3D render quality to nxrt.ini: %s", err.c_str());
+        else NXLOG_I(kTag, "3D render quality -> %s (%dp output: render_scale %s, output_scale %s) saved to nxrt.ini (takes effect on restart)", rq.key,
+                     out_h, scene, out);
     }
 }
 

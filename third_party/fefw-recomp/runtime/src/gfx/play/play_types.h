@@ -228,10 +228,14 @@ struct FpsSettings {
 
 // ---- 3D game resolution & upscaler (synced with nxrt.ini: [am], [xc2], [dlss], [upscale]) ----
 struct Game3dSettings {
-    int res_preset = 0;                 // 0=4K native, 1=1440p->4K, 2=1440p native, 3=1080p native, 4=console dynamic 4K
-    std::string upscaler = "fsr3";      // "fsr3" | "taau" | "bilinear"
+    // The 3D render quality: the upscaler's input as a share of the output (play.cpp kRenderQuality), the output being the window's
+    // height ([am] resolution). Written as [upscale] render_quality + the [gfx] render_scale / output_scale it implies; restart.
+    // 0 native (DLAA / 100%), 1 Quality (67%), 2 Balanced (58%), 3 Performance (50%), 4 Ultra Performance (33%), 5 console default.
+    int res_preset = 5;
+    std::string upscaler = "fsr3";      // "dlss" | "fsr3" | "taau" | "bilinear"
     std::string fsr_version = "3.1";    // "3.1" | "4.1" | "2.3"
     double sharpness = 0.5;             // [dlss] sharpness (0.0..1.0)
+    std::string dlss_preset = "default";   // [dlss] preset: "default" | "J" | "K" | "L" | "M" (live)
 };
 
 // ---- lock-on and camera feel (S32) --------------------------------------------------------------------------------------------
