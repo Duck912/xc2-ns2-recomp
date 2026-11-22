@@ -140,10 +140,9 @@ glue, the launcher, the film path and the analysis tools.
   PRs — read for reference finding
 * **[@capibawa](https://github.com/capibawa)** — [nxnative, branch `xc2-ns2-profile`](https://github.com/capibawa/nxnative/tree/xc2-ns2-profile):
   the launch switches and the host-side movie/audio takeover this project's film path follows
-* **[@nikolaybutnik](https://github.com/nikolaybutnik)** — [PR #19](https://github.com/weile10000/xc2-ns2-recomp/pull/19):
-  the mirror capture that made NVIDIA cards work
-* **[@UrsineBear](https://github.com/UrsineBear)** — [PR #27](https://github.com/weile10000/xc2-ns2-recomp/pull/27):
-  RDNA 2 cloud sea, native-resolution presets, the bilingual F1 page
+* **Everyone who sent a pull request** — credited by name in the release notes of the version their work landed
+  in ([releases](https://github.com/weile10000/xc2-ns2-recomp/releases)). The list here stays short on purpose:
+  this page should not grow one line per contribution.
 * **DeepSeek V4.1 Flash** — pair-programmed this project with its author, from the first lift to this release
 
 ## Licence
