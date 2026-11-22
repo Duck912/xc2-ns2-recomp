@@ -26,6 +26,5 @@ fps = 60
 
 [media]
 video_decoder = library
-movie_pts_shift_ms = 110
 movie_timer_poke = 1
 movie_pts_wallclock = 0
