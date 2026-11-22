@@ -12,6 +12,7 @@ mod play;
 mod settings;
 mod setup;
 mod steam;
+mod streamline;
 mod update;
 
 use serde::{Deserialize, Serialize};
@@ -695,6 +696,56 @@ fn cancel_update(state: State<Arc<update::Shared>>) {
     state.cancel.store(true, Ordering::SeqCst);
 }
 
+/// The folder the game is started from: the DLSS files go to upscalers/streamline there (streamline.rs).
+fn game_run_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let cfg = load_config(app);
+    let repo = need_repo(&cfg)?;
+    let game = game_dir_of(&cfg, &repo);
+    let exe = if package_tools().is_some() { game.join("fefw.exe") } else { setup::exe_path(&repo) };
+    Ok(exe.parent().map(|d| d.to_path_buf()).unwrap_or(game))
+}
+
+#[tauri::command]
+fn dlss_download_status(state: State<Arc<streamline::Shared>>) -> streamline::Status {
+    let mut s = state.status.lock().unwrap().clone();
+    if s.state.is_empty() {
+        s.state = "idle".into();
+    }
+    s
+}
+
+/// Downloads NVIDIA's Streamline SDK release and installs the DLSS files (streamline.rs); progress through dlss_download_status.
+#[tauri::command]
+fn start_dlss_download(app: AppHandle, state: State<Arc<streamline::Shared>>, play_state: State<play::PlayState>) -> Result<(), String> {
+    if play_state.0.lock().unwrap().state == "running" {
+        return Err("The game is running. Close it first: it keeps the DLSS files open.".into());
+    }
+    let game_dir = game_run_dir(&app)?;
+    {
+        let mut s = state.status.lock().unwrap();
+        if s.state == "running" {
+            return Err("The DLSS download is already running.".into());
+        }
+        *s = streamline::Status { state: "running".into(), phase: "download".into(), message: "Starting".into(), ..Default::default() };
+    }
+    let shared = state.inner().clone();
+    shared.cancel.store(false, Ordering::SeqCst);
+    std::thread::spawn(move || {
+        let run = streamline::Run { shared: &shared, game_dir };
+        let end = match run.run() {
+            Ok(s) => s,
+            Err(e) => streamline::Status { state: "error".into(), message: e, ..Default::default() },
+        };
+        *shared.status.lock().unwrap() = end;
+    });
+    Ok(())
+}
+
+#[tauri::command]
+fn cancel_dlss_download(state: State<Arc<streamline::Shared>>) {
+    state.cancel.store(true, Ordering::SeqCst);
+}
+
 /// Starts the (new) launcher from the install folder and closes this one.
 #[tauri::command]
 fn restart_launcher(app: AppHandle) -> Result<(), String> {
@@ -718,6 +769,7 @@ fn main() {
         .manage(play::PlayState::default())
         .manage(Arc::new(setup::Shared::default()))
         .manage(Arc::new(update::Shared::default()))
+        .manage(Arc::new(streamline::Shared::default()))
         .on_window_event(|window, event| {
             // closing the window pauses a running setup rather than leaving its compilers behind
             if let tauri::WindowEvent::Destroyed = event {
@@ -756,6 +808,9 @@ fn main() {
             update_status,
             start_update,
             cancel_update,
+            dlss_download_status,
+            start_dlss_download,
+            cancel_dlss_download,
             restart_launcher,
             locale::list_locales,
             locale::read_locale,

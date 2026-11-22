@@ -29,7 +29,9 @@ const SECTIONS = [
       { id: 'upscaler', type: 'select', label: 'settings.upscaler.label', sec: 'dlss', key: 'upscaler', def: 'taau',
         options: [['taau', 'settings.upscaler.taau'], ['fsr3', 'settings.upscaler.fsr3'], ['dlss', 'settings.upscaler.dlss'],
           ['xess', 'settings.upscaler.xess'], ['auto', 'settings.upscaler.auto']],
-        hint: 'settings.upscaler.hint' },
+        hint: 'settings.upscaler.hint',
+        // the DLSS files (NVIDIA's, not in the package) and the button that fetches them, while DLSS is chosen for upscaling or frames
+        status: 'dlss', showStatus: (m) => m.upscaler === 'dlss' || m.upscaler === 'auto' || m.frame_gen === 'dlss' },
       { id: 'lockRenderSize', type: 'toggle', label: 'settings.lockRenderSize.label', sec: 'upscale', key: 'lock_render_size', def: '0',
         hint: 'settings.lockRenderSize.hint' },
       { id: 'fsr_dll', type: 'path', label: 'settings.fsrDll.label', sec: 'upscale', key: 'fsr_dll', def: '', placeholder: 'settings.fsrDll.placeholder',
@@ -187,7 +189,7 @@ export async function render(el, ctx) {
 
   const fieldHtml = (f) => `
     <div class="field">
-      <label class="name">${esc(t(f.label))}${f.hint ? `<span class="hint">${esc(t(f.hint))}</span>` : ''}${f.status ? `<span class="hint" data-status="${f.status}">${esc(t('settings.files.checking'))}</span>` : ''}</label>
+      <label class="name">${esc(t(f.label))}${f.hint ? `<span class="hint">${esc(t(f.hint))}</span>` : ''}${f.status && (!f.showStatus || f.showStatus(model)) ? `<span class="hint" data-status="${f.status}">${esc(t('settings.files.checking'))}</span>` : ''}</label>
       <div class="control">${CONTROL[f.type](f, model[f.id])}</div>
     </div>`;
 
@@ -295,6 +297,60 @@ export async function render(el, ctx) {
     put('fsr', `${line('settings.files.upscaling', r.fsr_upscaling)}. ${line('settings.files.frameGen', r.fsr_framegen)}.`);
     put('dlss', `${line('settings.files.dlss', r.dlss)}. ${line('settings.files.dlssFrameGen', r.dlss_framegen)}.`);
     if (r.xess) put('xess', `${line('settings.files.xess', r.xess)}.`);
+    // the DLSS files from NVIDIA (streamline.rs): offered while the default folder lacks them; a download in progress is shown again
+    const st = await api('dlss_download_status').catch(() => null);
+    if (st && st.state === 'running') pollDlss();
+    else renderDlssGet(!r.dlss_framegen.found && !String(model.dlss_dll || '').trim(), st && st.state === 'error' ? st : null);
+  }
+
+  // The download button under the DLSS file status, its progress and its result.
+  let dlssPoll = 0;
+  function renderDlssGet(show, st) {
+    el.querySelectorAll('[data-status="dlss"]').forEach((n) => {
+      let box = n.parentElement.querySelector('[data-dlss-get]');
+      if (!show) {
+        if (box) box.remove();
+        return;
+      }
+      if (!box) {
+        box = document.createElement('span');
+        box.className = 'hint';
+        box.dataset.dlssGet = '';
+        n.after(box);
+      }
+      if (st && st.state === 'running') {
+        box.innerHTML = `${esc(st.message)} <button class="btn" data-dlss-cancel>${esc(t('settings.files.dlssGetCancel'))}</button>`;
+      } else {
+        box.innerHTML = `<button class="btn" data-dlss-start>${icon('download')}${esc(t('settings.files.dlssGet', { size: 276 }))}</button> `
+          + `${esc(t('settings.files.dlssGetHint', { version: '2.14.16' }))}${st ? ` ${esc(st.message)}` : ''}`;
+      }
+      box.querySelector('[data-dlss-start]')?.addEventListener('click', startDlss);
+      box.querySelector('[data-dlss-cancel]')?.addEventListener('click', () => api('cancel_dlss_download').catch(() => {}));
+    });
+    refreshIcons();
+  }
+  async function startDlss() {
+    try {
+      await api('start_dlss_download');
+    } catch (e) {
+      toast(errText(e), 'error');
+      return;
+    }
+    pollDlss();
+  }
+  async function pollDlss() {
+    clearTimeout(dlssPoll);
+    const st = await api('dlss_download_status').catch(() => null);
+    if (!st) return;
+    if (st.state === 'running') {
+      renderDlssGet(true, st);
+      dlssPoll = setTimeout(pollDlss, 400);
+    } else if (st.state === 'done') {
+      toast(t('settings.files.dlssGetDone'), 'ok');
+      checkFiles();
+    } else if (st.state === 'error') {
+      renderDlssGet(true, st);
+    }
   }
   let checkTimer = 0;
 

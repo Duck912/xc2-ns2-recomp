@@ -925,7 +925,7 @@ void tab_graphics(const LiveStatus& live, Page& p, float bottom_h) {
                 ImGui::PushStyleColor(ImGuiCol_Text, kGold);
                 ImGui::TextWrapped("%s", extras::temporal_dlss_available()
                                              ? tr("DLSS 需要在启动时加载：已保存，重启游戏后生效。", "DLSS loads at start-up: saved, it applies after a restart.")
-                                             : tr("找不到 DLSS 文件（upscalers\\streamline）。", "The DLSS files are missing (upscalers\\streamline)."));
+                                             : tr("找不到 DLSS 文件：可在启动器的「设置 → 超分」中从 NVIDIA 下载。", "The DLSS files are missing: the launcher downloads them from NVIDIA (Settings, under Upscaler)."));
                 ImGui::PopStyleColor();
             }
             int pidx = dlss_preset_index(g3d.dlss_preset);
