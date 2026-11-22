@@ -98,7 +98,7 @@ const SECTIONS = [
                   ['Spanish', 'settings.gameLang.spanish'],
                   ['LatinAmericanSpanish', 'settings.gameLang.latinSpanish'],
                   ['Korean', 'settings.gameLang.korean'],
-                  ['auto', 'settings.gameLang.auto']],,
+                  ['auto', 'settings.gameLang.auto']],
         hint: 'settings.gameLang.hint' },
     ],
   },
