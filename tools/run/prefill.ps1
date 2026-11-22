@@ -36,8 +36,11 @@ Write-Output ('PREFILL: collecting shaders the cache lacks, up to ' + $Seconds +
 Set-Status 'collect' 0 0 'starting the game headless'
 $env:NXRT_NVN_DUMP_MISSING = $missing
 $env:NXRT_NVN_DS_DEBUG = '1'
+$prevAudio = $env:XC2_301_AUDIO
+$env:XC2_301_AUDIO = ''
 $log = Join-Path $Work 'prefill.log'
 $p = Start-Process -FilePath $Exe -ArgumentList '--exefs', $Exefs, '--link', 'host', '--gfx', 'headless', '--log', $log -PassThru -WindowStyle Hidden
+$env:XC2_301_AUDIO = $prevAudio
 $deadline = (Get-Date).AddSeconds($Seconds)
 $lastReport = 0
 while ((Get-Date) -lt $deadline -and -not $p.HasExited) {
@@ -49,8 +52,10 @@ while ((Get-Date) -lt $deadline -and -not $p.HasExited) {
         Write-Output ('PREFILL: ' + [math]::Round($sw.Elapsed.TotalSeconds) + '/' + $Seconds + ' s, ' + $n + ' block(s) so far')
     }
 }
+$killedByUs = $false
 if (-not $p.HasExited) {
     # it is our own headless run, so closing it here is safe: the real launch comes next
+    $killedByUs = $true
     $p.Kill(); Start-Sleep -Seconds 2
     Write-Output ("prefill: stopped the collector after " + $Seconds + " s")
 } else {
@@ -60,9 +65,9 @@ if (-not $p.HasExited) {
 $blocks = @(Get-ChildItem $missing -Filter 'code_*.bin' -ErrorAction SilentlyContinue)
 Write-Output ('PREFILL: collected ' + $blocks.Count + ' block(s) in ' + [math]::Round($sw.Elapsed.TotalSeconds, 1) + ' s')
 
-# A collector that died early collected nothing, and writing the marker now would tell every later launch that the
+# A collector that died early on its own collected nothing, and writing the marker now would tell every later launch that the
 # cache is complete when it is not. Say so and leave the marker unwritten, so the next launch tries again.
-if ($p.HasExited -and $p.ExitCode -ne 0 -and $blocks.Count -eq 0) {
+if (-not $killedByUs -and $p.HasExited -and $p.ExitCode -ne 0 -and $blocks.Count -eq 0) {
     Set-Status 'failed' $sw.Elapsed.TotalSeconds 0 ('the collector exited with ' + $p.ExitCode)
     Write-Output ('PREFILL: the collector exited with ' + $p.ExitCode + ' before finding anything; the cache is unchanged')
     Write-Output 'PREFILL: the next launch will try again - nothing is lost'

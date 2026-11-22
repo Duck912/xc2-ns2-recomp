@@ -800,7 +800,7 @@ static void arm_native_res(uint64_t main_base) {
                     if (have_dims && d[0] > 0 && d[1] > 0) {
                         nxrt::nvn::set_game_viewport_info(static_cast<uint32_t>(d[0]), static_cast<uint32_t>(d[1]),
                                                           static_cast<uint32_t>(d[2]), static_cast<uint32_t>(d[3]),
-                                                          g_rcls >= 2, g_nat_mode == 1);
+                                                          g_rcls > 0, g_nat_mode == 1);
                     }
                     if (d[0] != last_rw || d[1] != last_rh || d[2] != last_bw || d[3] != last_bh || count < 3) {
                         last_rw = d[0]; last_rh = d[1]; last_bw = d[2]; last_bh = d[3];
@@ -1994,21 +1994,45 @@ int main(int argc, char **argv) {
         nxrt::platform::init();
         nxrt::platform::WindowDesc wd;
         wd.title = nxrt::game::info().title;
+        const bool start_borderless = (play_disp.window_mode == "borderless");
+        const bool start_exclusive = (play_disp.window_mode == "exclusive");
+        const bool start_fullscreen = start_borderless || start_exclusive;
         int win_w = static_cast<int>(nxrt::config_get_int("gfx", "window_width", 0));
         int win_h = static_cast<int>(nxrt::config_get_int("gfx", "window_height", 0));
-        if (play_disp.width >= 320 && play_disp.height >= 240) {
+        if (!start_fullscreen && play_disp.width >= 320 && play_disp.height >= 240) {
             win_w = play_disp.width;
             win_h = play_disp.height;
         }
-        if (win_w <= 0 || win_h <= 0) {
+        if (start_fullscreen || win_w <= 0 || win_h <= 0) {
             win_w = ::GetSystemMetrics(SM_CXSCREEN);
             win_h = ::GetSystemMetrics(SM_CYSCREEN);
             if (win_w < 320 || win_h < 240) { win_w = 1280; win_h = 720; }   // no desktop mode to ask (session 0)
         }
         wd.width = win_w;
         wd.height = win_h;
-        NXLOG_I("boot", "window %dx%d", win_w, win_h);
+        NXLOG_I("boot", "window %dx%d (%s)", win_w, win_h, play_disp.window_mode.c_str());
         if (!nxrt::platform::create_window(wd)) die("cannot create the window");
+        // Paint the window background black immediately and enter fullscreen before creating the first swapchain,
+        // preventing the unpainted white 1440p client-rect flash during the ~5 s guest boot.
+        if (HWND hwnd = static_cast<HWND>(nxrt::platform::native_hwnd())) {
+            ::SetClassLongPtrW(hwnd, GCLP_HBRBACKGROUND, reinterpret_cast<LONG_PTR>(::GetStockObject(BLACK_BRUSH)));
+            if (HDC hdc = ::GetDC(hwnd)) {
+                RECT rc{};
+                ::GetClientRect(hwnd, &rc);
+                ::FillRect(hdc, &rc, static_cast<HBRUSH>(::GetStockObject(BLACK_BRUSH)));
+                ::ReleaseDC(hwnd, hdc);
+            }
+        }
+        if (start_borderless) nxrt::platform::set_fullscreen(nxrt::platform::FullscreenMode::Borderless);
+        else if (start_exclusive) nxrt::platform::set_fullscreen(nxrt::platform::FullscreenMode::Exclusive);
+        if (HWND hwnd = static_cast<HWND>(nxrt::platform::native_hwnd())) {
+            if (HDC hdc = ::GetDC(hwnd)) {
+                RECT rc{};
+                ::GetClientRect(hwnd, &rc);
+                ::FillRect(hdc, &rc, static_cast<HBRUSH>(::GetStockObject(BLACK_BRUSH)));
+                ::ReleaseDC(hwnd, hdc);
+            }
+        }
     }
     {
         std::string err;

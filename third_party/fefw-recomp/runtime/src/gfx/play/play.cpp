@@ -387,13 +387,13 @@ void apply_game3d_settings(const Game3dSettings& old_g, const Game3dSettings& g3
     if (g3d.res_preset != old_g.res_preset) {
         struct PresetDef { const char* am_res; const char* res_cls; const char* nat_res; const char* nat_w; const char* nat_h; };
         static constexpr PresetDef kPresets[] = {
-            {"3840x2160", "1", "2", "3840", "2160"},   // 0: 4K true native (3840x2160)
-            {"2560x1440", "2", "2", "2560", "1440"},   // 1: 1440p native (2560x1440, 1:1 no 4K upscale)
-            {"1920x1080", "3", "2", "1920", "1080"},   // 2: 1080p native (1920x1080, 1:1 no 4K upscale)
+            {"3840x2160", "0", "2", "3840", "2160"},   // 0: 4K true native (docked mode 1: 3840x2160)
+            {"2560x1440", "2", "2", "2560", "1440"},   // 1: 1440p native (docked mode 5: 2560x1440, 1:1)
+            {"1920x1080", "3", "2", "1920", "1080"},   // 2: 1080p native (patched mode 5: 1920x1080, 1:1)
             {"2560x1440", "2", "2", "1920", "1080"},   // 3: 1080p -> 1440p upscale
-            {"3840x2160", "1", "2", "2560", "1440"},   // 4: 1440p -> 4K upscale
-            {"3840x2160", "1", "2", "1920", "1080"},   // 5: 1080p -> 4K upscale
-            {"3840x2160", "1", "2", "1600", "900"},    // 6: 900p -> 4K upscale
+            {"3840x2160", "0", "2", "2560", "1440"},   // 4: 1440p -> 4K upscale
+            {"3840x2160", "0", "2", "1920", "1080"},   // 5: 1080p -> 4K upscale
+            {"3840x2160", "0", "2", "1600", "900"},    // 6: 900p -> 4K upscale
             {"3840x2160", "0", "0", "0",    "0"},      // 7: console dynamic 4K
         };
         const int idx = std::clamp(g3d.res_preset, 0, static_cast<int>(sizeof kPresets / sizeof kPresets[0]) - 1);
