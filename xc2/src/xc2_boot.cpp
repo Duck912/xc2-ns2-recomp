@@ -760,9 +760,11 @@ static void arm_frame_rate(uint64_t main_base) {
 // [xc2] res_class  = 0 (auto) | 2 (force mode 5: 2560x1440) | 1 (force mode 1: 3840x2160)
 static void arm_native_res(uint64_t main_base) {
     static int64_t g_nat_mode = 0;
+    static int64_t g_rcls = 0;
     g_nat_mode = nxrt::config_get_int("xc2", "native_res", 0);
     const int64_t mode = g_nat_mode;
-    const int64_t rcls = nxrt::config_get_int("xc2", "res_class", 0);
+    g_rcls = nxrt::config_get_int("xc2", "res_class", 0);
+    const int64_t rcls = g_rcls;
     int32_t def_w = 2560, def_h = 1440;
     {
         const std::string am_res = nxrt::config_get_str("am", "resolution", "");
@@ -795,6 +797,11 @@ static void arm_native_res(uint64_t main_base) {
                 if (view && nxrt::mem::is_mapped(view + 0x18, 16)) {
                     std::memcpy(d, reinterpret_cast<const void*>(view + 0x18), 16);
                     have_dims = (d[2] > 0 && d[3] > 0);
+                    if (have_dims && d[0] > 0 && d[1] > 0) {
+                        nxrt::nvn::set_game_viewport_info(static_cast<uint32_t>(d[0]), static_cast<uint32_t>(d[1]),
+                                                          static_cast<uint32_t>(d[2]), static_cast<uint32_t>(d[3]),
+                                                          g_rcls >= 2, g_nat_mode == 1);
+                    }
                     if (d[0] != last_rw || d[1] != last_rh || d[2] != last_bw || d[3] != last_bh || count < 3) {
                         last_rw = d[0]; last_rh = d[1]; last_bw = d[2]; last_bh = d[3];
                         ++count;
@@ -830,11 +837,30 @@ static void arm_native_res(uint64_t main_base) {
         return 0;
     });
     if (rcls > 0) {
+        // XC2 3.0.1 docked mode table (c_00a6.cpp): res_class=1 -> mode 4 (3840x2160), res_class=2 -> mode 5 (2560x1440).
+        // For res_class=3 (Native 1080p with full docked graphics quality), select docked mode 5 and patch its
+        // rodata dimensions at main+0xc346cc/0xc346d0 from 2560x1440 to 1920x1080.
+        int64_t effective_rcls = rcls;
+        if (rcls == 3) {
+            effective_rcls = 2;
+            const uint64_t dim_addr = main_base + 0xc346ccULL;
+            if (nxrt::mem::is_mapped(dim_addr, 8)) {
+                uint32_t cur[2] = {};
+                std::memcpy(cur, reinterpret_cast<const void*>(dim_addr), 8);
+                if (cur[0] == 2560 && cur[1] == 1440) {
+                    nxrt::mem::protect(dim_addr, 8, nxrt::mem::Prot::RW);
+                    const uint32_t target_1080[2] = {1920, 1080};
+                    std::memcpy(reinterpret_cast<void*>(dim_addr), target_1080, 8);
+                    NXLOG_I("xc2", "native_res: patched docked mode 5 base dimensions 2560x1440 -> 1920x1080");
+                }
+            }
+        }
         nxrt::hook_add_entry(main_base + 0x8d9ce0, [](::Ctx* c, uint64_t, void* u) -> int {
             c->x[0] = static_cast<uint64_t>(reinterpret_cast<intptr_t>(u));
             return 1;
-        }, reinterpret_cast<void*>(static_cast<intptr_t>(rcls)));
-        NXLOG_I("xc2", "native_res: display res_class forced to %lld", static_cast<long long>(rcls));
+        }, reinterpret_cast<void*>(static_cast<intptr_t>(effective_rcls)));
+        NXLOG_I("xc2", "native_res: display res_class forced to %lld (effective %lld)",
+                static_cast<long long>(rcls), static_cast<long long>(effective_rcls));
     }
     if (mode <= 0) return;
     if (mode == 1) {

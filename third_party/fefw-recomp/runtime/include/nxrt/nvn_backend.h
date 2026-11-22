@@ -46,6 +46,19 @@ void backend_trace_frames(int count);   // trace the next `count` presented fram
 // Updates keep-aspect letterboxing live on the presenting thread (also initialized from BackendDesc::keep_aspect).
 void set_keep_aspect(bool on);
 
+// Reports the game's live 3D scene render resolution and base/UI output resolution.
+// When apply_present_crop is true and base_w/base_h are smaller than the NVN window texture,
+// presentation automatically crops to (0, 0, base_w, base_h) so native 1080p/1440p fills the screen.
+struct GameViewportInfo {
+    uint32_t render_w = 0, render_h = 0;
+    uint32_t base_w = 0, base_h = 0;
+    bool apply_present_crop = false;
+    bool dlss_bypassed = false;
+};
+void set_game_viewport_info(uint32_t render_w, uint32_t render_h, uint32_t base_w, uint32_t base_h,
+                            bool apply_present_crop, bool dlss_bypassed = false);
+GameViewportInfo game_viewport_info();
+
 // Live 3D DLSS/FSR upscaler override for the F1 settings menu.
 // upscaler: "fsr3" | "taau" | "bilinear" | "dlss" | "auto" (empty/null = keep current).
 // fsr_version: "3.1" | "4.1" | "2.3" (empty/null = keep current).
@@ -94,7 +107,7 @@ struct BackendStats {
     uint64_t passes = 0, pass_breaks = 0, pipelines_created = 0, pipeline_cache_hits = 0, descriptor_sets = 0;
     uint64_t textures_created = 0, texture_uploads = 0, texture_upload_bytes = 0, bc7_transcodes = 0, textures_failed = 0;
     uint64_t pools_imported = 0, unresolved_addresses = 0, missing_handles = 0, unsupported_ops = 0;
-    uint64_t submit_replay_ns = 0;
+    uint64_t submit_replay_ns = 0, gpu_busy_ns = 0;
 };
 BackendStats backend_stats();
 // Operations that were skipped because they are not implemented, with how often (for the log and docs/S4d.md).

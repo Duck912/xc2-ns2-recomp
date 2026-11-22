@@ -385,9 +385,12 @@ Slot& acquire_slot() {
         uint64_t ts[2] = {0, 0};
         const uint32_t idx = static_cast<uint32_t>(&s - g->slots) * 2;
         if (vkGetQueryPoolResults(g->dev->device(), g->qpool, idx, 2, sizeof ts, ts, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) == VK_SUCCESS && ts[1] >= ts[0]) {
-            static const uint16_t z = ft::zone_id("gpu.exec");
             const double ns = static_cast<double>(ts[1] - ts[0]) * g->dev->properties().limits.timestampPeriod;
-            ft::event(z, s.cpu_t0, s.cpu_t0 + static_cast<uint64_t>(ns), static_cast<uint32_t>(s.serial));
+            g->ctr.gpu_busy_ns.fetch_add(static_cast<uint64_t>(ns), std::memory_order_relaxed);
+            if (ft::on()) {
+                static const uint16_t z = ft::zone_id("gpu.exec");
+                ft::event(z, s.cpu_t0, s.cpu_t0 + static_cast<uint64_t>(ns), static_cast<uint32_t>(s.serial));
+            }
         }
     }
     if (s.gp_n >= 2 && g->gpool) {      // GPU pass profiler: one event per interval between two timestamps, named gp:<label>, arg = draws
@@ -1208,7 +1211,7 @@ bool bring_up(gfx::Device& dev, gfx::Renderer* rend, FrameLimiter* limiter, bool
             delete gp;
             return false;
         }
-    if (ft::on()) {
+    if (ft::on() || dev.properties().limits.timestampComputeAndGraphics) {
         VkQueryPoolCreateInfo qi = {VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
         qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
         qi.queryCount = kSlots * 2;
@@ -1381,6 +1384,32 @@ void set_keep_aspect(bool on) {
     be::gpu::set_keep_aspect_live(on);
 }
 
+namespace {
+std::atomic<uint32_t> g_vp_rw{0}, g_vp_rh{0}, g_vp_bw{0}, g_vp_bh{0};
+std::atomic<bool> g_vp_crop{false}, g_vp_bypass{false};
+}  // namespace
+
+void set_game_viewport_info(uint32_t render_w, uint32_t render_h, uint32_t base_w, uint32_t base_h,
+                            bool apply_present_crop, bool dlss_bypassed) {
+    g_vp_rw.store(render_w, std::memory_order_relaxed);
+    g_vp_rh.store(render_h, std::memory_order_relaxed);
+    g_vp_bw.store(base_w, std::memory_order_relaxed);
+    g_vp_bh.store(base_h, std::memory_order_relaxed);
+    g_vp_crop.store(apply_present_crop, std::memory_order_relaxed);
+    g_vp_bypass.store(dlss_bypassed, std::memory_order_relaxed);
+}
+
+GameViewportInfo game_viewport_info() {
+    GameViewportInfo info;
+    info.render_w = g_vp_rw.load(std::memory_order_relaxed);
+    info.render_h = g_vp_rh.load(std::memory_order_relaxed);
+    info.base_w = g_vp_bw.load(std::memory_order_relaxed);
+    info.base_h = g_vp_bh.load(std::memory_order_relaxed);
+    info.apply_present_crop = g_vp_crop.load(std::memory_order_relaxed);
+    info.dlss_bypassed = g_vp_bypass.load(std::memory_order_relaxed);
+    return info;
+}
+
 BackendStats backend_stats() {
     BackendStats s;
     if (!be::gpu::active()) return s;
@@ -1393,6 +1422,7 @@ BackendStats backend_stats() {
     s.bc7_transcodes = c.bc7_transcodes; s.textures_failed = c.textures_failed; s.pools_imported = c.pools_imported;
     s.unresolved_addresses = c.unresolved_addresses; s.missing_handles = be::handles_missing(); s.unsupported_ops = c.unsupported_ops;
     s.submit_replay_ns = c.submit_replay_ns;
+    s.gpu_busy_ns = c.gpu_busy_ns;
     return s;
 }
 

@@ -57,10 +57,13 @@ vendored into the Xenoblade Chronicles 2 NS2E recomp project. Upstream base and 
 | `runtime/include/nxrt/play.h` | 2026-11-21 | expose `overlay_blocks_game()`, `live_pad_config()`, and `note_external_pad()` |
 | `runtime/src/gfx/play/play_types.h` | 2026-11-21 | default FPS counter hotkey F10, persistent `menu_lang`, and `Game3dSettings` |
 | `runtime/src/gfx/play/play_config.cpp` | 2026-11-21 | parse and persist `[fps] menu_lang` in `controls.ini` |
-| `runtime/src/gfx/play/play.cpp` | 2026-11-21 | F11 fullscreen toggle, live 3D upscaler/resolution sync to `nxrt.ini`, external pad navigation & rumble bridge |
+| `runtime/src/gfx/play/play.cpp` | 2026-11-22 | F11 fullscreen toggle, live 3D upscaler & 8-preset native/upscale resolution sync to `nxrt.ini`, external pad bridge, bilingual HUD language hint |
 | `runtime/src/gfx/play/play_ui.h` | 2026-11-20 | add draw_settings_menu() wrapper replacing Diagnostics overlay |
-| `runtime/src/gfx/overlay.cpp` | 2026-11-21 | XC2 Aegis Deep Ocean + Emerald/Gold ImGui theme and Windows CJK font (msyh.ttc) dynamic loading |
-| `runtime/src/gfx/play/play_ui.cpp` | 2026-11-21 | bilingual (zh-Hans/en) two-pane F1 settings menu with live FSR 3.1.6/4.1.2 hot-switch, 3D resolution presets, and gamepad tuning |
+| `runtime/src/gfx/overlay.cpp` | 2026-11-22 | XC2 Aegis theme + CJK font, 4-level FPS counter with Detailed Performance HUD (AMD ADL2 / NVIDIA NVML / Vulkan VRAM / CPU / RAM / 120-frame graph / pipeline timings / resolution & scaling) |
+| `runtime/src/gfx/play/play_ui.cpp` | 2026-11-22 | bilingual (zh-Hans/en) two-pane F1 settings menu with native 1080p/1440p/4K & upscale presets, live FSR 3.1.6/4.1.2 switch, 4-level performance HUD selector |
+| `runtime/include/nxrt/nvn_backend.h` | 2026-11-22 | expose `set_game_viewport_info()` / `game_viewport_info()` and `BackendStats::gpu_busy_ns` |
+| `runtime/src/gfx/nvn/nvn_gpu.cpp` | 2026-11-22 | always-on lightweight Vulkan timestamp query pool for `gpu_busy_ns` and live viewport info reporting |
+| `runtime/src/gfx/nvn/nvn_present.cpp` | 2026-11-22 | auto-crop presentation to `(0, 0, base_w, base_h)` for true full-screen native 1080p/1440p output |
 | `runtime/src/gfx/vk_renderer.cpp` | 2026-11-21 | avoid `vkGetPhysicalDeviceSurfaceCapabilitiesKHR` during swapchain rebuild to prevent Win32 fullscreen deadlock |
 | `runtime/src/services/misc.cpp` | 2026-11-20 | auto-discover DLC folders in [aoc] dir when indices.txt is absent |
 | `runtime/src/gfx/vk_device.cpp` | 2026-11-19 | replay: pipe/fb hot-path audit (round 45, 9.7-15.4 -> 5.3-6.8 ms); fsr_follow_size; fs trace_stack_file off; s; start-up failures name the VkResult and the driver's own Vulkan version (a 1.0 probe instance) instead of a bare `-9` |

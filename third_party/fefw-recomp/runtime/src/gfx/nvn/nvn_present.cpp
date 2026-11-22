@@ -20,6 +20,7 @@
 #include "nxrt/gauge.h"
 #include "nxrt/ftrace.h"
 #include "nxrt/log.h"
+#include "nxrt/nvn_backend.h"
 #include "nvn_gpu_internal.h"
 
 namespace nxrt::nvn::be::gpu {
@@ -185,6 +186,19 @@ void present_on_render_thread(Window* w, int index, bool again) {
     int32_t crop[4] = {w->crop[0], w->crop[1], w->crop[2], w->crop[3]};
     if (const float sc = tex_scale(t); sc != 1.0f)
         for (int32_t& c : crop) c = static_cast<int32_t>(std::lround(static_cast<float>(c) * sc));
+    {
+        const GameViewportInfo gvi = game_viewport_info();
+        const bool crop_is_whole = (crop[2] <= 0 || crop[3] <= 0 ||
+                                    (crop[0] == 0 && crop[1] == 0 &&
+                                     static_cast<uint32_t>(crop[2]) >= e.width && static_cast<uint32_t>(crop[3]) >= e.height));
+        if (gvi.apply_present_crop && crop_is_whole && gvi.base_w > 0 && gvi.base_h > 0 &&
+            (gvi.base_w < e.width || gvi.base_h < e.height)) {
+            crop[0] = 0;
+            crop[1] = 0;
+            crop[2] = static_cast<int32_t>(gvi.base_w);
+            crop[3] = static_cast<int32_t>(gvi.base_h);
+        }
+    }
     pp->set_flip_y(window_origin_mode() == NVN_WINDOW_ORIGIN_MODE_LOWER_LEFT);   // the game runs with the lower-left origin (mode 0)
     // HDR scene / HDR swapchain / FSR 1 or NIS / picture controls go through the output pass (S14); everything else is the plain present pass of the SDR path
     const extras::PictureLive pic = extras::picture_live();

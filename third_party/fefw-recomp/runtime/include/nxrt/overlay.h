@@ -85,8 +85,9 @@ public:
     struct CounterConfig {
         bool show = false;
         int corner = 0;                  // 0 top left, 1 top right, 2 bottom left, 3 bottom right
-        int detail = 1;                  // 0 frame rate; 1 also the frame time; 2 also the 1 % low and the worst frame
+        int detail = 1;                  // 0 FPS; 1 FPS+ms; 2 compact full (1% low/max); 3 detailed telemetry HUD + graph
         bool in_screenshots = false;     // leave it in screenshots too (by default it is not drawn into them)
+        bool lang_zh = true;             // UI language hint for the detailed HUD
     };
     void set_counter(const CounterConfig& c);
 

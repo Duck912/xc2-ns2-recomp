@@ -345,12 +345,16 @@ void publish_live_pad_config(const PadSettings& p) {
 Game3dSettings hydrate_game3d_from_config() {
     Game3dSettings r;
     const int64_t nat_res = config_get_int("xc2", "native_res", 0);
+    const int64_t res_cls = config_get_int("xc2", "res_class", 0);
     const int64_t nat_w = config_get_int("xc2", "native_w", 3840);
-    if (nat_res <= 0) r.res_preset = 4;
-    else if (nat_w <= 1600) r.res_preset = 3;
-    else if (nat_w <= 1920) r.res_preset = 2;
-    else if (nat_w <= 2560) r.res_preset = 1;
-    else r.res_preset = 0;
+    if (nat_res <= 0) r.res_preset = 7;
+    else if (res_cls == 3) r.res_preset = 2;                       // 1080p native (no 4K upscale)
+    else if (res_cls == 2 && nat_w <= 1920) r.res_preset = 3;      // 1080p -> 1440p upscale
+    else if (res_cls == 2) r.res_preset = 1;                       // 1440p native (no 4K upscale)
+    else if (nat_w <= 1600) r.res_preset = 6;                      // 900p -> 4K upscale
+    else if (nat_w <= 1920) r.res_preset = 5;                      // 1080p -> 4K upscale
+    else if (nat_w <= 2560) r.res_preset = 4;                      // 1440p -> 4K upscale
+    else r.res_preset = 0;                                         // 4K true native
 
     std::string up = config_get_str("dlss", "upscaler", "fsr3");
     for (char& c : up) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -383,13 +387,16 @@ void apply_game3d_settings(const Game3dSettings& old_g, const Game3dSettings& g3
     if (g3d.res_preset != old_g.res_preset) {
         struct PresetDef { const char* am_res; const char* res_cls; const char* nat_res; const char* nat_w; const char* nat_h; };
         static constexpr PresetDef kPresets[] = {
-            {"3840x2160", "0", "2", "3840", "2160"},   // 0: 4K true native (3840x2160 -> 3840x2160)
-            {"3840x2160", "0", "2", "2560", "1440"},   // 1: 1440p render -> 4K upscale
-            {"3840x2160", "0", "2", "1920", "1080"},   // 2: 1080p render -> 4K upscale
-            {"3840x2160", "0", "2", "1600", "900"},    // 3: 900p render -> 4K upscale
-            {"3840x2160", "0", "0", "0",    "0"},      // 4: console dynamic 4K
+            {"3840x2160", "1", "2", "3840", "2160"},   // 0: 4K true native (3840x2160)
+            {"2560x1440", "2", "2", "2560", "1440"},   // 1: 1440p native (2560x1440, 1:1 no 4K upscale)
+            {"1920x1080", "3", "2", "1920", "1080"},   // 2: 1080p native (1920x1080, 1:1 no 4K upscale)
+            {"2560x1440", "2", "2", "1920", "1080"},   // 3: 1080p -> 1440p upscale
+            {"3840x2160", "1", "2", "2560", "1440"},   // 4: 1440p -> 4K upscale
+            {"3840x2160", "1", "2", "1920", "1080"},   // 5: 1080p -> 4K upscale
+            {"3840x2160", "1", "2", "1600", "900"},    // 6: 900p -> 4K upscale
+            {"3840x2160", "0", "0", "0",    "0"},      // 7: console dynamic 4K
         };
-        const int idx = std::clamp(g3d.res_preset, 0, 4);
+        const int idx = std::clamp(g3d.res_preset, 0, static_cast<int>(sizeof kPresets / sizeof kPresets[0]) - 1);
         const PresetDef& pr = kPresets[idx];
         std::string err;
         const bool ok = config_write("am", "resolution", pr.am_res, &err) &&
@@ -572,6 +579,7 @@ void apply_fps_counter(const FpsSettings& f) {
     c.corner = static_cast<int>(f.corner);
     c.detail = f.detail;
     c.in_screenshots = f.in_screenshots;
+    c.lang_zh = (f.menu_lang != "en");
     st.overlay->set_counter(c);
 }
 

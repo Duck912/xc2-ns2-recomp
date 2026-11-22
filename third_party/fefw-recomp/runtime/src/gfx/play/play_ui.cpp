@@ -82,9 +82,19 @@ constexpr const char* kCornerZh[] = {"左上角", "右上角", "左下角", "右
 constexpr const char* kCornerEn[] = {"Top left", "Top right", "Bottom left", "Bottom right"};
 constexpr int kCornerCount = 4;
 
-constexpr const char* kFpsDetailZh[] = {"仅显示帧率", "帧率 + 帧时间", "完整 (含 1% Low / 最慢帧)"};
-constexpr const char* kFpsDetailEn[] = {"FPS only", "FPS & frame time", "Full (1% low & worst)"};
-constexpr int kFpsDetailCount = 3;
+constexpr const char* kFpsDetailZh[] = {
+    "仅显示帧率",
+    "帧率 + 帧时间",
+    "简洁统计 (含 1% Low / 最慢帧)",
+    "详细性能监控面板 (全参数 + 曲线图)",
+};
+constexpr const char* kFpsDetailEn[] = {
+    "FPS only",
+    "FPS & frame time",
+    "Compact (1% low & worst)",
+    "Detailed Performance HUD (+ Graph)",
+};
+constexpr int kFpsDetailCount = 4;
 
 constexpr const char* kHdrModeZh[] = {"关闭 (SDR)", "自动", "强制开启", "Switch 2 原生 HDR"};
 constexpr const char* kHdrModeEn[] = {"Off (SDR)", "Auto", "On", "Native HDR"};
@@ -96,15 +106,21 @@ constexpr const char* kLatencyZh[] = {"关闭", "自动", "开启", "增强 (Boo
 constexpr const char* kLatencyEn[] = {"Off", "Auto", "On", "Boost"};
 
 constexpr const char* kGameResZh[] = {
-    "4K 真原生 (3840x2160 -> 4K)",
-    "1440p 超分 (2560x1440 -> 4K)",
-    "1080p 超分 (1920x1080 -> 4K)",
-    "900p 超分 (1600x900 -> 4K)",
+    "4K 真原生 (3840x2160)",
+    "1440p 原生 (2560x1440，不超分)",
+    "1080p 原生 (1920x1080，不超分)",
+    "1080p -> 1440p 超分 (2K 屏推荐)",
+    "1440p -> 4K 超分 (4K 屏推荐)",
+    "1080p -> 4K 超分",
+    "900p -> 4K 超分",
     "主机原版动态 4K",
 };
 constexpr const char* kGameResEn[] = {
-    "4K Native (3840x2160 -> 4K)",
-    "1440p -> 4K Upscale",
+    "4K Native (3840x2160)",
+    "1440p Native (2560x1440, No Upscale)",
+    "1080p Native (1920x1080, No Upscale)",
+    "1080p -> 1440p Upscale (2K Display)",
+    "1440p -> 4K Upscale (4K Display)",
     "1080p -> 4K Upscale",
     "900p -> 4K Upscale",
     "Console Dynamic 4K",
@@ -116,14 +132,14 @@ constexpr const char* kGame3dUpZh[] = {
     "FSR 4.1.2 (ML 高画质)",
     "FSR 2.3.4 (经典版)",
     "TAAU (内置时序)",
-    "Bilinear (无抗锯齿)",
+    "关闭 / 原生直出 (Bilinear)",
 };
 constexpr const char* kGame3dUpEn[] = {
     "FSR 3.1.6 (Rec. 60fps)",
     "FSR 4.1.2 (ML High)",
     "FSR 2.3.4 (Classic)",
     "TAAU (Built-in)",
-    "Bilinear (Off)",
+    "Off / Native (Bilinear)",
 };
 constexpr int kGame3dUpCount = static_cast<int>(sizeof kGame3dUpZh / sizeof kGame3dUpZh[0]);
 
@@ -704,8 +720,8 @@ void tab_display(const LiveStatus& live, Page& p, float bottom_h) {
 
     card_group("窗口与分辨率", "Window & Resolution");
     if (card_choice("game_res", "游戏 3D 分辨率 / 输出", "Game 3D resolution",
-                    "切换游戏内部 3D 渲染分辨率与主机输出分辨率（写入 nxrt.ini，重启游戏生效）。「1440p -> 4K」与「1080p -> 4K」保留 4K 清晰 UI，搭配 FSR 3.1.6 稳 60fps、FSR 4.1.2 约 42fps。",
-                    "Sets XC2 internal 3D render and output resolution in nxrt.ini (takes effect after restart). 1440p/1080p -> 4K keeps crisp 4K HUD.",
+                    "切换游戏内部 3D 渲染与主机输出分辨率（写入 nxrt.ini，重启生效）。支持 1080p / 1440p 真原生直出（不走 4K 超分）以及 1080p->1440p / 1440p->4K 等超分组合。",
+                    "Sets XC2 internal 3D render and output resolution in nxrt.ini (takes effect after restart). Supports true native 1080p/1440p (no 4K upscale) and upscaling presets.",
                     &p.edit.game3d.res_preset, kGameResZh, kGameResEn, kGameResCount, true)) {
         mark(p);
     }
@@ -1169,8 +1185,8 @@ void tab_overlay(UiHost& host, const LiveStatus& live, Page& p, float bottom_h) 
 
     int detail = std::clamp(fps.detail, 0, kFpsDetailCount - 1);
     if (card_choice("fps_detail", "监控信息详细度", "Counter detail",
-                    "可选择仅显示 FPS、显示 FPS + 帧时间(ms)，或额外显示 1% Low 与最慢帧耗时。",
-                    "Controls how much timing detail is shown in the overlay.",
+                    "可选仅显示 FPS、简洁统计，或开启「详细性能监控面板」实时查看 GPU/显存/CPU/内存、帧时间曲线、渲染管线耗时与当前分辨率/超分状态。",
+                    "Choose compact FPS-only counter or the full Detailed Performance HUD (GPU/VRAM/CPU/RAM, frame-time graph, pipeline timings, resolution & scaling).",
                     &detail, kFpsDetailZh, kFpsDetailEn, kFpsDetailCount, false, true)) {
         FpsSettings f = fps;
         f.detail = detail;

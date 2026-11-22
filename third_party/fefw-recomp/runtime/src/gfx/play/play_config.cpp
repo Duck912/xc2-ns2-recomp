@@ -390,7 +390,7 @@ bool apply_fixed(Sec sec, const std::string& k, const std::string& v, Settings* 
                 }
                 return true;
             }
-            if (k == "detail") return set_int(0, 2, &s->fps.detail);
+            if (k == "detail") return set_int(0, 3, &s->fps.detail);
             if (k == "in_screenshots") return set_bool(&s->fps.in_screenshots);
             if (k == "menu_lang") {
                 const std::string l = lower(v);
