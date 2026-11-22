@@ -635,11 +635,6 @@ uint64_t device_vram_bytes_now() {
     return vram;
 }
 
-uint64_t mirror_device_vram() {
-    const uint64_t cached = g_device_vram.load(std::memory_order_relaxed);
-    if (cached) return cached;
-    return device_vram_bytes_now();
-}
 
 // The cap of the copies ([nvn] pool_mirror_mb, or from the card's video memory when it is not set; nvn_mirror_cap.h), logged once.
 uint64_t mirror_budget() {
@@ -818,6 +813,12 @@ struct MirrorGauges {
 MirrorGauges g_mirror_gauges;
 
 }  // namespace
+
+uint64_t device_vram_cached() {
+    const uint64_t cached = g_device_vram.load(std::memory_order_relaxed);
+    if (cached) return cached;
+    return device_vram_bytes_now();
+}
 
 void out_unregister(Mirror* m);
 void out_retire();
@@ -2159,3 +2160,8 @@ void out_log() {
 
 }  // namespace gpu
 }  // namespace nxrt::nvn::be
+
+namespace nxrt::nvn {
+// The UI's view of the device's video memory (nvn_mirror_cap.h): the same number the capture budget is sized from.
+uint64_t mirror_device_vram() { return be::gpu::device_vram_cached(); }
+}  // namespace nxrt::nvn
