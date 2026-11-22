@@ -34,7 +34,7 @@ vendored into the Xenoblade Chronicles 2 NS2E recomp project. Upstream base and 
 | `runtime/include/nxrt/write_watch.h` | 2026-11-21 | write-watch: per-64 KiB-reservation queries (capture_poll) for submit-time captures; VAMM pages tracked by GetWriteWatch |
 | `runtime/src/mem/write_watch.cpp` | 2026-11-21 | write-watch: VAMM (MapPhysicalMemory) pages tracked through their write-watch record; capture_poll for submit-time captures |
 | `runtime/tests/test_svc_memory.cpp` | 2026-11-21 | test: a large UnmapPhysicalMemory followed by a map of the same range succeeds |
-| `runtime/src/gfx/nvn/api_device.cpp` | 2026-11-21 | [nvn] sync_scope switch: window-acquire syncs can wait for all GPU work (NVIDIA fallback) handle `nvnWindowGetCrop` out-of-order `(int*, int*, int*, int*)` call and sanitize `R11G11B10F` clear colors |
+| `runtime/src/gfx/nvn/api_device.cpp` | 2026-11-22 | [nvn] sync_scope switch: window-acquire syncs can wait for all GPU work (NVIDIA fallback) handle `nvnWindowGetCrop` out-of-order `(int*, int*, int*, int*)` call and sanitize `R11G11B10F` clear colors; [nvn] acquire_wait (auto: no wait for the slot while mirror_capture is on) |
 | `runtime/src/gfx/nvn/api_memory.cpp` | 2026-11-21 | [nvn] pool_prefetch_init: every GPU-reachable pool is imported in the background when it is made, not at its first draw |
 | `runtime/src/gfx/nvn/nvn_mirror_cap.h` | 2026-11-21 | mirror cap 2048 -> 8192 MiB (still at most a quarter of the video memory); kCaptureMinBudget for mirror_capture = auto |
 | `runtime/src/gfx/nvn/nvn_texprep.cpp` | 2026-11-21 | ready_textures(): finished background preparations, uploaded at the start of a submission ([nvn] tex_preupload) |
@@ -214,3 +214,7 @@ git log --oneline 6f1d964..HEAD -- third_party/fefw-recomp
   shaders over ~300 KiB ranges the game also writes on the CPU; with present_ahead the whole-range write-back and the
   in-flight exclusion dropped the game's next-frame words, and the waterfall mist blinked at render_scale 3. Write-back
   ~65 -> ~1 MB per second.
+- **runtime/src/gfx/nvn/api_device.cpp: [nvn] acquire_wait (2026-11-22)** - the wait an acquire does for the slot's last frame
+  (added for the RDNA 2 flicker, upstream 0b76c4d) is skipped while mirror_capture is on (auto, the default): the capture already
+  gives every submission the CPU's bytes of its own submit, and the wait took the frame lead away (XC2 NS2 Torigoth: 55 -> 60 fps,
+  game threads blocked in the acquire while the GPU had headroom). on / off force it.
