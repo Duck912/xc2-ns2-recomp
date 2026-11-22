@@ -73,30 +73,6 @@ Settings → Game language offers every text language the retail 3.0.1 title sup
 Traditional — plus Automatic (follows the Windows language). It writes `[system] language` and applies at the next start;
 the voices stay Japanese and English, as on the console ([#26](https://github.com/weile10000/xc2-ns2-recomp/issues/26)).
 
-### Setup
-
-- The headless prefill that fills the shader cache tries the run **twice** before reporting a failure, and writes the
-  second attempt to `prefill-2.log` ([#25](https://github.com/weile10000/xc2-ns2-recomp/issues/25)).
-- Add-on content is found whether `romfs` sits directly under the content id or one level deeper
-  ([#20](https://github.com/weile10000/xc2-ns2-recomp/issues/20)).
-- Frame generation refuses to start when the FSR 3 upscaler DLL is missing, instead of running on top of the built-in
-  upscaler and making the icons and the minimap jitter
-  ([#18](https://github.com/weile10000/xc2-ns2-recomp/issues/18)).
-- The launcher reports its real version, and the package refuses a launcher built before the version bump
-  ([#24](https://github.com/weile10000/xc2-ns2-recomp/issues/24)).
-
-## Issues in this release
-
-| issue | state in 0.2.0 |
-|---|---|
-| [#17](https://github.com/weile10000/xc2-ns2-recomp/issues/17) flashback freezes while dialogue continues | **fixed** — the end of stream reaches the player; please confirm on your machine |
-| [#18](https://github.com/weile10000/xc2-ns2-recomp/issues/18) FSR 3 DLLs together make icons and the minimap jitter | **worked around** — frame generation and the upscaler must both be present; the mix is refused and logged |
-| [#20](https://github.com/weile10000/xc2-ns2-recomp/issues/20) add-on content "deleted", F1 does nothing | **fixed** — both romfs layouts are accepted, and F1 opens the settings page |
-| [#24](https://github.com/weile10000/xc2-ns2-recomp/issues/24) launcher says 0.1.3, A/B swapped | **closed** — the version is the package's own; the pad follows the Switch positions (`[pad] label_abxy = 1` for letters) |
-| [#25](https://github.com/weile10000/xc2-ns2-recomp/issues/25) "always fails to translate shaders" | **mitigated** — the prefill retries; if both attempts break at the same point, attach `prefill-2.log` |
-| [#26](https://github.com/weile10000/xc2-ns2-recomp/issues/26) more languages | **done** — all eleven text languages |
-| [#2](https://github.com/weile10000/xc2-ns2-recomp/issues/2) black render / TDR | **closed** — fixed by the present change in 0.1.4, confirmed by the reporter |
-
 ## Upgrading from v0.1.4
 
 Unzip over the install; saves, settings and the shader cache are kept, and no new Set up is needed. Two things the new
@@ -112,8 +88,9 @@ settings page changes on its own:
 
 - **Add-on content scenes run slower** than the main game, and their 4K openings are the heaviest thing in the title.
 - **First run compiles pipelines** — about 22 seconds with no frame, then never again.
-- **Ultrawide is not supported** ([#22](https://github.com/weile10000/xc2-ns2-recomp/issues/22)); the render path is fine at
-  21:9, the game's own aspect handling and UI are not.
+- **Blinking and dialogue flicker** ([#15](https://github.com/weile10000/xc2-ns2-recomp/issues/15)): the eyes and the mouth
+  jump for a frame when a character blinks or speaks. It is not the upscaler, the jitter or the temporal history (it
+  survives turning the upscaler off), so the cause is still unknown.
 - **A red edge** on the cloud sea in the opening battle background; one scene, cosmetic.
 
 ## Credits
@@ -199,29 +176,6 @@ RDNA 2 上物体与云海交界处的蓝灰边、运动中云海的闪动都消�
 语言）”。写入 `[system] language`，**下次启动生效**；语音仍是日/英，与主机一致
 （[#26](https://github.com/weile10000/xc2-ns2-recomp/issues/26)）。
 
-### 安装流程
-
-- 填着色器缓存的 headless prefill **最多试两次**才判失败，第二次写到 `prefill-2.log`
-  （[#25](https://github.com/weile10000/xc2-ns2-recomp/issues/25)）。
-- 附加内容无论 `romfs` 直接挂在内容 id 下、还是多一层目录，都能找到
-  （[#20](https://github.com/weile10000/xc2-ns2-recomp/issues/20)）。
-- 超分 DLL 缺失时**帧生成拒绝启动**，而不是叠在内建超分上继续跑、让图标与小地图抖动
-  （[#18](https://github.com/weile10000/xc2-ns2-recomp/issues/18)）。
-- 启动器报告真实版本号，打包会拒绝版本号未更新的启动器
-  （[#24](https://github.com/weile10000/xc2-ns2-recomp/issues/24)）。
-
-## 本版对应的 issue
-
-| issue | 0.2.0 里的状态 |
-|---|---|
-| [#17](https://github.com/weile10000/xc2-ns2-recomp/issues/17) 闪回播放时冻结、对白继续 | **已修** —— 结束标记现在能送到播放器；请在你自己机器上确认 |
-| [#18](https://github.com/weile10000/xc2-ns2-recomp/issues/18) FSR 3 两个 DLL 同时在场导致图标/小地图抖动 | **已规避** —— 帧生成与超分必须同时在位，混用会被拒绝并记录 |
-| [#20](https://github.com/weile10000/xc2-ns2-recomp/issues/20) 附加内容“已删除”、F1 无反应 | **已修** —— 两种 romfs 布局都认，F1 现在打开设置页 |
-| [#24](https://github.com/weile10000/xc2-ns2-recomp/issues/24) 启动器显示 0.1.3、A/B 互换 | **已关** —— 版本号来自包本身；手柄按 Switch 位置映射（要字母用 `[pad] label_abxy = 1`） |
-| [#25](https://github.com/weile10000/xc2-ns2-recomp/issues/25) “总是翻译着色器失败” | **已缓解** —— prefill 会重试；两次都停在同一处请附 `prefill-2.log` |
-| [#26](https://github.com/weile10000/xc2-ns2-recomp/issues/26) 更多语言 | **已完成** —— 十一种文本语言 |
-| [#2](https://github.com/weile10000/xc2-ns2-recomp/issues/2) 渲染全黑 / TDR | **已关** —— 0.1.4 的呈现修复解决，报告者已确认 |
-
 ## 从 v0.1.4 升级
 
 覆盖解压即可；存档、设置、着色器缓存都保留，**不需要重新 Set up**。设置页会自己改两件事：
@@ -235,8 +189,8 @@ RDNA 2 上物体与云海交界处的蓝灰边、运动中云海的闪动都消�
 
 - **附加内容场景比正篇慢**，其 4K 开场是全作最重的内容。
 - **首次运行编译管线** —— 约 22 秒无画面，之后不再发生。
-- **不支持超宽屏**（[#22](https://github.com/weile10000/xc2-ns2-recomp/issues/22)）；渲染路径本身支持 21:9，
-  是游戏自己的宽高比处理与 UI 不支持。
+- **眨眼与对白闪烁**（[#15](https://github.com/weile10000/xc2-ns2-recomp/issues/15)）：角色眨眼或说话时，眼睛和嘴会
+  跳一帧。已排除超分、jitter 与时间历史（关掉超分仍然出现），原因未知。
 - **开场战斗背景的云海有一条红边**；单个场景、纯视觉。
 
 ## 致谢
