@@ -4435,7 +4435,7 @@ void trace_snap_after_draw() {
         const int idx = snapshot_record(t, *F);
         if (idx < 0) return;
         char buf[96];
-        g_trace_snaps.push_back({idx, g_trace_n, std::string("snap_d") + std::to_string(g_trace_n) + "_t" + std::to_string(t->id) + "_" + (t->fmt ? t->fmt->name : "x") + ".png", tex_desc(t, buf, sizeof buf)});
+        g_trace_snaps.push_back({idx, g_trace_n, std::string("work/trace/snap_d") + std::to_string(g_trace_n) + "_t" + std::to_string(t->id) + "_" + (t->fmt ? t->fmt->name : "x") + ".png", tex_desc(t, buf, sizeof buf)});
     };
     for (uint32_t i = 0; i < S.ncolor; ++i) take(S.color_tex[i].get());
     take(S.depth_tex.get());
@@ -5231,7 +5231,7 @@ void trace_snap_after_dispatch(const ShaderInfo& cs, const ProgLayout& pl) {
         const int idx = snapshot_record(t, *F);
         if (idx < 0) continue;
         char buf[96];
-        g_trace_snaps.push_back({idx, -n, "snap_c" + std::to_string(n) + "_" + cs.hash.substr(0, 8) + "_t" + std::to_string(t->id) + "_" +
+        g_trace_snaps.push_back({idx, -n, "work/trace/snap_c" + std::to_string(n) + "_" + cs.hash.substr(0, 8) + "_t" + std::to_string(t->id) + "_" +
                                                  (t->fmt ? t->fmt->name : "x") + ".png", tex_desc(t, buf, sizeof buf)});
     }
 }
@@ -6547,7 +6547,7 @@ void trace_dump_targets() {
         if (!want_ids.empty() && std::find(want_ids.begin(), want_ids.end(), static_cast<int>(t->id)) == want_ids.end()) continue;
         char buf[96];
         std::string stats;
-        const std::string png = (numbered ? "trace_f" + std::to_string(frame) : std::string("trace")) + "_t" + std::to_string(t->id) + "_" +
+        const std::string png = std::string("work/trace/") + (numbered ? "trace_f" + std::to_string(frame) : std::string("trace")) + "_t" + std::to_string(t->id) + "_" +
                                 (t->fmt ? t->fmt->name : "x") + ".png";
         const bool ok = dump_texture(t.get(), png, &stats);
         NXLOG_I("nvn.trace", "target %s -> %s (frame %lld): %s", tex_desc(t.get(), buf, sizeof buf), ok ? png.c_str() : "(not dumped)",
