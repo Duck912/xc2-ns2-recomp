@@ -227,6 +227,15 @@ struct FpsSettings {
 };
 
 // ---- 3D game resolution & upscaler (synced with nxrt.ini: [am], [xc2], [dlss], [upscale]) ----
+// The 3D render quality (Game3dSettings::res_preset): the upscaler's input as a share of the output height (play.cpp). The last entry,
+// share 0, is the console's own dynamic resolution (no scaling, no lock).
+struct RenderQuality { const char* key; double share; };
+inline constexpr RenderQuality kRenderQuality[] = {
+    {"native", 1.0}, {"quality", 2.0 / 3.0}, {"balanced", 0.58}, {"performance", 0.5}, {"ultra_performance", 1.0 / 3.0}, {"console", 0.0},
+};
+inline constexpr int kRenderQualityCount = static_cast<int>(sizeof kRenderQuality / sizeof kRenderQuality[0]);
+int render_output_height();   // [am] resolution's height (the output the share is of), else 1080
+
 struct Game3dSettings {
     // The 3D render quality: the upscaler's input as a share of the output (play.cpp kRenderQuality), the output being the window's
     // height ([am] resolution). Written as [upscale] render_quality + the [gfx] render_scale / output_scale it implies; restart.
@@ -236,6 +245,7 @@ struct Game3dSettings {
     std::string fsr_version = "3.1";    // "3.1" | "4.1" | "2.3"
     double sharpness = 0.5;             // [dlss] sharpness (0.0..1.0)
     std::string dlss_preset = "default";   // [dlss] preset: "default" | "J" | "K" | "L" | "M" (live)
+    int out_height = 0;                    // the output resolution ([am] resolution, 16:9): 1080 / 1440 / 2160; 0 = as in the ini (restart)
 };
 
 // ---- lock-on and camera feel (S32) --------------------------------------------------------------------------------------------

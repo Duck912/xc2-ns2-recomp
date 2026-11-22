@@ -106,24 +106,18 @@ constexpr const char* kHdrFmtEn[] = {"Auto", "HDR10", "scRGB"};
 constexpr const char* kLatencyZh[] = {"关闭", "自动", "开启", "增强 (Boost)"};
 constexpr const char* kLatencyEn[] = {"Off", "Auto", "On", "Boost"};
 
-// The 3D render quality (play.cpp kRenderQuality, same order): the share of the output (the window's height) the 3D scene renders at.
-constexpr const char* kGameResZh[] = {
-    "原生 / DLAA (100%)",
-    "质量 (67%)",
-    "平衡 (58%)",
-    "性能 (50%)",
-    "超级性能 (33%)",
-    "主机原版 (动态 720p)",
-};
-constexpr const char* kGameResEn[] = {
-    "Native / DLAA (100%)",
-    "Quality (67%)",
-    "Balanced (58%)",
-    "Performance (50%)",
-    "Ultra Performance (33%)",
-    "Console default (dynamic 720p)",
-};
-constexpr int kGameResCount = static_cast<int>(sizeof kGameResZh / sizeof kGameResZh[0]);
+// The upscaler's mode (kRenderQuality in play_types.h, same order): the share of the output the 3D scene renders at, named the way the
+// chosen upscaler names it - DLSS's top step is DLAA, FSR's and TAAU's is native AA, and without an upscaler the steps are plain shares.
+constexpr const char* kModeDlssZh[] = {"DLAA (100%)", "质量 (67%)", "平衡 (58%)", "性能 (50%)", "超级性能 (33%)", "主机原版 (动态 720p)"};
+constexpr const char* kModeDlssEn[] = {"DLAA (100%)", "Quality (67%)", "Balanced (58%)", "Performance (50%)", "Ultra Performance (33%)",
+                                       "Console (dynamic 720p)"};
+constexpr const char* kModeTemporalZh[] = {"原生抗锯齿 (100%)", "质量 (67%)", "平衡 (58%)", "性能 (50%)", "超级性能 (33%)", "主机原版 (动态 720p)"};
+constexpr const char* kModeTemporalEn[] = {"Native AA (100%)", "Quality (67%)", "Balanced (58%)", "Performance (50%)", "Ultra Performance (33%)",
+                                           "Console (dynamic 720p)"};
+constexpr const char* kModeOffZh[] = {"原生 (100%)", "67%", "58%", "50%", "33%", "主机原版 (动态 720p)"};
+constexpr const char* kModeOffEn[] = {"Native (100%)", "67%", "58%", "50%", "33%", "Console (dynamic 720p)"};
+constexpr int kGameResCount = static_cast<int>(sizeof kModeDlssZh / sizeof kModeDlssZh[0]);
+static_assert(kGameResCount == kRenderQualityCount, "one label per render quality");
 
 constexpr const char* kGame3dUpZh[] = {
     "DLSS (NVIDIA)",
@@ -131,7 +125,7 @@ constexpr const char* kGame3dUpZh[] = {
     "FSR 4.1.2 (ML 高画质)",
     "FSR 2.3.4 (经典版)",
     "TAAU (内置时序)",
-    "关闭 / 原生直出 (Bilinear)",
+    "关闭 (不使用 DLSS / FSR)",
 };
 constexpr const char* kGame3dUpEn[] = {
     "DLSS (NVIDIA)",
@@ -139,7 +133,7 @@ constexpr const char* kGame3dUpEn[] = {
     "FSR 4.1.2 (ML High)",
     "FSR 2.3.4 (Classic)",
     "TAAU (Built-in)",
-    "Off / Native (Bilinear)",
+    "Off (no DLSS / FSR)",
 };
 constexpr int kGame3dUpCount = static_cast<int>(sizeof kGame3dUpZh / sizeof kGame3dUpZh[0]);
 
@@ -734,32 +728,25 @@ void tab_display(const LiveStatus& live, Page& p, float bottom_h) {
 
     pane_begin("tab_display", bottom_h);
 
-    card_group("窗口与分辨率", "Window & Resolution");
-    if (card_choice("game_res", "3D 渲染质量", "3D render quality",
-                    "3D 场景按输出分辨率（窗口高度，[am] resolution）的百分比渲染，再由「画质」页的超分器放大到输出：原生 = DLAA / 原生抗锯齿，质量 / 平衡 / 性能 / 超级性能 = 对应的 DLSS / FSR 模式。分辨率固定不再动态下降。写入 nxrt.ini，重启生效。",
-                    "The 3D scene renders at this share of the output (the window's height, [am] resolution) and the upscaler on the Graphics "
-                    "page brings it to the output: Native = DLAA / native AA, Quality / Balanced / Performance / Ultra Performance = the DLSS / "
-                    "FSR modes of those names. The resolution stays fixed (no dynamic drops). Saved to nxrt.ini; takes effect on restart.",
-                    &p.edit.game3d.res_preset, kGameResZh, kGameResEn, kGameResCount, true)) {
-        // a quality setting needs a temporal upscaler to reach the output: off (bilinear) becomes DLSS where it runs, else FSR 3.1
-        if (p.edit.game3d.res_preset != kGameResCount - 1 && p.edit.game3d.upscaler == "bilinear") {
-            p.edit.game3d.upscaler = extras::temporal_dlss_started() ? "dlss" : "fsr3";
-            if (p.edit.game3d.fsr_version.empty()) p.edit.game3d.fsr_version = "3.1";
+    card_group("窗口与输出", "Window & Output");
+    {   // the output resolution: what the game renders its final picture at (and is told its TV is, [am] resolution); the upscaler
+        // modes on the Graphics page are shares of it. Not the window: a 4K output in a smaller window is scaled down to it.
+        static constexpr int kOutH[] = {1080, 1440, 2160};
+        static constexpr const char* kOutZh[] = {"1920x1080 (1080p)", "2560x1440 (1440p)", "3840x2160 (4K)"};
+        static constexpr const char* kOutEn[] = {"1920x1080 (1080p)", "2560x1440 (1440p)", "3840x2160 (4K)"};
+        int oi = 0;
+        for (int i = 0; i < 3; ++i)
+            if (std::abs(kOutH[i] - p.edit.game3d.out_height) < std::abs(kOutH[oi] - p.edit.game3d.out_height)) oi = i;
+        if (card_choice("out_res", "输出分辨率", "Output resolution",
+                        "游戏最终画面的分辨率（相当于主机所接电视的分辨率）。「画质」页的超分模式按它的百分比渲染 3D 场景。通常设为显示器的分辨率；它与窗口大小无关，窗口更小时画面会缩小显示。重启后生效。",
+                        "The resolution the game renders its final picture at (the TV resolution the console would be connected to). The "
+                        "upscaler modes on the Graphics page render the 3D scene at a share of it. Usually your monitor's resolution; it is "
+                        "not the window size - a smaller window shows it scaled down. Takes effect after a restart.",
+                        &oi, kOutZh, kOutEn, 3, true)) {
+            p.edit.game3d.out_height = kOutH[oi];
+            mark(p);
         }
-        mark(p);
     }
-    // A hint, not a gate: Native at a 4K output renders the scene at 3840x2160, and the mirror capture's copies (up to ~3.5 GiB when it
-    // is on) come on top of it. Measured on a 4060 Laptop (8 GB): the capture asked for 1989 of the 3584 MiB it wanted, so this is the
-    // combination that runs out of video memory first, and the DLC scenes are the ones that get there. The player can still pick it.
-    if (p.edit.game3d.res_preset == 0 && nvn::mirror_device_vram() < (10ull << 30)) {
-        ImGui::PushStyleColor(ImGuiCol_Text, kGold);
-        ImGui::TextWrapped("%s", tr("注意：这台显卡的显存不到 10 GB，4K 会与 mirror capture 的拷贝（约 3.5 GiB）叠加，"
-                                    "附加内容场景最容易撑不住；1440p 更稳。",
-                                    "This card has under 10 GB of video memory: 4K stacks with the mirror capture's copies "
-                                    "(~3.5 GiB), and the add-on scenes are where it runs out first; 1440p is safer."));
-        ImGui::PopStyleColor();
-    }
-
     int wmode = window_mode_index(d.window_mode);
     if (card_choice("wmode", "显示模式", "Window mode",
                     "无边框全屏可瞬间切换且支持 F11 / Alt+Enter 快捷切换；独占全屏会直接接管显示器。",
@@ -787,9 +774,10 @@ void tab_display(const LiveStatus& live, Page& p, float bottom_h) {
     int preset = 3;   // default 2560x1440
     for (int i = 0; i < kSizePresetCount; ++i)
         if (kSizePresets[i][0] == d.width && kSizePresets[i][1] == d.height) preset = i;
-    if (card_choice("wsize", "窗口尺寸 (仅窗口模式)", "Window size (windowed)",
-                    "仅控制窗口模式下的窗口边框大小（重启后会记住），不改变上方游戏 3D 分辨率。",
-                    "Windowed-mode client size (remembered on restart); does not change 3D render resolution above.",
+    if (card_choice("wsize", "窗口大小 (仅窗口模式)", "Window size (windowed mode only)",
+                    "窗口模式下窗口在桌面上的大小（重启后会记住）。全屏时不起作用；不改变游戏的输出分辨率，只改变画面显示的大小。",
+                    "How large the window is on the desktop in windowed mode (remembered on restart). No effect in fullscreen; it does "
+                    "not change the game's output resolution, only how large the picture is shown.",
                     &preset, kSizeLabels, kSizeLabels, kSizePresetCount)) {
         d.width = kSizePresets[preset][0];
         d.height = kSizePresets[preset][1];
@@ -883,15 +871,52 @@ void tab_graphics(const LiveStatus& live, Page& p, float bottom_h) {
 
     pane_begin("tab_graphics", bottom_h);
 
-    card_group("3D 超分与抗锯齿 (点击应用实时热切换)", "3D Upscaler & AA (Live Hot-Switch)");
+    card_group("超分与抗锯齿", "Upscaling & Anti-Aliasing");
     {
         int gidx = game3d_up_index(g3d);
-        if (card_choice("dlss_up", "3D 超分器 / FSR 版本", "3D Upscaler / FSR version",
-                        "直接切换 XC2 游戏内 3D 超分引擎，点「应用并保存」后无需重启立即热切换并写入 nxrt.ini。RX 6700 XT 上 4K 原生 FSR 3.1.6 稳 60fps；FSR 4.1.2 已自动开启防崩保护（4K 原生约 35fps，配 1440p->4K 更流畅）。",
-                        "Live hot-switch for XC2's 3D upscaler/AA (saves to nxrt.ini). FSR 3.1.6 runs 60fps at 4K on RX 6700 XT; FSR 4.1.2 auto-enables crash protection.",
+        if (card_choice("dlss_up", "超分器", "Upscaler",
+                        "3D 画面使用的超分 / 抗锯齿技术，点「应用并保存」后实时切换并写入 nxrt.ini。「关闭」不使用 DLSS 或 FSR。",
+                        "The upscaling / anti-aliasing the 3D picture uses. Switches live when applied and is saved to nxrt.ini. Off uses "
+                        "neither DLSS nor FSR.",
                         &gidx, kGame3dUpZh, kGame3dUpEn, kGame3dUpCount, false, true)) {
             set_game3d_up_index(g3d, gidx);
             mark(p);
+        }
+        // The mode: the share of the output the 3D scene renders at, named after the upscaler (DLSS / FSR modes, plain shares when off)
+        const bool is_dlss = g3d.upscaler == "dlss", is_off = g3d.upscaler == "bilinear";
+        const char* const* mzh = is_dlss ? kModeDlssZh : is_off ? kModeOffZh : kModeTemporalZh;
+        const char* const* men = is_dlss ? kModeDlssEn : is_off ? kModeOffEn : kModeTemporalEn;
+        if (card_choice("game_res", is_dlss ? "DLSS 模式" : is_off ? "渲染分辨率" : "超分模式",
+                        is_dlss ? "DLSS mode" : is_off ? "Render resolution" : "Upscaler mode",
+                        "3D 场景按输出分辨率的百分比渲染，再放大到输出；百分比越低越快、越模糊。分辨率固定，不会动态下降。「主机原版」= 游戏自己的动态 720p。重启后生效。",
+                        "The 3D scene renders at this share of the output and is brought up to it: lower is faster and softer. The resolution "
+                        "stays fixed (no dynamic drops). Console = the game's own dynamic 720p. Takes effect after a restart.",
+                        &g3d.res_preset, mzh, men, kGameResCount, true)) {
+            mark(p);
+        }
+        {   // the size this mode renders at, so the percentages mean something
+            const int out_h = render_output_height(), out_w = out_h * 16 / 9;
+            const double share = kRenderQuality[std::clamp(g3d.res_preset, 0, kRenderQualityCount - 1)].share;
+            char line[160];
+            if (share > 0.0) {
+                const int in_h = static_cast<int>(std::lround(out_h * share)), in_w = static_cast<int>(std::lround(out_w * share));
+                std::snprintf(line, sizeof line, tr("渲染 %dx%d -> 输出 %dx%d（输出分辨率见「显示」页）", "Renders %dx%d -> output %dx%d (output resolution: Display page)"), in_w, in_h, out_w, out_h);
+            } else {
+                std::snprintf(line, sizeof line, "%s", tr("渲染 最高 1280x720（游戏动态分辨率）-> 1920x1080 -> 窗口",
+                                                         "Renders up to 1280x720 (the game's dynamic resolution) -> 1920x1080 -> the window"));
+            }
+            ImGui::TextDisabled("%s", line);
+        }
+        // A hint, not a gate: the 100% step at a 4K output renders the scene at 3840x2160, and the mirror capture's copies (up to ~3.5 GiB
+        // when it is on) come on top of it. Measured on a 4060 Laptop (8 GB): the capture asked for 1989 of the 3584 MiB it wanted, so this
+        // is the combination that runs out of video memory first, and the DLC scenes are the ones that get there. The player can still pick it.
+        if (g3d.res_preset == 0 && render_output_height() >= 2160 && nvn::mirror_device_vram() < (10ull << 30)) {
+            ImGui::PushStyleColor(ImGuiCol_Text, kGold);
+            ImGui::TextWrapped("%s", tr("注意：这台显卡的显存不到 10 GB，4K 会与 mirror capture 的拷贝（约 3.5 GiB）叠加，"
+                                        "附加内容场景最容易撑不住；较低的档位更稳。",
+                                        "This card has under 10 GB of video memory: a 4K scene stacks with the mirror capture's copies "
+                                        "(~3.5 GiB), and the add-on scenes are where it runs out first; a lower step is safer."));
+            ImGui::PopStyleColor();
         }
         if (g3d.upscaler == "dlss") {
             // DLSS runs through Streamline, which has to be loaded before the Vulkan device: switching to it live works only when the
@@ -905,9 +930,9 @@ void tab_graphics(const LiveStatus& live, Page& p, float bottom_h) {
             }
             int pidx = dlss_preset_index(g3d.dlss_preset);
             if (card_choice("dlss_preset", "DLSS 模型", "DLSS model",
-                            "DLSS 使用的 AI 模型，与画质档位无关（档位在「显示」页的「3D 渲染质量」），实时切换。默认 = 驱动按模式自动选择；K 是 Transformer 模型，画质最好；J 拖影更少但更闪。",
-                            "Which AI model DLSS uses - not the quality level (that is 3D render quality on the Display page). Applies live. "
-                            "Default lets the driver choose per mode; K is the transformer model and looks best; J ghosts less but flickers more.",
+                            "DLSS 使用的 AI 模型（实时切换）。默认 = 驱动按模式自动选择；K 是 Transformer 模型，画质最好；J 拖影更少但更闪。",
+                            "Which AI model DLSS uses (applies live). Default lets the driver choose per mode; K is the transformer model and "
+                            "looks best; J ghosts less but flickers more.",
                             &pidx, kDlssPresetZh, kDlssPresetEn, kDlssPresetCount, false, true)) {
                 g3d.dlss_preset = kDlssPresetKeys[pidx];
                 mark(p);

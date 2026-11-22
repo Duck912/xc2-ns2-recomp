@@ -77,7 +77,7 @@ vendored into the Xenoblade Chronicles 2 NS2E recomp project. Upstream base and 
 | `runtime/src/gfx/play/play.cpp` | 2026-11-22 | F11 fullscreen toggle, live 3D upscaler & 8-preset native/upscale resolution sync to `nxrt.ini`, external pad bridge, bilingual HUD language hint; F1 3D render quality drives render_scale / output_scale (DLAA .. Ultra Performance, console); [dlss] preset live |
 | `runtime/src/gfx/play/play_ui.h` | 2026-11-20 | add draw_settings_menu() wrapper replacing Diagnostics overlay |
 | `runtime/src/gfx/overlay.cpp` | 2026-11-22 | XC2 Aegis theme + CJK font, 4-level FPS counter with Detailed Performance HUD (AMD ADL2 / NVIDIA NVML / Vulkan VRAM / CPU / RAM / 120-frame graph / pipeline timings / resolution & scaling) |
-| `runtime/src/gfx/play/play_ui.cpp` | 2026-11-22 | bilingual (zh-Hans/en) two-pane F1 settings menu with native 1080p/1440p/4K & upscale presets, live FSR 3.1.6/4.1.2 switch, 4-level performance HUD selector; F1: 3D render quality list, DLSS in the 3D upscaler list, DLSS model (default / K / J) |
+| `runtime/src/gfx/play/play_ui.cpp` | 2026-11-22 | bilingual (zh-Hans/en) two-pane F1 settings menu with native 1080p/1440p/4K & upscale presets, live FSR 3.1.6/4.1.2 switch, 4-level performance HUD selector; F1: 3D render quality list, DLSS in the 3D upscaler list, DLSS model (default / K / J); upscaler, its mode (named per upscaler) and the render size in one group on the Graphics page, output resolution ([am] resolution) on the Display page |
 | `runtime/src/gfx/nvn/nvn_present.cpp` | 2026-11-22 | auto-crop presentation to `(0, 0, base_w, base_h)` for true full-screen native 1080p/1440p output |
 | `runtime/src/gfx/vk_renderer.cpp` | 2026-11-21 | avoid `vkGetPhysicalDeviceSurfaceCapabilitiesKHR` during swapchain rebuild to prevent Win32 fullscreen deadlock |
 | `runtime/src/services/misc.cpp` | 2026-11-20 | auto-discover DLC folders in [aoc] dir when indices.txt is absent 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |
@@ -227,3 +227,8 @@ git log --oneline 6f1d964..HEAD -- third_party/fefw-recomp
   (restart). DLSS is in the 3D upscaler list (it showed as TAAU and was overwritten), and `[dlss] preset` picks the DLSS model live
   (default / K / J in the menu; L / M ini-only, applied to Performance / Ultra Performance only: on DLAA they drew black lines).
   Measured at 4K: every mode holds 60 fps in Torigoth; game VRAM 12.0 GB (DLAA) .. 9.8 GB (Ultra Performance), 6.3 GB console.
+- **runtime/src/gfx/play: the F1 page reorganised (2026-11-22)** - as PC games lay it out: the Display page holds the window and the
+  output resolution (`[am] resolution`: 1080p / 1440p / 4K, the TV resolution the game renders its final picture for; the render
+  scales are written again for it), the Graphics page one "Upscaling & Anti-Aliasing" group: the upscaler (DLSS, FSR 3.1 / 4.1 / 2.3,
+  TAAU, Off), its mode named after it (DLSS: DLAA .. Ultra Performance; FSR / TAAU: Native AA ..; Off: plain shares; Console), the
+  size that mode renders at, then the DLSS model or the sharpness. Measured: 1440p output + Quality = DLSS 1707x960 -> 2560x1440, 60 fps.

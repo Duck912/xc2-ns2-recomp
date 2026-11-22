@@ -350,11 +350,8 @@ void publish_live_pad_config(const PadSettings& p) {
 // output lands at the window's height and the input at that times the share - and DLSS / FSR pick their mode from the ratio. Measured
 // against [xc2] native_res (2026-11-22, RTX 5090, 4K): that path held its 3840x2160 target only on the first frame (1080p..1440p after,
 // Performance mode, oversized depth-of-field bokeh); this one renders the chosen size every frame. native_res stays for the ini.
-struct RenderQuality { const char* key; double share; };
-constexpr RenderQuality kRenderQuality[] = {
-    {"native", 1.0}, {"quality", 2.0 / 3.0}, {"balanced", 0.58}, {"performance", 0.5}, {"ultra_performance", 1.0 / 3.0}, {"console", 0.0},
-};
-constexpr int kRenderQualityCount = static_cast<int>(sizeof kRenderQuality / sizeof kRenderQuality[0]);
+// The table (kRenderQuality) is in play_types.h: the F1 page names the modes and shows the size each one renders.
+}  // namespace
 
 // The output height the quality is a share of: [am] resolution (the console mode the game renders for, the window's size), else 1080.
 int render_output_height() {
@@ -363,6 +360,8 @@ int render_output_height() {
     const int h = x == std::string::npos ? 0 : std::atoi(am.c_str() + x + 1);
     return h >= 720 && h <= 4320 ? h : 1080;
 }
+
+namespace {
 
 Game3dSettings hydrate_game3d_from_config() {
     Game3dSettings r;
@@ -394,6 +393,7 @@ Game3dSettings hydrate_game3d_from_config() {
     else fv = "3.1";
     r.fsr_version = fv;
     r.sharpness = std::clamp(config_get_double("dlss", "sharpness", 0.5), 0.0, 1.0);
+    r.out_height = render_output_height();
     return r;
 }
 
@@ -416,7 +416,15 @@ void apply_game3d_settings(const Game3dSettings& old_g, const Game3dSettings& g3
         std::string err;
         if (!config_write("dlss", "preset", g3d.dlss_preset, &err)) NXLOG_W(kTag, "cannot persist [dlss] preset to nxrt.ini: %s", err.c_str());
     }
-    if (g3d.res_preset != old_g.res_preset) {
+    if (g3d.out_height != old_g.out_height && g3d.out_height >= 720) {   // the output resolution: what the game is told its TV is
+        char res[32];
+        std::snprintf(res, sizeof res, "%dx%d", g3d.out_height * 16 / 9, g3d.out_height);
+        std::string err;
+        if (!config_write("am", "resolution", res, &err)) NXLOG_W(kTag, "cannot persist [am] resolution to nxrt.ini: %s", err.c_str());
+        else NXLOG_I(kTag, "output resolution -> %s saved to nxrt.ini (takes effect on restart)", res);
+    }
+    // the scales are shares of the output: a new output resolution writes them again for the same mode
+    if (g3d.res_preset != old_g.res_preset || (g3d.out_height != old_g.out_height && g3d.out_height >= 720)) {
         const int idx = std::clamp(g3d.res_preset, 0, kRenderQualityCount - 1);
         const RenderQuality& rq = kRenderQuality[idx];
         const int out_h = render_output_height();
