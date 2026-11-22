@@ -1,7 +1,7 @@
 # XC2 NS2 Recomp v0.2.0 — the cornerstone release
 
-**Tested on a Radeon RX 6800 XT (16 GB) and an RTX 4060 Laptop (8 GB).** The NVIDIA path came from #19, which its author
-tested on a 5090 and a 4060 Laptop; the 4060 Laptop run here is ours.
+**Tested on a Radeon RX 6800 XT (16 GB) and an RTX 4060 Laptop (8 GB) - both runs are ours.** Pull request #19 was
+developed and measured on a 5090 and a 4060 Laptop by @nikolaybutnik.
 
 The Switch 2 edition is not the Switch 1 game with a bigger icon. Its cutscenes are 4K AV1, its memory films play *over* a
 live scene and have to hand that scene back, and its player is guest code we cannot call into — the runtime only supplies
@@ -112,7 +112,7 @@ Upstream: **fefw-recomp** by Goldoire (GPL-3.0, the runtime this fork is built o
 
 # XC2 NS2 重编译 v0.2.0 —— 基石版本
 
-**在 Radeon RX 6800 XT（16 GB）与 RTX 4060 Laptop（8 GB）上实测。** N 卡路径来自 #19（其作者在 5090 与 4060 Laptop 上测过），4060 Laptop 这一组是我们自己的运行。
+**在 Radeon RX 6800 XT（16 GB）与 RTX 4060 Laptop（8 GB）上实测，两台都是我们自己跑的。** #19 由 @nikolaybutnik 在 5090 与 4060 Laptop 上开发和测量。
 
 NS2 版不是“换了图标的 NS1”。它的过场是 **4K AV1**；它的回忆短片是**叠在实时场景之上**播、播完必须把场景交还；
 而它的播放器是客机代码，我们调不进去——运行时只负责 `nn::codec`。这一版主要就是这三件事，加上第一个设置界面和
