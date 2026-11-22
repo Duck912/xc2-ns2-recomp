@@ -235,8 +235,6 @@ export const zh = {
     'settings.gameLang.korean': '한국어（韩语）',
     'settings.gameLang.simplifiedChinese': '简体中文',
     'settings.gameLang.traditionalChinese': '繁體中文',
-    'settings.gameLang.chinese': '中文',
-    'settings.gameLang.taiwanese': '繁體中文（台湾）',
 
     // 帧率
     'settings.fps60.label': '60 帧游玩',

@@ -95,8 +95,6 @@ const SECTIONS = [
                   ['Spanish', 'settings.gameLang.spanish'],
                   ['LatinAmericanSpanish', 'settings.gameLang.latinSpanish'],
                   ['Korean', 'settings.gameLang.korean'],
-                  ['Chinese', 'settings.gameLang.chinese'],
-                  ['Taiwanese', 'settings.gameLang.taiwanese'],
                   ['SimplifiedChinese', 'settings.gameLang.simplifiedChinese'],
                   ['TraditionalChinese', 'settings.gameLang.traditionalChinese']],
         hint: 'settings.gameLang.hint' },
