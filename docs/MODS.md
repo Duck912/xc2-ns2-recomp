@@ -37,14 +37,21 @@ Inside a mod's folder the following are found in addition to the plain layout, i
 
 ```
 <mod>\romfs
-<mod>\atmosphere\contents\0100E95004039000\romfs
-<mod>\contents\0100E95004039000\romfs
-<mod>\0100E95004039000\romfs
+<mod>\atmosphere\contents\0100E95004038000\romfs
+<mod>\contents\0100E95004038000\romfs
+<mod>\0100E95004038000\romfs
 ```
 
 and the same places for `exefs` and `cheats`; `atmosphere\exefs_patches\<name>\` is accepted for code patches.
-`0100E95004039000` is the base title id of this game (the add-ons are `0100E95004039001` … `07`); files under
-another title id are ignored, so a mod folder can hold several games' content without us serving the wrong one.
+
+**Which id goes in that folder.** `0100E95004038000` is the application (the same title as the Switch 1 release,
+update 1114112); its Switch 2 program is `0400E95004038001`, and that is what the lift recompiles. An emulator
+layout names the **application id** for base-game content, which is why the three lines above use it. The add-on
+packs are their own titles — `0100E95004039001` … `063` (the retail set is not contiguous) — and a mod that
+replaces a file *inside a pack* is placed under that pack's id instead.
+
+Files under any other title id are ignored, so one mod folder can hold content for several games without us
+serving the wrong one.
 
 ## Order and switches
 
