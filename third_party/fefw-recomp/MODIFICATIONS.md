@@ -8,7 +8,7 @@ vendored into the Xenoblade Chronicles 2 NS2E recomp project. Upstream base and 
 | upstream | https://github.com/Goldoire/fefw-recomp |
 | licence | GPL-3.0-or-later (see [LICENSE](LICENSE) and [LEGAL.md](LEGAL.md)) |
 | fork base commit in this repository | `6f1d964` (2026-11-12, baseline: 26 rounds of XC2 NS2 recomp) |
-| files changed since the base | 119 |
+| files changed since the base | 120 |
 | generated from | `git diff --name-only 6f1d964..HEAD -- third_party/fefw-recomp` |
 
 > **Why this file and not per-file headers.** GPL-3.0 section 5(a) requires the work to carry prominent notices
@@ -21,6 +21,7 @@ vendored into the Xenoblade Chronicles 2 NS2E recomp project. Upstream base and 
 
 | file | date | change |
 |---|---|---|
+| `runtime/include/nxrt/render_quality.h` | 2026-11-22 | new: the [upscale] render_quality modes and the scales they imply (shared by the runtime and the F1 page) |
 | `runtime/include/nxrt/symbols.h` | 2026-11-22 | guest names: symbols_load_guest_names[_text], symbols_guest_count, symbols_describe_guest (the map's f_<guest VA> entries named from the lift's dynsym) |
 | `runtime/src/diag/symbols.cpp` | 2026-11-22 | guest names: the map's f_<guest VA> entries take the lift's name; symbols_describe_guest matches the exact function start, not the nearest preceding export |
 | `runtime/src/diag/watchdog.cpp` | 2026-11-22 | thread dump prints guest frames through symbols_describe_guest instead of a literal f_%llx |
@@ -62,7 +63,7 @@ vendored into the Xenoblade Chronicles 2 NS2E recomp project. Upstream base and 
 | `runtime/src/gfx/nvn/nvn_gpu.cpp` | 2026-11-22 | nvn: [nvn] split_draws hands the recorded commands to the GPU at pass boundaries - the GPU stops waiting for t; never lose a flush request; 72 submission slots; [nvn] mirror_capture at submit; [nvn] present_ahead = auto atomic live `keep_aspect` toggle (`set_keep_aspect`) always-on lightweight Vulkan timestamp query pool for `gpu_busy_ns` and live viewport info reporting |
 | `runtime/src/gfx/nvn/nvn_gpu_internal.h` | 2026-11-21 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override; mirror capture and prologue interfaces (Frame::prologue, mirror_capture_*) |
 | `runtime/src/gfx/nvn/nvn_gpu_pool.cpp` | 2026-11-21 | nvn: pool import/mirror granule is a config (default 64 MiB unchanged); 16 MiB does not help; movement overrun; device-local mirrors for VAMM and SHADER_CODE pools; CPU snapshots; chunked pool imports; [nvn] mirror_capture (= auto) |
-| `runtime/src/gfx/nvn/nvn_gpu_texture.cpp` | 2026-11-22 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override; [gfx] render_scale_min_width: textures narrower than it keep their size under render_scale; [gfx] output_scale (the output-side targets scale apart from the scene set) |
+| `runtime/src/gfx/nvn/nvn_gpu_texture.cpp` | 2026-11-22 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override; [gfx] render_scale_min_width: textures narrower than it keep their size under render_scale; [gfx] output_scale (the output-side targets scale apart from the scene set); [upscale] render_quality decides render_scale / output_scale from [am] resolution at start-up |
 | `runtime/src/gfx/nvn/nvn_pipeline.cpp` | 2026-11-21 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override bump pipeline cache salt for SPIR-V depth-compare sampler auto-upgrading and `R11G11B10F` NaN scrub |
 | `runtime/src/gfx/nvn/nvn_pipeline.h` | 2026-11-14 | nvn: push the uniform buffers as push descriptors ([nvn] push_uniforms, ubo_only_rebind) |
 | `runtime/src/gfx/nvn/nvn_replay.cpp` | 2026-11-21 | replay: pipe/fb hot-path audit (round 45, 9.7-15.4 -> 5.3-6.8 ms); fsr_follow_size; fs trace_stack_file off; s; snapshots of instance streams; first uploads in a submission prologue; storage images under [gfx] render_scale; occlusion query results go into the mirror capture copy (the cloud sea and fog were not drawn); under mirror_capture a query report is assembled in the copy and reaches the pool in one piece (flames, smoke and reflections flickered with present_ahead); [nvn] mirror_gfx_storage_writeback (graphics-stage storage writes stay in the copy; XC2's waterfall mist blinked) subdivide 1-quad 3D Cloud Sea sheets (`quad_split` 1..16 with varying Z); pool-offset aliasing barrier; sampler compare auto-upgrade |
@@ -72,12 +73,12 @@ vendored into the Xenoblade Chronicles 2 NS2E recomp project. Upstream base and 
 | `runtime/src/gfx/platform.cpp` | 2026-11-16 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |
 | `runtime/include/nxrt/nvn_backend.h` | 2026-11-22 | expose `set_keep_aspect`, `set_dlss_live`, and `dlss_live_info` expose `set_game_viewport_info()` / `game_viewport_info()` and `BackendStats::gpu_busy_ns` |
 | `runtime/include/nxrt/play.h` | 2026-11-21 | expose `overlay_blocks_game()`, `live_pad_config()`, and `note_external_pad()` |
-| `runtime/src/gfx/play/play_types.h` | 2026-11-22 | default FPS counter hotkey F10, persistent `menu_lang`, and `Game3dSettings`; Game3dSettings: render quality index, dlss upscaler, dlss_preset |
+| `runtime/src/gfx/play/play_types.h` | 2026-11-22 | default FPS counter hotkey F10, persistent `menu_lang`, and `Game3dSettings`; Game3dSettings: render quality index, dlss upscaler, dlss_preset; render quality table from nxrt/render_quality.h; capture setting |
 | `runtime/src/gfx/play/play_config.cpp` | 2026-11-21 | parse and persist `[fps] menu_lang` in `controls.ini` |
-| `runtime/src/gfx/play/play.cpp` | 2026-11-22 | F11 fullscreen toggle, live 3D upscaler & 8-preset native/upscale resolution sync to `nxrt.ini`, external pad bridge, bilingual HUD language hint; F1 3D render quality drives render_scale / output_scale (DLAA .. Ultra Performance, console); [dlss] preset live |
+| `runtime/src/gfx/play/play.cpp` | 2026-11-22 | F11 fullscreen toggle, live 3D upscaler & 8-preset native/upscale resolution sync to `nxrt.ini`, external pad bridge, bilingual HUD language hint; F1 3D render quality drives render_scale / output_scale (DLAA .. Ultra Performance, console); [dlss] preset live; the 3D render quality is stored as intent ([upscale] render_quality), no derived scales; [nvn] mirror_capture setting |
 | `runtime/src/gfx/play/play_ui.h` | 2026-11-20 | add draw_settings_menu() wrapper replacing Diagnostics overlay |
 | `runtime/src/gfx/overlay.cpp` | 2026-11-22 | XC2 Aegis theme + CJK font, 4-level FPS counter with Detailed Performance HUD (AMD ADL2 / NVIDIA NVML / Vulkan VRAM / CPU / RAM / 120-frame graph / pipeline timings / resolution & scaling) |
-| `runtime/src/gfx/play/play_ui.cpp` | 2026-11-22 | bilingual (zh-Hans/en) two-pane F1 settings menu with native 1080p/1440p/4K & upscale presets, live FSR 3.1.6/4.1.2 switch, 4-level performance HUD selector; F1: 3D render quality list, DLSS in the 3D upscaler list, DLSS model (default / K / J); upscaler, its mode (named per upscaler) and the render size in one group on the Graphics page, output resolution ([am] resolution) on the Display page |
+| `runtime/src/gfx/play/play_ui.cpp` | 2026-11-22 | bilingual (zh-Hans/en) two-pane F1 settings menu with native 1080p/1440p/4K & upscale presets, live FSR 3.1.6/4.1.2 switch, 4-level performance HUD selector; F1: 3D render quality list, DLSS in the 3D upscaler list, DLSS model (default / K / J); upscaler, its mode (named per upscaler) and the render size in one group on the Graphics page, output resolution ([am] resolution) on the Display page; Experimental section: frame pipelining (mirror capture: automatic / on / off) |
 | `runtime/src/gfx/nvn/nvn_present.cpp` | 2026-11-22 | auto-crop presentation to `(0, 0, base_w, base_h)` for true full-screen native 1080p/1440p output |
 | `runtime/src/gfx/vk_renderer.cpp` | 2026-11-21 | avoid `vkGetPhysicalDeviceSurfaceCapabilitiesKHR` during swapchain rebuild to prevent Win32 fullscreen deadlock |
 | `runtime/src/services/misc.cpp` | 2026-11-20 | auto-discover DLC folders in [aoc] dir when indices.txt is absent 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |
@@ -232,3 +233,10 @@ git log --oneline 6f1d964..HEAD -- third_party/fefw-recomp
   scales are written again for it), the Graphics page one "Upscaling & Anti-Aliasing" group: the upscaler (DLSS, FSR 3.1 / 4.1 / 2.3,
   TAAU, Off), its mode named after it (DLSS: DLAA .. Ultra Performance; FSR / TAAU: Native AA ..; Off: plain shares; Console), the
   size that mode renders at, then the DLSS model or the sharpness. Measured: 1440p output + Quality = DLSS 1707x960 -> 2560x1440, 60 fps.
+- **runtime: the render quality stored as intent, frame pipelining in the menu (2026-11-22)** - `[upscale] render_quality`
+  (`nxrt/render_quality.h`) now decides the scales at start-up from `[am] resolution`, and implies the dynamic-resolution lock
+  (xc2_boot.cpp), instead of the F1 page writing `render_scale` / `output_scale` / `lock_render_size`: the launcher changes the output
+  resolution and the lock too, and derived values written for one output went stale for another. `[gfx] render_scale` / `output_scale`
+  still apply when no render quality is set. Measured from an ini with only paths, language and fps, set up through the menu alone:
+  DLSS DLAA 3840x2160 -> 3840x2160, mirror_capture on (auto), 60 fps. The F1 page's Graphics tab ends in an Experimental section with
+  `[nvn] mirror_capture` as "Frame pipelining" (automatic / on / off; what it does, ~3 GB of video memory, restart).

@@ -21,6 +21,7 @@
 #include <string>
 
 #include "nxrt/config.h"
+#include "nxrt/render_quality.h"
 #include "nxrt/dispatch.h"
 #include "nxrt/fiber.h"
 #include "nxrt/frame_limiter.h"
@@ -760,6 +761,18 @@ static void arm_frame_rate(uint64_t main_base) {
             }
         }
     }).detach();
+}
+
+// The dynamic-resolution lock (the ladder held at its top rung, 1280x720): a 3D render quality other than the console's
+// ([upscale] render_quality, nxrt/render_quality.h) scales the game's targets from that fixed size, so it implies the lock; without one
+// (or with the console mode) the launcher's [upscale] lock_render_size decides, as before.
+static bool xc2_lock_render_size() {
+    static const bool on = [] {
+        const nxrt::RenderQualityMode* m = nxrt::render_quality_mode(nxrt::config_get_str("upscale", "render_quality", "").c_str());
+        if (m && m->share > 0.0) return true;
+        return nxrt::config_get_bool("upscale", "lock_render_size", false);
+    }();
+    return on;
 }
 
 // ---- native resolution override (3.0.1) -------------------------------------------------------------------------------------
@@ -1555,7 +1568,7 @@ static void arm_ns1_probe(uint64_t main_base) {
     static const bool rs_probe = std::getenv("XC2_RENDER_SIZE_PROBE") != nullptr;   // static: the hook is a plain fn pointer
     static const bool rs_watch = std::getenv("XC2_RENDER_SIZE_WATCH") != nullptr ||
                                  std::getenv("XC2_RENDER_SIZE_WRITE_PIN") != nullptr;
-    const bool rs_lock = nxrt::config_get_bool("upscale", "lock_render_size", false);
+    const bool rs_lock = xc2_lock_render_size();
     if (rs_probe || rs_lock || rs_watch) {
         static int shown = 0;
         static uint32_t last0 = 0xFFFFFFFFu, last1 = 0xFFFFFFFFu;
@@ -1583,7 +1596,7 @@ static void arm_ns1_probe(uint64_t main_base) {
                     if (std::sscanf(s, "%ux%u", &a, &b) == 2 && a && b) { pin_w = a; pin_h = b; }
                 }
                 // The launcher's Picture page writes this: lock the ladder at its top rung (the game's fixed 1280x720).
-                if (!pin_w && nxrt::config_get_bool("upscale", "lock_render_size", false)) { pin_w = 1280; pin_h = 720; }
+                if (!pin_w && xc2_lock_render_size()) { pin_w = 1280; pin_h = 720; }
             }
             if (pin_w && v[0] <= 1920 && v[1] <= 1080 && (v[0] < pin_w || v[1] < pin_h)) {
                 const uint32_t pinned[2] = {pin_w, pin_h};

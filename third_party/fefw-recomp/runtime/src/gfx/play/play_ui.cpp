@@ -1101,6 +1101,29 @@ void tab_graphics(const LiveStatus& live, Page& p, float bottom_h) {
         mark(p);
     }
 
+    // ---- Experimental: options of this PC version, not of the game, each with what it costs ----
+    card_group("实验性功能", "Experimental");
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));   // a plain note, not a warning
+    ImGui::TextWrapped("%s", tr("实验性功能：并非在所有系统上效果都一样。",
+                                "Experimental features: they may not work the same way on every system."));
+    ImGui::PopStyleColor();
+    {   // [nvn] mirror_capture: auto / on / off, with what it does and what it costs
+        static constexpr const char* kCapKeys[] = {"auto", "on", "off"};
+        static constexpr const char* kCapZh[] = {"自动 (显存足够时开启)", "开启", "关闭 (节省显存)"};
+        static constexpr const char* kCapEn[] = {"Automatic (on when the card has room)", "On", "Off (saves video memory)"};
+        int ci = 0;
+        for (int i = 0; i < 3; ++i)
+            if (g3d.capture == kCapKeys[i]) ci = i;
+        if (card_choice("mirror_cap", "帧流水线 (Mirror Capture)", "Frame pipelining (mirror capture)",
+                        "让游戏在当前画面还在绘制时就准备好下一帧，画面更流畅，也能消除部分显卡上的闪烁。代价：多占用约 3 GB 显存。重启后生效。",
+                        "Lets the game get the next frame ready while the current one is still being drawn, for smoother play. It also "
+                        "removes flicker on some graphics cards. The cost: about 3 GB of extra video memory. Takes effect after a restart.",
+                        &ci, kCapZh, kCapEn, 3, true)) {
+            g3d.capture = kCapKeys[ci];
+            mark(p);
+        }
+    }
+
     pane_end(live);
 }
 

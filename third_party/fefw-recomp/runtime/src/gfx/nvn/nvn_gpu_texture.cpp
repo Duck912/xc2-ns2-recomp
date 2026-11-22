@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "nxrt/config.h"
+#include "nxrt/render_quality.h"
 #include "nxrt/ftrace.h"
 #include "nxrt/gfx_tuning.h"
 #include "nxrt/gauge.h"
@@ -710,12 +711,42 @@ TexGpu* tex_or_null(Texture* t, float want_scale = 1.0f) {
 // The resolution scale: the game's play settings ([display] render_scale, turned into a factor by the game module and handed over in
 // gfx::tuning) or, for tests, [gfx] render_scale (a number, NXRT_GFX_RENDER_SCALE), which wins. Fixed once known: images keep their size.
 // Stays 1 (not fixed) until one of them is there.
+// [upscale] render_quality (nxrt/render_quality.h), when set, decides both scales from [am] resolution's height (the output): the stored
+// intent, so a resolution changed elsewhere (the launcher) cannot leave the scales of another output behind. [gfx] render_scale /
+// output_scale are for an ini without it.
+struct QualityScales { bool set = false; float scene = 1.0f, out = 1.0f; const char* key = ""; int out_h = 0; };
+const QualityScales& quality_scales() {
+    static const QualityScales q = [] {
+        QualityScales r;
+        const std::string key = nxrt::config_get_str("upscale", "render_quality", "");
+        const nxrt::RenderQualityMode* m = nxrt::render_quality_mode(key.c_str());
+        if (!m) return r;
+        r.set = true;
+        r.key = m->key;
+        const std::string am = nxrt::config_get_str("am", "resolution", "");
+        const size_t x = am.find_first_of("xX");
+        const int h = x == std::string::npos ? 0 : std::atoi(am.c_str() + x + 1);
+        r.out_h = h >= 720 && h <= 4320 ? h : 1080;
+        double scene = 1.0, out = 1.0;
+        if (nxrt::render_quality_scales(*m, r.out_h, &scene, &out)) {
+            r.scene = static_cast<float>(scene);
+            r.out = static_cast<float>(out);
+        }
+        NXLOG_I(kTag, "render quality %s at a %dp output: scene scale %.3f, output scale %.3f ([upscale] render_quality)", r.key, r.out_h,
+                static_cast<double>(r.scene), static_cast<double>(r.out));
+        return r;
+    }();
+    return q;
+}
+
 float g_render_scale = 0.0f;
 float render_scale_now() {
     if (g_render_scale > 0.0f) return g_render_scale;
     static const std::string v = nxrt::config_get_str("gfx", "render_scale", "");   // once: every draw asks (support_for_draw), and a lookup is a getenv
     float sc = 1.0f;
-    if (!v.empty()) {
+    if (quality_scales().set) {
+        sc = quality_scales().scene;
+    } else if (!v.empty()) {
         sc = static_cast<float>(std::atof(v.c_str()));
     } else {
         sc = nxrt::gfx::tuning().render_scale.load();
@@ -726,7 +757,7 @@ float render_scale_now() {
     sc = std::round(sc * 1080.0f) / 1080.0f;   // a whole number of lines at 1080 (1.333 -> 4/3: 1440, not 1439)
     if (std::fabs(sc - 1.0f) < 0.01f) sc = 1.0f;
     g_render_scale = sc;
-    NXLOG_I(kTag, "render scale %.3f (%s)", sc, v.empty() ? "play settings" : "[gfx] render_scale");
+    NXLOG_I(kTag, "render scale %.3f (%s)", sc, quality_scales().set ? "[upscale] render_quality" : v.empty() ? "play settings" : "[gfx] render_scale");
     return sc;
 }
 
@@ -737,6 +768,10 @@ float render_scale_now() {
 // from the ratio). Fixed once read, like render_scale.
 float output_scale_now() {
     static const float out = [] {
+        if (quality_scales().set) {   // [upscale] render_quality decides it (the console mode: 1)
+            const float q = quality_scales().out;
+            return std::fabs(q - 1.0f) < 0.01f ? 1.0f : std::round(q * 1080.0f) / 1080.0f;
+        }
         const std::string v = nxrt::config_get_str("gfx", "output_scale", "");
         if (v.empty()) return 0.0f;   // follows render_scale
         float s = static_cast<float>(std::atof(v.c_str()));

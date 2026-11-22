@@ -394,6 +394,9 @@ Game3dSettings hydrate_game3d_from_config() {
     r.fsr_version = fv;
     r.sharpness = std::clamp(config_get_double("dlss", "sharpness", 0.5), 0.0, 1.0);
     r.out_height = render_output_height();
+    std::string cap = config_get_str("nvn", "mirror_capture", "auto");
+    for (char& c : cap) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    r.capture = cap == "auto" ? "auto" : (cap == "1" || cap == "on" || cap == "true" || cap == "yes") ? "on" : "off";
     return r;
 }
 
@@ -416,6 +419,11 @@ void apply_game3d_settings(const Game3dSettings& old_g, const Game3dSettings& g3
         std::string err;
         if (!config_write("dlss", "preset", g3d.dlss_preset, &err)) NXLOG_W(kTag, "cannot persist [dlss] preset to nxrt.ini: %s", err.c_str());
     }
+    if (g3d.capture != old_g.capture) {   // [nvn] mirror_capture: decided at start-up (the copies, the frame lead), so it waits for a restart
+        std::string err;
+        if (!config_write("nvn", "mirror_capture", g3d.capture, &err)) NXLOG_W(kTag, "cannot persist [nvn] mirror_capture to nxrt.ini: %s", err.c_str());
+        else NXLOG_I(kTag, "mirror_capture -> %s saved to nxrt.ini (takes effect on restart)", g3d.capture.c_str());
+    }
     if (g3d.out_height != old_g.out_height && g3d.out_height >= 720) {   // the output resolution: what the game is told its TV is
         char res[32];
         std::snprintf(res, sizeof res, "%dx%d", g3d.out_height * 16 / 9, g3d.out_height);
@@ -423,23 +431,17 @@ void apply_game3d_settings(const Game3dSettings& old_g, const Game3dSettings& g3
         if (!config_write("am", "resolution", res, &err)) NXLOG_W(kTag, "cannot persist [am] resolution to nxrt.ini: %s", err.c_str());
         else NXLOG_I(kTag, "output resolution -> %s saved to nxrt.ini (takes effect on restart)", res);
     }
-    // the scales are shares of the output: a new output resolution writes them again for the same mode
-    if (g3d.res_preset != old_g.res_preset || (g3d.out_height != old_g.out_height && g3d.out_height >= 720)) {
+    // The mode is stored as intent: the runtime derives the scales and the lock from it and [am] resolution at start-up
+    // (nxrt/render_quality.h), so changing the output resolution here or in the launcher cannot leave the scales of another output.
+    if (g3d.res_preset != old_g.res_preset) {
         const int idx = std::clamp(g3d.res_preset, 0, kRenderQualityCount - 1);
         const RenderQuality& rq = kRenderQuality[idx];
-        const int out_h = render_output_height();
-        const bool console = rq.share <= 0.0;
-        char scene[32], out[32];
-        std::snprintf(scene, sizeof scene, "%.4f", console ? 1.0 : out_h * rq.share / 720.0);
-        std::snprintf(out, sizeof out, "%.4f", console ? 1.0 : out_h / 1080.0);
         std::string err;
         // native_res off: its hooks and these scales would multiply (a 3840x2160 scene scaled again)
-        const bool ok = config_write("upscale", "render_quality", rq.key, &err) && config_write("gfx", "render_scale", scene, &err) &&
-                        config_write("gfx", "output_scale", out, &err) && config_write("upscale", "lock_render_size", console ? "0" : "1", &err) &&
-                        config_write("xc2", "native_res", "0", &err) && config_write("xc2", "res_class", "0", &err);
+        const bool ok = config_write("upscale", "render_quality", rq.key, &err) && config_write("xc2", "native_res", "0", &err) &&
+                        config_write("xc2", "res_class", "0", &err);
         if (!ok) NXLOG_W(kTag, "cannot persist the 3D render quality to nxrt.ini: %s", err.c_str());
-        else NXLOG_I(kTag, "3D render quality -> %s (%dp output: render_scale %s, output_scale %s) saved to nxrt.ini (takes effect on restart)", rq.key,
-                     out_h, scene, out);
+        else NXLOG_I(kTag, "3D render quality -> %s saved to nxrt.ini (takes effect on restart)", rq.key);
     }
 }
 

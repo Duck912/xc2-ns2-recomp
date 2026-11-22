@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "nxrt/extras.h"
+#include "nxrt/render_quality.h"
 #include "play_fastboot.h"
 #include "play_tweaks.h"
 
@@ -229,11 +230,10 @@ struct FpsSettings {
 // ---- 3D game resolution & upscaler (synced with nxrt.ini: [am], [xc2], [dlss], [upscale]) ----
 // The 3D render quality (Game3dSettings::res_preset): the upscaler's input as a share of the output height (play.cpp). The last entry,
 // share 0, is the console's own dynamic resolution (no scaling, no lock).
-struct RenderQuality { const char* key; double share; };
-inline constexpr RenderQuality kRenderQuality[] = {
-    {"native", 1.0}, {"quality", 2.0 / 3.0}, {"balanced", 0.58}, {"performance", 0.5}, {"ultra_performance", 1.0 / 3.0}, {"console", 0.0},
-};
-inline constexpr int kRenderQualityCount = static_cast<int>(sizeof kRenderQuality / sizeof kRenderQuality[0]);
+// The table is the runtime's (nxrt/render_quality.h): the runtime derives the scales from the same [upscale] render_quality.
+using RenderQuality = nxrt::RenderQualityMode;
+inline constexpr const RenderQuality* kRenderQuality = nxrt::kRenderQualityModes;
+inline constexpr int kRenderQualityCount = nxrt::kRenderQualityModeCount;
 int render_output_height();   // [am] resolution's height (the output the share is of), else 1080
 
 struct Game3dSettings {
@@ -246,6 +246,7 @@ struct Game3dSettings {
     double sharpness = 0.5;             // [dlss] sharpness (0.0..1.0)
     std::string dlss_preset = "default";   // [dlss] preset: "default" | "J" | "K" | "L" | "M" (live)
     int out_height = 0;                    // the output resolution ([am] resolution, 16:9): 1080 / 1440 / 2160; 0 = as in the ini (restart)
+    std::string capture = "auto";          // [nvn] mirror_capture: "auto" | "on" | "off" (restart)
 };
 
 // ---- lock-on and camera feel (S32) --------------------------------------------------------------------------------------------
