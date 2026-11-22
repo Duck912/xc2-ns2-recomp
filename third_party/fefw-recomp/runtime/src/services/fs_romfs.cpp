@@ -259,8 +259,15 @@ void overlay_dir(Node& dir, const std::filesystem::path& host, ModStats& st) {
 
 // Applies the mods of [fs] mods, if the folder exists. Never fails the build: a broken mod loses its own files, not
 // the game.
-std::map<std::string, std::wstring> apply_mods(Node& root, const std::filesystem::path& host_abs) {
-    std::map<std::string, std::wstring> recs;
+struct ModsResult {
+    std::map<std::string, std::wstring> recs;   // lower-case logical name -> <mod>/.ard/<name>.rec
+    std::wstring tail;                          // <mod>/.ard/append.bin of the highest-priority mod that has one
+    uint64_t tail_size = 0;
+    std::string tail_owner;
+};
+
+ModsResult apply_mods(Node& root, const std::filesystem::path& host_abs) {
+    ModsResult out;
     // Every RomFS image is built here, the add-on packs included. A mod lays files over the *game's* romfs; overlaying
     // a pack's image as well would put the same file in seven storages and report it as 'added' six times.
     {
@@ -319,7 +326,7 @@ std::map<std::string, std::wstring> apply_mods(Node& root, const std::filesystem
             std::error_code rec_ec;
             const std::filesystem::path recs_dir = (dir / name) / ".ard";
             if (std::filesystem::is_directory(recs_dir, rec_ec)) {
-                size_t before = recs.size();
+                size_t before = out.recs.size();
                 for (std::filesystem::recursive_directory_iterator it(recs_dir, rec_ec), end; !rec_ec && it != end; it.increment(rec_ec)) {
                     if (!it->is_regular_file(rec_ec)) continue;
                     std::string rel;
@@ -327,17 +334,26 @@ std::map<std::string, std::wstring> apply_mods(Node& root, const std::filesystem
                     if (rel.size() < 5 || rel.compare(rel.size() - 4, 4, ".rec") != 0) continue;
                     rel.resize(rel.size() - 4);
                     for (char& c : rel) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-                    recs[rel] = long_path(it->path().wstring());
+                    out.recs[rel] = long_path(it->path().wstring());
                 }
-                NXLOG_I("mods", "mods: %s: %zu archive record(s)", name.c_str(), recs.size() - before);
+                NXLOG_I("mods", "mods: %s: %zu archive record(s)", name.c_str(), out.recs.size() - before);
+                std::error_code tail_ec;
+                const std::filesystem::path tail = recs_dir / "append.bin";
+                if (std::filesystem::is_regular_file(tail, tail_ec)) {
+                    if (!out.tail.empty()) NXLOG_W("mods", "mods: %s and %s both append to the archive; %s wins", out.tail_owner.c_str(), name.c_str(), name.c_str());
+                    out.tail = long_path(tail.wstring());
+                    out.tail_size = std::filesystem::file_size(tail, tail_ec);
+                    out.tail_owner = name;
+                    NXLOG_I("mods", "mods: %s: %llu byte(s) appended after the archive", name.c_str(), static_cast<unsigned long long>(out.tail_size));
+                }
             }
         }
         NXLOG_I("mods", "mods: %s: %u file(s), %u replaced, %u added", name.c_str(), st.files, st.replaced, st.added);
         applied++;
     }
     NXLOG_I("mods", "mods: %u enabled, %u disabled, %u named in [mods] order", applied, off, static_cast<uint32_t>(order.size()));
-    if (!recs.empty()) NXLOG_I("mods", "mods: %zu archive record(s) from .ard folders", recs.size());
-    return recs;
+    if (!out.recs.empty()) NXLOG_I("mods", "mods: %zu archive record(s) from .ard folders", out.recs.size());
+    return out;
 }
 
 
@@ -486,6 +502,8 @@ struct Layout {
     std::vector<FileRec> files;         // in data order
     std::map<std::string, uint32_t> by_path;
     std::map<std::string, std::wstring> ard_recs;   // M2: lower-case name -> <mod>/.ard/<name>.rec
+    std::wstring ard_tail;                          // M2b: <mod>/.ard/append.bin, served past the real archive
+    uint64_t ard_tail_size = 0;
 };
 
 // Lays out the host folder: entries sorted by full path in each table, file data in that order, 16-byte aligned.
@@ -514,7 +532,24 @@ bool make_layout(const std::string& host_dir, Layout& L, std::string* err) {
     // The overlay is folded in here, before the tables are laid out: one image, no lookup at run time. A .nup serves
     // its own romfs, so mods only apply to the folder route.
     if (packaged) NXLOG_I("mods", "mods: not applied - the romfs comes from a package");
-    else L.ard_recs = apply_mods(root, abs);
+    else {
+        ModsResult mr = apply_mods(root, abs);
+        L.ard_recs = std::move(mr.recs);
+        if (!mr.tail.empty() && mr.tail_size > 0) {
+            // The image is ours to build, so the archive file can simply be longer than the archive: the bytes past the
+            // real size come from the mod's append.bin, and the entry we repointed reads them. Nothing copies 15 GB.
+            for (Node& k : root.kids) {
+                if (k.is_dir || k.name != "bf2.ard") continue;
+                k.size += mr.tail_size;
+                L.ard_tail = mr.tail;
+                L.ard_tail_size = mr.tail_size;
+                NXLOG_I("mods", "mods: bf2.ard grown by %llu byte(s) for %s", static_cast<unsigned long long>(mr.tail_size),
+                        mr.tail_owner.c_str());
+                break;
+            }
+            if (L.ard_tail.empty()) NXLOG_W("mods", "mods: %s appends to the archive but this romfs has no bf2.ard", mr.tail_owner.c_str());
+        }
+    }
 
     std::vector<Node*> dirs{&root}, files;
     flatten(root, dirs, files);
@@ -735,6 +770,9 @@ struct RomfsImage::Impl {
     size_t ard_index = static_cast<size_t>(-1);          // the file index of bf2.ard, when the romfs holds one
     std::map<std::string, std::wstring> ard_recs;         // lower-case logical name -> <mod>/.ard/<name>.rec
     mutable std::map<uint64_t, std::wstring> ard_at;      // record offset -> .rec, learned when its header is read
+    std::wstring ard_tail;                               // bytes past the real archive, served from a mod's append.bin
+    uint64_t ard_tail_size = 0;
+    uint64_t ard_real_size = 0;                          // the on-disk archive size, before growning for the tail
     mutable std::mutex ard_mu;
 
     static constexpr uint64_t kArdHeader = 0x30;
@@ -801,6 +839,13 @@ bool RomfsImage::build(const std::string& host_dir, std::string* err) {
     p_->l = ok ? std::move(fresh) : Layout{};
     p_->read_seen.assign(p_->l.files.size(), 0);
     p_->ard_recs = std::move(p_->l.ard_recs);
+    p_->ard_tail = std::move(p_->l.ard_tail);
+    p_->ard_tail_size = p_->l.ard_tail_size;
+    p_->ard_real_size = 0;
+    if (ok && p_->ard_index != static_cast<size_t>(-1)) {
+        // The real size is the grown size minus the tail; the on-disk file stops there.
+        p_->ard_real_size = p_->l.files[p_->ard_index].size - p_->ard_tail_size;
+    }
     p_->ard_index = static_cast<size_t>(-1);
     if (ok) {
         auto it = p_->l.by_path.find("/bf2.ard");
@@ -847,6 +892,15 @@ bool RomfsImage::read(uint64_t offset, void* dst, uint64_t len) const {
             case Segment::Kind::kFile:
                 p_->note_read(g.file);
                 if (g.file == p_->ard_index && !p_->ard_recs.empty() && p_->serve_ard(g.src + within, out, n)) break;
+                if (g.file == p_->ard_index && p_->ard_tail_size > 0 && g.src + within >= p_->ard_real_size) {
+                    const uint64_t at = g.src + within - p_->ard_real_size;
+                    if (at + n > p_->ard_tail_size || !p_->read_rec(p_->ard_tail, at, out, n)) return false;
+                    static std::atomic<uint32_t> tail_logged{0};
+                    if (tail_logged.fetch_add(1, std::memory_order_relaxed) < 8)
+                        NXLOG_I("mods", "mods: ard: tail read at +0x%llx, %llu byte(s)", static_cast<unsigned long long>(at),
+                                static_cast<unsigned long long>(n));
+                    break;
+                }
                 if (!p_->read_host(g.file, g.src + within, out, n)) return false;
                 break;
         }

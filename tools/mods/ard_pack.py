@@ -51,12 +51,54 @@ def build_header(orig48, unc, comp):
     return bytes(h)
 
 
+def append_record(out_dir, header_payload, tail_off):
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / "append.bin"
+    with path.open("ab") as f:
+        if tail_off == 0 and path.stat().st_size:
+            f.truncate(0)                      # a fresh build: start the tail over
+        f.write(header_payload)
+    return path
+
+
+def patch_index(arh_bytes, orig_offset, new_offset, comp, unc):
+    """Find the 24-byte entry by its 8-byte archive offset and repoint it.
+
+    The entry carries offset at +0, comp at +8 and unc at +12 (measured: the font record's entry holds 0xef6fe090,
+    96723 and 942194). The rest of the entry - flags and a serial - is left alone.
+    """
+    needle = struct.pack("<Q", orig_offset)
+    at = -1
+    start = 0
+    while True:
+        start = arh_bytes.find(needle, start)
+        if start < 0:
+            break
+        # an entry: the next 4 bytes are a comp that must be > 0 and <= the unc that follows
+        if start + 24 <= len(arh_bytes):
+            c, u = struct.unpack_from("<II", arh_bytes, start + 8)
+            if 0 < c <= u:
+                at = start
+                break
+        start += 1
+    if at < 0:
+        return None
+    out = bytearray(arh_bytes)
+    struct.pack_into("<Q", out, at, new_offset)
+    struct.pack_into("<I", out, at + 8, comp)
+    struct.pack_into("<I", out, at + 12, unc)
+    return bytes(out), at
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Pack a mod's archive replacements into .ard records (M2).")
     ap.add_argument("--mod", required=True, help="the mod folder (the one holding romfs/)")
     ap.add_argument("--catalog", default=str(Path(__file__).resolve().parents[2] / "work" / "mods" / "assets.tsv"))
     ap.add_argument("--level", type=int, default=9)
+    ap.add_argument("--force-append", action="store_true", help="append even when the record would fit (testing)");
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--arh", default="", help="bf2.arh; required when a file has to be appended past the archive")
+    ap.add_argument("--ard-size", type=int, default=0, help="the real bf2.ard size; appended records are placed after it")
     a = ap.parse_args(argv)
 
     mod = Path(a.mod)
@@ -72,6 +114,14 @@ def main(argv=None):
         root = mod
     out_dir = mod / ".ard"
     written = 0
+    arh = None
+    append_pos = 0
+    if not a.dry_run:
+        for stale in ((mod / ".ard" / "append.bin"), (mod / "romfs" / "bf2.arh")):
+            try:
+                stale.unlink()
+            except FileNotFoundError:
+                pass
     too_big = 0
     missing = 0
     same = 0
@@ -89,9 +139,33 @@ def main(argv=None):
         if len(data) == unc:
             same += 1
         z = zlib.compress(data, a.level)
-        if len(z) > comp:
-            too_big += 1
-            report.append({"file": rel, "status": "does-not-fit", "mod": len(data), "zlib": len(z), "room": comp})
+        if len(z) > comp or a.force_append:
+            if not a.arh or not a.ard_size:
+                too_big += 1
+                report.append({"file": rel, "status": "does-not-fit", "mod": len(data), "zlib": len(z), "room": comp})
+                continue
+            # M2b: the record is too big for the original slot, so it goes after the archive and its index entry is
+            # repointed. The entry read from the arh is patched in a copy the mod ships as romfs/bf2.arh.
+            if arh is None:
+                arh = Path(a.arh).read_bytes()
+            tail_off = append_pos
+            new_off = a.ard_size + tail_off
+            if len(z) > len(data):
+                too_big += 1
+                report.append({"file": rel, "status": "comp-gt-unc", "zlib": len(z), "unc": len(data)})
+                continue
+            header = build_header(struct.pack("<4sIIIII", b"xbc1", 1, len(data), len(z), checksum, 0), len(data), len(z))
+            record = header + z
+            append_record(out_dir, record, tail_off)
+            append_pos += len(record)
+            patched = patch_index(arh, offset, new_off, len(z), len(data))
+            if patched is None:
+                too_big += 1
+                report.append({"file": rel, "status": "index-entry-not-found", "offset": offset})
+                continue
+            arh = patched[0]
+            written += 1
+            report.append({"file": rel, "status": "appended", "zlib": len(z), "at": new_off, "entry": patched[1]})
             continue
         if a.dry_run:
             written += 1
@@ -104,6 +178,12 @@ def main(argv=None):
         out.write_bytes(header + payload)
         written += 1
         report.append({"file": rel, "status": "packed", "zlib": len(z), "room": comp})
+
+    if arh is not None:
+        romfs = mod / "romfs"
+        romfs.mkdir(parents=True, exist_ok=True)
+        (romfs / "bf2.arh").write_bytes(arh)
+        print("  index: romfs/bf2.arh patched (" + str(len(arh)) + " bytes)")
 
     print("mod: " + str(mod))
     print("  packed %d, does not fit %d, not in the archive %d, unchanged %d" % (written, too_big, missing, same))
