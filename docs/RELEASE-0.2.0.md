@@ -8,6 +8,11 @@ live scene and have to hand that scene back, and its player is guest code we can
 `nn::codec`. This release is mostly about those three, plus the first settings page and the first NVIDIA support.
 
 
+> **Before you read on.** This release adds a lot at once — a settings page, native resolutions, NVIDIA support, the film
+> hand-back — so some defects we have not hit are probably still in it. If you find one, please open an issue with the log
+> (`tools\report.py` gathers it into one file); every report is read. Whatever it turns up, this update is the step that
+> makes the 1.0 path possible.
+
 ## Which file do I download?
 
 | file | what it is | do I need it? |
@@ -135,6 +140,10 @@ NS2 版不是“换了图标的 NS1”。它的过场是 **4K AV1**；它的回�
 而它的播放器是客机代码，我们调不进去——运行时只负责 `nn::codec`。这一版主要就是这三件事，加上第一个设置界面和
 第一份 N 卡支持。
 
+
+> **写在前面。** 这次更新一次性加了很多东西——设置界面、原生分辨率、N 卡支持、影片交还——所以难免有我们没测到的缺陷。
+> 碰到请开 issue 并附日志（`tools\report.py` 会打成一个包），每一条我们都会看。无论如何，这次更新都是通向正式版的
+> 重要基石。
 
 ## 我该下哪个文件？
 

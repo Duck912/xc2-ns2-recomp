@@ -30,7 +30,8 @@ jobs:
         run: |
           set -eu
           python3 tools/ci/config_table.py --check
-      python3 tools/ci/check_play_settings.py
+          python3 tools/ci/check_play_settings.py
+          python3 tools/ci/check_install_template.py
 
       - name: No personal paths
         run: |

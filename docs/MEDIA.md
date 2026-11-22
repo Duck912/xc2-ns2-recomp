@@ -80,6 +80,9 @@ Measured after the fixes (RX 6800 XT):
   `subsdk0!movie::MediaDecoder::Stop` instead of `f_760001be70`. Without it, a dump is a list of addresses.
 - `docs/COMPATIBILITY.md` for what still looks wrong on which GPU.
 
+A clean install is part of the test: with `[media] player_trace` off (the default) the poke must still be routed, or the
+film shows the one-picture-a-second stall with nothing in the log to explain it.
+
 ## Mistakes worth not repeating
 
 1. **Flagging a picture with end of stream.** Players drop it and wait for the picture they counted on.
@@ -90,3 +93,7 @@ Measured after the fixes (RX 6800 XT):
    there is nothing to pair.
 5. **Naming frames by the nearest preceding symbol.** The exports are sparse; an address 42 KiB past a name is not that
    function.
+6. **Letting a fix depend on a diagnostic flag.** The per-frame timer poke is what makes the player's loop wake at all, and
+   it was installed inside the player-trace setup, so every development run (trace on) played and every clean install
+   (trace off, the default) read one picture a second and stopped. A default-on setting has to be exercised by a default-off
+   machine: test the package, not only the dev profile.
