@@ -1,6 +1,6 @@
 # XC2 NS2 Recomp v0.2.0 — NVIDIA machines play, and there is a settings page
 
-**Tested on a Radeon RX 6800 XT (16 GB) and an RTX 4060 Laptop (8 GB).**
+**Tested on a Radeon RX 6800 XT (16 GB).** The NVIDIA path comes from #19, which its author tested on a 5090 and a 4060 Laptop.
 
 This release is the first one an NVIDIA machine can be expected to run, and the first one with a settings page you can
 change anything from. Two community pull requests did most of that work: [#19](https://github.com/weile10000/xc2-ns2-recomp/pull/19)
@@ -136,7 +136,7 @@ Upstream: **fefw-recomp** by Goldoire (GPL-3.0, the runtime this fork is built o
 
 # XC2 NS2 重编译 v0.2.0 —— N 卡能玩了，而且有了设置界面
 
-**在 Radeon RX 6800 XT（16 GB）与 RTX 4060 Laptop（8 GB）上测试。**
+**在 Radeon RX 6800 XT（16 GB）上实测。** N 卡路径来自 #19，由作者在 5090 与 4060 Laptop 上测过。
 
 这是第一个 N 卡机器能跑的版本，也是第一个有设置界面、什么都能自己改的版本。大部分工作来自两个社区 PR：
 [#19](https://github.com/weile10000/xc2-ns2-recomp/pull/19)（N 卡修复与 mirror capture）和
