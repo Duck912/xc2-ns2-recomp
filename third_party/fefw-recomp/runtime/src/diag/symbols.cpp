@@ -53,6 +53,33 @@ void install_table(std::shared_ptr<const Table> t) {
     g_table = std::move(t);
 }
 
+// Guest names: the sidecar (tools/build/guest-symbols.ps1) gives each "f_<guest VA>" entry of the map the name the
+// lift knew, so a dump reads "subsdk0!movie::MediaDecoder::Stop+0x12" instead of "f_760001be70". Keyed by guest VA
+// because that is the number the lifted function name carries, so one table covers every module wherever it was
+// placed in the address space.
+struct GuestEntry {
+    uint64_t addr = 0;  // guest virtual address
+    std::string module;
+    std::string name;
+};
+
+struct GuestTable {
+    std::vector<GuestEntry> entries;  // sorted by addr
+};
+
+std::shared_mutex g_guest_mu;
+std::shared_ptr<const GuestTable> g_guest = std::make_shared<GuestTable>();
+
+std::shared_ptr<const GuestTable> current_guest() {
+    std::shared_lock lk(g_guest_mu);
+    return g_guest;
+}
+
+void install_guest(std::shared_ptr<const GuestTable> t) {
+    std::unique_lock lk(g_guest_mu);
+    g_guest = std::move(t);
+}
+
 bool is_space(char c) { return c == ' ' || c == '\t' || c == '\r'; }
 
 struct Token {
@@ -198,6 +225,38 @@ std::shared_ptr<Table> build_table(const ParsedMap& pm) {
     return t;
 }
 
+// The name the map gives a lifted function: "f_" followed by its guest virtual address in hex.
+bool parse_lifted_name(std::string_view name, uint64_t& guest_va) {
+    if (name.size() < 3 || name[0] != 'f' || name[1] != '_') return false;
+    return parse_hex(name.substr(2), guest_va);
+}
+
+const GuestEntry* guest_exact(const GuestTable& t, uint64_t addr) {
+    auto it = std::lower_bound(t.entries.begin(), t.entries.end(), addr,
+                               [](const GuestEntry& e, uint64_t v) { return e.addr < v; });
+    return it != t.entries.end() && it->addr == addr ? &*it : nullptr;
+}
+
+// "<map path with .names instead of the extension>": the sidecar sits next to the map the runtime was given.
+std::string names_path_for_map(const std::string& map_path) {
+    const size_t slash = map_path.find_last_of("\\/");
+    const size_t dot = map_path.find_last_of('.');
+    if (dot != std::string::npos && (slash == std::string::npos || dot > slash)) return map_path.substr(0, dot) + ".names";
+    return map_path + ".names";
+}
+
+// A map of a build whose sidecar is missing keeps the f_<VA> names: the dump is then exactly what it was before,
+// never worse. Renaming is idempotent - a name that no longer starts with f_ is left alone.
+void apply_guest_names(Table& t) {
+    const auto g = current_guest();
+    if (g->entries.empty()) return;
+    for (auto& e : t.entries) {
+        uint64_t va = 0;
+        if (!parse_lifted_name(e.name, va)) continue;
+        if (const GuestEntry* hit = guest_exact(*g, va)) e.name = hit->module + "!" + hit->name;
+    }
+}
+
 // <exe path with .map instead of the extension>
 std::string default_map_path() {
     char buf[1024];
@@ -303,6 +362,8 @@ size_t symbols_load_map(const char* map_path) {
         std::lock_guard<std::mutex> lk(g_path_mu);
         g_loaded_path = path;
     }
+    // The guest names live next to the map, and the rename below reads that table: load it first.
+    symbols_load_guest_names(names_path_for_map(path).c_str());
     return symbols_load_map_text(text);
 }
 
@@ -313,12 +374,66 @@ std::string symbols_map_path() {
 
 size_t symbols_load_map_text(const std::string& text) {
     std::shared_ptr<Table> t = build_table(parse_map_text(text));
+    apply_guest_names(*t);
     size_t n = t->entries.size();
     install_table(std::move(t));
     return n;
 }
 
 size_t symbols_count() { return current_table()->entries.size(); }
+
+// One line per symbol, ascending address: 0x<guest VA> TAB <module> TAB <name>. '#' starts a comment line.
+size_t symbols_load_guest_names_text(const std::string& text) {
+    auto t = std::make_shared<GuestTable>();
+    const std::string_view all(text);
+    size_t pos = 0;
+    while (pos < text.size()) {
+        size_t eol = text.find('\n', pos);
+        if (eol == std::string::npos) eol = text.size();
+        std::string_view line = trim(all.substr(pos, eol - pos));
+        pos = eol + 1;
+        if (line.empty() || line.front() == '#') continue;
+        const size_t t1 = line.find('\t');
+        if (t1 == std::string_view::npos) continue;
+        const size_t t2 = line.find('\t', t1 + 1);
+        if (t2 == std::string_view::npos) continue;
+        std::string_view addr = line.substr(0, t1);
+        if (addr.size() > 2 && addr[0] == '0' && (addr[1] == 'x' || addr[1] == 'X')) addr.remove_prefix(2);
+        uint64_t va = 0;
+        if (!parse_hex(addr, va)) continue;
+        const std::string_view module = line.substr(t1 + 1, t2 - t1 - 1);
+        const std::string_view name = line.substr(t2 + 1);
+        if (name.empty()) continue;
+        t->entries.push_back({va, std::string(module), std::string(name)});
+    }
+    std::sort(t->entries.begin(), t->entries.end(),
+              [](const GuestEntry& a, const GuestEntry& b) { return a.addr < b.addr; });
+    const size_t n = t->entries.size();
+    install_guest(std::move(t));
+    return n;
+}
+
+size_t symbols_load_guest_names(const char* names_path) {
+    const std::string path = names_path && *names_path ? std::string(names_path) : names_path_for_map(default_map_path());
+    std::string text;
+    if (!read_file(path, text)) {
+        install_guest(std::make_shared<GuestTable>());
+        return 0;
+    }
+    return symbols_load_guest_names_text(text);
+}
+
+size_t symbols_guest_count() { return current_guest()->entries.size(); }
+
+std::string symbols_describe_guest(uint64_t guest_addr) {
+    // Exact, not nearest-preceding: the caller (guest_function_of) hands over a lifted function's start address, and
+    // only the exported symbols are named. A nearest match would put a name on every unexported function that sits
+    // between two exports - measured 2026-11-22, "subsdk3!opus_multistream_encoder_destroy+0xa5a0" was a 42 KiB
+    // guess. An unnamed function keeps the map's own f_<VA>, which is true.
+    const auto t = current_guest();
+    if (const GuestEntry* hit = guest_exact(*t, guest_addr)) return hit->module + "!" + hit->name;
+    return "f_" + hex64(guest_addr);
+}
 
 SymbolInfo symbols_lookup(uint64_t host_addr) {
     SymbolInfo info;

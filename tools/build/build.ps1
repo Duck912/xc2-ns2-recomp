@@ -185,6 +185,18 @@ foreach ($m in $mods) {
     $libs += $lib
 }
 
+# ---- 3b. guest names: the dynsym tables of the lift, for the runtime's symbolisation -------------------
+# The map names every lifted function "f_<guest VA>"; this sidecar turns those into the names the lift exported
+# (movie::MediaDecoder::Stop). build-boot.ps1 copies it next to the exe. Best effort: a missing names file only
+# means dumps keep the f_ names, so a lifter/sidecar problem must not fail the build.
+$namesFile = Join-Path $libDir 'guest-symbols.names'
+try {
+    & (Join-Path $PSScriptRoot 'guest-symbols.ps1') -LiftDir $liftDir -OutFile $namesFile
+    if ($LASTEXITCODE -ne 0) { throw "guest-symbols.ps1 exited $LASTEXITCODE" }
+} catch {
+    Write-Warning ("guest names not written: {0}. Thread dumps will show f_<VA> for lifted frames." -f $_.Exception.Message)
+}
+
 # ---- 4. stub main + link -------------------------------------------------------------------------------
 $stubObj = Join-Path $build 'obj\stub'
 New-Item -ItemType Directory -Force -Path $stubObj | Out-Null

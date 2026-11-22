@@ -97,6 +97,12 @@ struct AudioDecoder {
     std::vector<uint8_t> config;         // the track's codec configuration (Xiph-laced Vorbis headers)
     uint64_t packets = 0, decoded = 0;
     int mime = 0, fmt = 0, mode = 0, channels = 2, rate = 48000;
+    // The film's audio track is a placeholder the player uses as a clock (see deliver_sound). It must still report an end:
+    // the player's finish condition covers every track (movie::detail::ExtractorAdapterImpl::AllTracksEndOfStream, and
+    // AudioFrame::GetEndOfStreamState). Mark the last frame it hands out; 0x10 is the byte the SDK's own
+    // movie::AudioFrame::SetEndOfStreamState writes (subsdk0+0x1b2c0, one store).
+    bool eos_pending = false;   // the stream ended; the next frame delivered carries the flag
+    bool eos_sent = false;
     bool warned_packet = false;
     services::ServiceEvent in_ready, out_ready;
     alignas(16) uint8_t in_ev[0x100]{}, out_ev[0x100]{};
@@ -404,6 +410,7 @@ void adec_flush(::Ctx* c) {
 // output-ready event. A chunk larger than the frame's buffer is cut, which the player hears as a click but never as a stall.
 void deliver_sound(AudioDecoder& d) {
     bool any = false;
+    uint64_t last_frame = 0;
     // The film's audio track is a placeholder the player uses as a clock, not sound anyone hears (the game plays its own).
     // It must not run ahead of the picture: while the loading screen starves the picture thread for seconds, an audio clock
     // that kept going made the player skip the picture forward to catch up with it - "stalls 3-5 s, then jumps into the
@@ -425,6 +432,8 @@ void deliver_sound(AudioDecoder& d) {
         }
         const uint64_t f = d.free_.back();
         d.free_.pop_back();
+        last_frame = f;
+        wr8(f + 0x10, 0);   // a normal frame: the end flag is set on the last one only (see below)
         Sound& s = d.sound.front();
         const uint64_t buf = rd64(f + kAfBuffer);
         uint64_t wrote = 0;
@@ -439,6 +448,16 @@ void deliver_sound(AudioDecoder& d) {
         d.ready.push_back(f);
         d.sound.pop_front();
         any = true;
+    }
+    // The track ended - its own zero-byte marker, or the picture's end for this placeholder (movie_adec_film_end). The last
+    // frame handed out carries the flag the player's end check reads; without it the player treats the film as still running
+    // and the scene gives up on it (~35 s later, measured 2026-11-22).
+    if (d.eos_pending && d.sound.empty() && last_frame) {
+        wr8(last_frame + 0x10, 1);
+        d.eos_pending = false;
+        d.eos_sent = true;
+        any = true;
+        NXLOG_I(kTag, "AudioDecoder: end of stream marked on the last audio frame");
     }
     if (any) {
         d.out_ready.signal();
@@ -466,6 +485,18 @@ void adec_decode_async(::Ctx* c) {
         });
     }
     const uint64_t bytes = rd64(buf + kBufFilled), time = rd64(buf + kBufTime);
+    // A packet with nothing in it is the end of the track, not a packet: feeding it as "the whole capacity" (what the
+    // length fallback below does) turns the marker into 256 KB of garbage. The demuxer sends this once, at the end.
+    if (bytes == 0) {
+        {
+            std::lock_guard<std::mutex> lk(d->mu);
+            d->eos_pending = true;
+        }
+        d->in_ready.signal();
+        NXLOG_I(kTag, "AudioDecoder: end-of-stream packet after %llu packets", static_cast<unsigned long long>(d->packets));
+        RET(0);
+        return;
+    }
     const uint64_t data = rd64(buf + kBufData);
     const uint64_t cap = rd64(buf + kBufSize);
     ++d->packets;
@@ -630,6 +661,17 @@ bool install_audio_decoder_hle() {
         NXLOG_I(kTag, "movie::AudioDecoder on the host: %zu imports routed", sizeof kImports / sizeof kImports[0]);
     });
     return ok;
+}
+
+// The picture stream ended: this placeholder track ends with it. Its only job is the player's clock, and the finish
+// condition covers every track, so waiting for an audio end of its own would wait forever (the demuxer's zero-byte marker
+// may never come; measured 2026-11-22). Called from video_codec.cpp when the video end-of-stream marker arrives.
+void movie_adec_film_end() {
+    std::lock_guard<std::mutex> g(g_reg_mu);
+    for (AudioDecoder* d : g_reg) {
+        std::lock_guard<std::mutex> lk(d->mu);
+        if (!d->eos_sent) d->eos_pending = true;
+    }
 }
 
 }  // namespace nxrt::media

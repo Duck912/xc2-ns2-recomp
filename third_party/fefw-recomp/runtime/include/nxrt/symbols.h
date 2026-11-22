@@ -32,4 +32,16 @@ SymbolInfo symbols_lookup(uint64_t host_addr);
 // "module+0xOFFSET (symbol+0xN)" or "module+0xOFFSET" or "0xADDR".
 std::string symbols_describe(uint64_t host_addr);
 
+// Guest names for the lifted functions. The linker map names each one "f_<guest VA>" (an address, in hex); the
+// sidecar that tools/build/guest-symbols.ps1 writes - one "0x<guest VA> TAB <module> TAB <name>" line per exported
+// symbol, ascending - gives the same address the name the lift had, so a thread dump reads
+// "subsdk0!movie::MediaDecoder::Stop+0x12". symbols_load_map reads <exe>.names next to the map; a build without it
+// keeps the f_ names and nothing else changes.
+size_t symbols_load_guest_names(const char* names_path = nullptr);  // empty argument: <map path>.names
+size_t symbols_load_guest_names_text(const std::string& text);      // same, for tests
+size_t symbols_guest_count();
+// The name of a lifted function, by its start address: "module!name" when the sidecar names that exact address,
+// otherwise the map's own "f_<VA>". Never empty, never throws.
+std::string symbols_describe_guest(uint64_t guest_addr);
+
 }  // namespace nxrt

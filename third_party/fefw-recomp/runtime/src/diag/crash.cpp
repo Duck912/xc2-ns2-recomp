@@ -255,7 +255,8 @@ std::string build_report(const EXCEPTION_RECORD* rec, const CONTEXT* cx, DWORD t
     for (size_t i = 0; i < nframes; ++i) {
         const uint64_t g = guest_function_of(frames[i]);
         if (!g || g == last) continue;
-        appendf(out, " f_%llx", static_cast<unsigned long long>(g));
+        out += " ";
+        out += symbols_describe_guest(g);   // "subsdk0!movie::MediaDecoder::Stop+0x12", or f_<VA>
         last = g;
         any = true;
     }

@@ -238,3 +238,30 @@ NXTEST(describe_truncates_long_names) {
     CHECK(d.find("(" + long_name.substr(0, 120) + "+0x0)") != std::string::npos);
     CHECK(d.find(long_name.substr(0, 121)) == std::string::npos);
 }
+
+NXTEST(guest_names_rename_the_maps_lifted_entries) {
+    const uint64_t a = fn_addr(&nxrt_symtest_marker);
+    char lifted[32];
+    std::snprintf(lifted, sizeof lifted, "f_%llx", 0x7100001234ull);
+    nxrt::symbols_load_map_text(make_map({{lifted, a}}));
+    CHECK_EQ(nxrt::symbols_lookup(a).symbol, std::string(lifted));   // no sidecar yet: the map's own name
+
+    CHECK_EQ(nxrt::symbols_load_guest_names_text("0x0000007100001234\tsubsdk0\tmovie::MediaDecoder::Stop\n"), 1u);
+    CHECK_EQ(nxrt::symbols_guest_count(), 1u);
+    CHECK_EQ(nxrt::symbols_describe_guest(0x7100001234ull), std::string("subsdk0!movie::MediaDecoder::Stop"));
+    // Only the exact start is named: an unexported function between two exports must not borrow the earlier name.
+    CHECK_EQ(nxrt::symbols_describe_guest(0x7100001234ull + 0x12), std::string("f_7100001246"));
+    CHECK_EQ(nxrt::symbols_describe_guest(0x7010000000ull), std::string("f_7010000000"));
+    CHECK_EQ(nxrt::symbols_describe_guest(0x7100001234ull + (1ull << 21)), std::string("f_7100201234"));
+
+    // A map loaded while the sidecar is present takes its name, for the host frame and the guest chain alike.
+    nxrt::symbols_load_map_text(make_map({{lifted, a}}));
+    CHECK_EQ(nxrt::symbols_lookup(a).symbol, std::string("subsdk0!movie::MediaDecoder::Stop"));
+    CHECK(nxrt::symbols_describe(a).find("(subsdk0!movie::MediaDecoder::Stop+0x0)") != std::string::npos);
+
+    // Without the sidecar the map's names stand.
+    CHECK_EQ(nxrt::symbols_load_guest_names_text(""), 0u);
+    nxrt::symbols_load_map_text(make_map({{lifted, a}}));
+    CHECK_EQ(nxrt::symbols_lookup(a).symbol, std::string(lifted));
+}
+

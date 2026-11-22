@@ -154,6 +154,18 @@ $mapFile = Join-Path $bd 'xc2_boot.map'
 if ($LASTEXITCODE -ne 0) { throw 'link failed' }
 Write-Host ("boot exe: {0} ({1:N1} MB)" -f $exe, ((Get-Item $exe).Length / 1MB))
 
+# The guest names for the map's f_<VA> entries, next to the exe so symbols_load_map finds them (runtime/src/diag/
+# symbols.cpp). build.ps1 writes it from the lift; a boot build from a lib dir that predates the sidecar is fine -
+# the dump then keeps the f_ names.
+$namesSrc = Join-Path $libdir 'guest-symbols.names'
+$namesDst = Join-Path $bd 'xc2_boot.names'
+if (Test-Path -LiteralPath $namesSrc) {
+    Copy-Item -LiteralPath $namesSrc -Destination $namesDst -Force
+    Write-Host ("guest names: {0}" -f $namesDst)
+} else {
+    Write-Warning ("no guest names at {0}: lifted frames stay f_<VA> in dumps (run toolsuilduild.ps1 to write it)" -f $namesSrc)
+}
+
 # build.json: what this exe is. The folder name is a human convention; this is the thing a log or a check can read.
 $head = (git -C $repo rev-parse HEAD 2>$null)
 $dirty = @(git -C $repo status --porcelain 2>$null | Where-Object { $_ }).Count

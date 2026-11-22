@@ -55,8 +55,15 @@ bool init(const InitOptions& opt) {
         NXLOG_I("config", "[system] language = '%s', NXRT_SYSTEM_LANGUAGE = '%s'", lang.c_str(), env ? env : "<unset>");
     }
     if (opt.load_symbols) {
-        size_t n = symbols_load_map();
-        NXLOG_I("runtime", "host symbols: %zu from the linker map%s%s", n, n ? " " : " (no map next to the exe or in its PDB's folder: host frames show module+offset only)", n ? symbols_map_path().c_str() : "");
+        const size_t n = symbols_load_map();
+        const size_t g = symbols_guest_count();
+        if (!n) {
+            NXLOG_I("runtime", "host symbols: no map next to the exe or in its PDB's folder: host frames show module+offset only");
+        } else if (!g) {
+            NXLOG_I("runtime", "host symbols: %zu from the linker map %s; no guest names next to it (lifted frames stay f_<VA>; tools/build/guest-symbols.ps1 writes them)", n, symbols_map_path().c_str());
+        } else {
+            NXLOG_I("runtime", "host symbols: %zu from the linker map %s; %zu guest names", n, symbols_map_path().c_str(), g);
+        }
     }
     if (opt.crash_handler) crash_install();
     bool ok = true;

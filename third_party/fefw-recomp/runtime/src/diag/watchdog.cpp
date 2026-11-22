@@ -154,7 +154,7 @@ std::string format_threads(const std::vector<ThreadDump>& threads) {
             const uint64_t g = guest_function_of(d.frames[i]);
             if (!g || g == last) continue;
             if (!chain.empty()) chain += " <- ";
-            appendf(chain, "f_%llx", static_cast<unsigned long long>(g));
+            chain += symbols_describe_guest(g);   // "subsdk0!movie::MediaDecoder::Stop+0x12", or f_<VA>
             last = g;
         }
         if (!chain.empty()) {

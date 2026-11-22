@@ -65,7 +65,9 @@ void film_texture_begin_film();
 }
 
 namespace nxrt::media {
-void player_trace_new_film();   // movie_trace.cpp: reset this film's stall-dump budget
+void player_trace_new_film();   // movie_trace.cpp: reset this film's stall-dump budget and clock
+void player_trace_eos();        // movie_trace.cpp: the marker is out; re-arm the dump for what happens after it
+void movie_adec_film_end();     // movie_adec.cpp: this placeholder track ends with the picture, not on its own
 }
 
 #if NXRT_HAVE_LIBVPX
@@ -529,6 +531,10 @@ bool assign(Decoder& d) {
             s.eos = p.eos;
             s.filled = true;
             s.filled_gen = s.gen;
+            // Says whether the end flag reaches a buffer the client can read, and how far its reads had got by then.
+            if (p.eos)
+                NXLOG_I("vcodec", "decoder %u: end-of-stream picture into buffer %u (placed %llu, read %llu)", d.id, index,
+                        (unsigned long long)s_delivered.load(), (unsigned long long)s_read.load());
         }
         any = true;
         s_delivered++;
@@ -562,15 +568,12 @@ bool assign(Decoder& d) {
         const uint32_t index = d.pend.front();
         d.pend.pop_front();
         uint16_t lw = 0, lh = 0;
-        {
-            std::lock_guard<std::mutex> dlk(d.dec_mu);   // order: d.mu then dec_mu (decode_one never holds both)
-            lw = d.last_w;
-            lh = d.last_h;
-        }
         if (index < d.slot.size()) {
             Decoder::Slot& s = d.slot[index];
-            s.w = lw;
-            s.h = lh;
+            // No picture: w=h=0 is what the SDK's own library answers here (hle_codec_video.c:117). A flag on a real picture
+            // is the thing players drop.
+            s.w = 0;
+            s.h = 0;
             s.ts = 0;
             s.eos = true;
             s.filled = true;
@@ -1273,14 +1276,20 @@ void decode_one(Decoder& d) {
         std::lock_guard<std::mutex> dlk(d.dec_mu);   // the codec context and the last picture
         if (!p.data.empty()) decode_into(d, p.data.data(), p.data.size(), p.pts, out);
         if (p.eos) {
+            player_trace_eos();   // from here no new picture is expected: the dump that follows is the hand-back, or its absence
+            movie_adec_film_end();   // the placeholder audio track ends with the picture; the player's finish covers every track
             if (d.vpx_ok) decode_into(d, nullptr, 0, p.pts, out);   // drain
             // End of stream is a marker for the LAST picture of the stream, not a picture of its own. The player's demuxer
             // reads the whole file in the first second and then resubmits this zero-byte packet until it is taken, so
             // handing out a fresh eos picture here told the client the film ended at frame ~60 while hundreds of pictures
             // were still queued behind it - and the client stopped (measured 2026-11-21). Mark the picture this packet
             // produced, else remember it and deliver it once the queue is empty (see assign).
-            if (!out.empty()) out.back().eos = true;
-            else d.eos_pending = true;
+            // End of stream is a marker of its own, never a flag on a picture: the SDK's players drop an output that carries
+            // the flag instead of showing it and then wait for the picture they counted on, so the movie never completes
+            // (nxnative docs/reference/movies.md, "No picture carries the end-of-stream flag", CRI Sofdec2 on Catherine:
+            // 1,140 of 1,141 pictures delivered). Every picture goes out unflagged; one output with no picture carries the
+            // flag - the drain in assign() does that.
+            d.eos_pending = true;
             NXLOG_I("vcodec", "decoder %u: end of stream after %llu pictures (%zu still queued)", d.id,
                     (unsigned long long)d.pictures, d.pending.size());
             hitch_note_film_end();   // the hitch summaries say how long ago this was, so a slow stretch after a cutscene is visible
@@ -1295,12 +1304,11 @@ void decode_one(Decoder& d) {
         // (measured 2026-11-22: a five-second insert that read 124 of its 148 pictures and then waited forever).
         if (p.eos) {
             std::lock_guard<std::mutex> lk(d.mu);
-            if (!d.ready.empty()) {
-                d.ready.back().eos = true;
-                d.eos_pending = false;
-                NXLOG_I("vcodec", "decoder %u: end of stream marked on the last picture in hand (%zu waiting, %zu queued)", d.id,
-                        d.ready.size(), d.pending.size());
-            }
+            // No picture is flagged (see the note where eos_pending is set): the marker waits here until every decoded
+            // picture has gone out, and assign() then hands the waiting buffer one output with no picture and the flag.
+            d.eos_pending = true;
+            NXLOG_I("vcodec", "decoder %u: end of stream waiting for the drain (%zu pictures in hand, %llu read so far)", d.id,
+                    d.ready.size(), (unsigned long long)s_read.load());
         }
         return;
     }
@@ -1509,11 +1517,13 @@ void release_output(::Ctx* c) {   // (dec, index, pre-fence)
     if (auto d = dec_of(A(0))) {
         size_t n_pend = 0, n_fifo = 0;
         uint64_t gen = 0;
+        bool had_eos = false;   // the client is giving back the end-of-stream output without acting on it
         {
             std::lock_guard<std::mutex> lk(d->mu);
             const uint32_t i = static_cast<uint32_t>(A(1));
             if (i < d->slot.size() && d->slot[i].reg) {
                 Decoder::Slot& s = d->slot[i];
+                had_eos = s.eos;
                 s.gen++;                 // the next picture written here signals this generation
                 s.filled = false;
                 if (d->pend.size() < 32) d->pend.push_back(i);
@@ -1532,6 +1542,10 @@ void release_output(::Ctx* c) {   // (dec, index, pre-fence)
                 NXLOG_I("vcodec", "release #%u: decoder %u index %u gen %llu -> pend %zu fifo %zu", k, d->id,
                         static_cast<uint32_t>(A(1)), static_cast<unsigned long long>(gen), n_pend, n_fifo);
         }
+        // If this is the end-of-stream output coming back, the client did not treat it as the end: say so with its caller.
+        if (had_eos)
+            NXLOG_W("vcodec", "decoder %u: the client released the end-of-stream buffer %u without acting on it, lr 0x%llx", d->id,
+                    static_cast<uint32_t>(A(1)), (unsigned long long)c->x[30]);
     }
     RET(0);
 }
@@ -1577,6 +1591,15 @@ void props(::Ctx* c) {   // (u16*, u16*, u16*, u16*, TimeSpan*, bool*, dec, inde
     film_trace("props", A(7), 0, 0);
     BufInfo b;
     if (!props_of(A(6), static_cast<uint32_t>(A(7)), &b)) { RET(kResultNoBuffer); return; }
+    // Diagnostics for the hand-back: what the client asks about, what it is told, and from where. Its caller (the guest lr)
+    // is the function that decides whether the film has ended, and it can be read in the lift.
+    {
+        static std::atomic<uint32_t> np{0};
+        const uint32_t k = np.fetch_add(1, std::memory_order_relaxed);
+        if (b.eos || k < 12)
+            NXLOG_I("vcodec", "props #%u index %llu: %ux%u pts %lld eos %d, lr 0x%llx", k, (unsigned long long)A(7), b.w, b.h,
+                    static_cast<long long>(b.pts), b.eos ? 1 : 0, (unsigned long long)c->x[30]);
+    }
     props_write(A(0), A(1), A(2), A(3), A(4), A(5), b);
     RET(0);
 }

@@ -365,6 +365,18 @@ void media_dump_state(const char* why);
 // film that actually broke left nothing in the log (2026-11-21).
 void player_trace_new_film() {
     g_stall_dumps.store(0, std::memory_order_relaxed);
+    // The clock too: it used to carry over from the previous film, so a film starting 146 s after the last frame of the
+    // one before was already "146 s stalled" at its first packet and spent the whole dump budget in two seconds
+    // (measured 2026-11-22: film 2 at 259 s, twelve dumps by 261 s, none left for the pause this trace exists for).
+    g_last_movie_frame_ns.store(now_ns(), std::memory_order_relaxed);
+}
+
+// The player has been handed the end-of-stream marker: no new picture is expected after it, so "no new movie frame" is
+// expected too. Re-arm the dump here, with a fresh clock, so the first sample lands one second later - while the player
+// either hands the scene back (nothing to see) or sits on the last picture (the dump then says where it waits).
+void player_trace_eos() {
+    g_stall_dumps.store(0, std::memory_order_relaxed);
+    g_last_movie_frame_ns.store(now_ns(), std::memory_order_relaxed);
 }
 
 void stall_watch() {
@@ -373,15 +385,18 @@ void stall_watch() {
         const int64_t last = g_last_movie_frame_ns.load(std::memory_order_relaxed);
         // 12, not 3: a session can play several films and the first three dumps were used up by the start-up stall of the
         // first one, leaving nothing for the film that actually broke (2026-11-21).
-        if (!last || g_stall_dumps.load(std::memory_order_relaxed) >= 12) continue;
+        const int dump_no = g_stall_dumps.load(std::memory_order_relaxed);
+        if (!last || dump_no >= 12) continue;
         const int64_t now = now_ns();
         // One dump a second, not four: a 1.5 s start-up stall used to write six dumps and the film that broke later found the
         // budget spent. A second apart still brackets every stall, and 12 of them cover a lot of stalling (2026-11-21).
         if (now - last < 1'000'000'000ll) continue;
-        if (g_stall_dumps.fetch_add(1, std::memory_order_relaxed) > 12) continue;
+        // Only this thread writes the counter (a reset is a plain store), so load-then-store is enough; fetch_add used to
+        // tick past the budget on the calls that bailed out.
+        g_stall_dumps.store(dump_no + 1, std::memory_order_relaxed);
         media_dump_state("stall");
         const std::string dump = nxrt::diag_thread_dump();
-        const std::string path = "stall_" + std::to_string(g_stall_dumps.load()) + ".txt";
+        const std::string path = "stall_" + std::to_string(dump_no + 1) + ".txt";
         {
             std::ofstream f(path, std::ios::binary | std::ios::trunc);
             if (f) f << "no new movie frame for " << (now - last) / 1e9 << " s\n" << dump;

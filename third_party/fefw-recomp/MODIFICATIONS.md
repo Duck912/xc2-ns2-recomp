@@ -21,6 +21,15 @@ vendored into the Xenoblade Chronicles 2 NS2E recomp project. Upstream base and 
 
 | file | date | change |
 |---|---|---|
+| `runtime/include/nxrt/symbols.h` | 2026-11-22 | guest names: symbols_load_guest_names[_text], symbols_guest_count, symbols_describe_guest (the map's f_<guest VA> entries named from the lift's dynsym) |
+| `runtime/src/diag/symbols.cpp` | 2026-11-22 | guest names: the map's f_<guest VA> entries take the lift's name; symbols_describe_guest matches the exact function start, not the nearest preceding export |
+| `runtime/src/diag/watchdog.cpp` | 2026-11-22 | thread dump prints guest frames through symbols_describe_guest instead of a literal f_%llx |
+| `runtime/src/diag/crash.cpp` | 2026-11-22 | the crash report's guest call stack uses the same names |
+| `runtime/src/core/runtime.cpp` | 2026-11-22 | the start-up symbol line reports how many guest names were loaded |
+| `runtime/tests/test_symbols.cpp` | 2026-11-22 | test: the sidecar renames map entries, and only an exact start is named |
+| `runtime/src/media/video_codec.cpp` | 2026-11-22 | end of stream is a flag-only output (w=h=0), never a flag on a picture; the audio track is ended with it; props/release diagnostics carry the guest caller |
+| `runtime/src/media/movie_adec.cpp` | 2026-11-22 | a zero-byte packet is the end of the placeholder audio track (it used to be fed as a full buffer); the last frame gets the eos byte the SDK's AudioFrame::SetEndOfStreamState writes |
+| `runtime/src/media/movie_trace.cpp` | 2026-11-22 | a new film resets the stall-dump clock too; the end-of-stream marker re-arms the dump so the pause is actually sampled |
 | `runtime/docs/CONFIG.md` | 2026-11-21 | the settings the NVIDIA fixes and the render_scale fixes added (mirror_capture, sync_scope, render_scale_min_width, ...); pool_mirror_mb: at most 8192 MiB |
 | `runtime/include/nxrt/write_watch.h` | 2026-11-21 | write-watch: per-64 KiB-reservation queries (capture_poll) for submit-time captures; VAMM pages tracked by GetWriteWatch |
 | `runtime/src/mem/write_watch.cpp` | 2026-11-21 | write-watch: VAMM (MapPhysicalMemory) pages tracked through their write-watch record; capture_poll for submit-time captures |
