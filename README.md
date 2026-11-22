@@ -1,65 +1,97 @@
-# Xenoblade Chronicles 2 · Nintendo Switch 2 Edition — static recompilation (PC)
+# Xenoblade Chronicles 2 · Nintendo Switch 2 Edition — static recompilation for Windows
 
-Ahead-of-time ("static") recompilation of the retail **Xenoblade Chronicles 2 – Nintendo Switch 2 Edition**
-(title id `0100E95004038000`, game version **3.0.1**) running on Windows x86-64 through Vulkan.
-
-The game's NSO modules are lifted to C++ by [nxrecomp](https://github.com/drakolordx7/nxrecomp) and linked against a small
-Switch runtime ([third_party/fefw-recomp](third_party/fefw-recomp)) whose NVN implementation replays the
-game's graphics API on Vulkan. Shaders are translated from Maxwell / Ampere SASS to SPIR-V by Ryujinx's
-translator, driven by our offline harness.
-
-> **Before reporting anything, update to 0.2.0 or newer** — the builds before it carry problems that are already fixed
-> (the 720p internal render, the add-on `0/romfs` layout, the film hand-back, F1 not opening the settings page).
-> **报 issue 前请先确认版本是 0.2.0 或更新**，旧版本的问题有几条已经修掉了。
-
-> **This repository contains no game code and no game assets.**
-> It is the toolchain, the runtime and the project's documentation. You need your own legally acquired copy
-> of the game — see *What you must supply* below.
-
-## Status (2026-11-18)
+Ahead-of-time ("static") recompilation of the **Switch 2 program of Xenoblade Chronicles 2 – Nintendo Switch 2
+Edition**, running on Windows x86-64 through Vulkan. No emulator: the game's own modules are lifted to C++ and
+linked against a small Switch runtime.
 
 | | |
 |---|---|
-| Boot | ✔ reaches the title screen, loads a 2022 clear save, plays in the field |
-| Frame rate | **59–60 fps** in the port and most areas (1080p, 1440p or 4K alike); **43–52 fps** in the open plain, the heaviest area; 1% low ≈ 51 |
-| Graphics | NVN 3.5 replay on Vulkan; Maxwell shaders translated offline; Ampere (Switch 2) shaders translated from SASS |
-| Upscaling | the game's DLSS/NDSR slot is served by the built-in **TAAU** by default; **FSR 4.1.2** and **FSR 3.1.6** are selectable at run time (`[dlss] upscaler = fsr3`) |
-| Audio | Opus (software decoder) + `nn::audio` OutputStream on the host sink |
-| Movies | **4K cutscenes play** (AV1 3840×2160, 30 fps) with lip sync; the retail build's BGM, effects and voices come out through a host XAudio2 sink |
-| Input | keyboard/mouse and gamepad |
+| application | `0100E95004038000` (the same title as the Switch 1 release; update 1114112) |
+| what we recompile | **program 1**, `0400E95004038001` — SDK 21.4.4 ("Ounce"), NVN2 231.39, game version **3.0.1** |
+| add-on content | `0100E95004039001` … `0100E95004039063` (8 packs, optional) |
+| current release | **v0.2.0** (2026-11-22) |
+
+> **This repository contains no game code and no game assets.** It is the toolchain, the runtime and the
+> documentation. You need your own legally acquired copy of the game — see *What you must supply*.
+
+> **Before reporting anything, update to 0.2.0 or newer** — earlier builds carry problems that are already fixed
+> (the 720p internal render, the add-on `0/romfs` layout, the film hand-back, F1 not opening the settings page).
+> **报 issue 前请先确认版本是 0.2.0 或更新**，旧版本的问题有几条已经修掉了。
+
+## Status (v0.2.0)
+
+| | |
+|---|---|
+| Boot | reaches the title screen, loads an existing save, plays the field and the cutscenes |
+| Frame rate | 60 fps target; the 3D render is dynamic (960×540 → 1440p/4K output). Measured on an RX 6800 XT: 59–60 fps in most areas, 43–52 in the heaviest open areas |
+| Graphics | NVN 3.5 / NVN2 replay on Vulkan; Maxwell and Ampere SASS translated to SPIR-V offline |
+| Upscaling | built-in TAAU by default; FSR 3.1.6, FSR 4.1.2 and DLSS selectable, plus native-resolution presets (1080p / 1440p / 4K) in the F1 page |
+| Movies | 4K AV1 (3840×2160) hardware decode through FFmpeg's Vulkan Video path (D3D11VA fallback, NVDEC and dav1d behind it); a film that plays *over* a live cutscene hands the scene back in ~0.2 s |
+| Audio | Opus (software) + `nn::audio` on a host XAudio2 sink; the film's track is a placeholder clock |
+| Input | keyboard/mouse and gamepad, Switch button positions (`[pad] label_abxy = 1` for letters) |
+| Languages | all 11 text languages the retail 3.0.1 title lists, selectable in the launcher; voices are Japanese and English |
+| Settings | F1 in game (display, quality, audio, pad, keys), launcher for everything that has to be set before a launch |
+
+Tested on a **Radeon RX 6800 XT (16 GB)** and an **RTX 4060 Laptop (8 GB)**, Windows 11.
 
 ### Known issues
 
-* A blue-grey rim around characters and other objects where they meet the cloud sea. Measured to live inside
-  the game's 640×360 volumetric-fog layer (the in-scatter ramp across the depth step); the platform-level
-  suspects (depth filtering, shadow-map compare, texture gather rounding, upscalers) were each tested and
-  excluded, so the fix has to be inside the game's own fog pass.
-* Residual shimmer in the cloud sea in-game (the game dithers its volumetric fog at 640×360; the console leans
-  on its neural upscaler).
-* Slow frames on area transitions are dominated by texture uploads and guest/host lock waits.
-* A 4K cutscene waits while the game is still loading: 1–20 s of stalls at the start of a CG, and an occasional
-  audio drop in that window. The film is fine once the game has finished loading.
-* The first cutscene frame can flash green for a moment on some runs.
+* **Blinking and dialogue flicker** ([#15](https://github.com/weile10000/xc2-ns2-recomp/issues/15)): the eyes and mouth
+  jump for a frame. Not the upscaler, the jitter or the temporal history — the cause is unknown.
+* **A red edge** on a cloud-sea silhouette in the opening battle background. One scene, cosmetic.
+* **Add-on content scenes are the heaviest** in the title; 4K openings included.
+* **First launch compiles pipelines** — about 20 seconds with no frame, once per driver.
+* **Ultrawide is not supported** ([#22](https://github.com/weile10000/xc2-ns2-recomp/issues/22)): the render path is
+  fine at 21:9, the game's own aspect handling and UI are not.
+* **8 GB NVIDIA cards**: the mirror capture (the fix for the flicker and the cloud-sea rim) is off by default because
+  its whole-pool copies need about 3.5 GiB; the log says so with a `W` line. `[nvn] mirror_capture = 1` forces it.
 
-### Something went wrong?
+## Quick start (the release package)
 
-Report it from the launcher: **About → Record a report**, or **Play → Record a report** right after a run that ended
-badly. It plays the game once more with the diagnostics on and writes `work\reports\report-<stamp>.zip` when you
-close the window; attach that zip to the issue. It holds the log, your settings and your driver's capability lines,
-and nothing in it is game data — which is why a report with the zip is worth ten without one.
+The release is self-contained: no MSVC, no Python, no .NET, no Zig.
+
+1. Unzip the release package anywhere.
+2. Run `xc2-launcher.exe`, point **Set up** at your dump (a `.nup`, or a folder with `exefs/` and `romfs/`), and let it
+   run — 8–15 minutes: it lifts the 537 translation units, links them, translates ~12,150 shaders and collects the few
+   that exist in no file.
+3. **Play**. The first launch after that compiles GPU pipelines for about 20 seconds, once per driver.
+
+Add-on content is picked up from the dump (both `<id>/romfs` and `<id>/0/romfs` layouts). Saves land in `save/` next to
+the launcher; settings in `nxrt.ini` (runtime) and `controls.ini` (keys, opened by F1).
+
+**In game:** F1 — settings page · F10 — FPS counter · F11 / Alt+Enter — fullscreen.
 
 ## What you must supply
 
-The recompiler needs the game's own files; they are never part of this repository and are never downloaded:
-
-| what | where it goes (default) |
+| what | where it goes |
 |---|---|
-| ExeFS of the 3.0.1 program: `main`, `sdk`, `subsdk0`, `subsdk1`, `subsdk2`, `subsdk3`, `rtld`, `main.npdm` | `xc2/game/xc2ns301/` |
-| the 3.0.1 romfs (`bf2.ard`, `bf2.arh`, `stream/`) | referenced by `NXRT_FS_ROMFS` at run time |
-| add-on content (optional) | referenced by `NXRT_AOC_DIR` |
+| your own dump of the 3.0.1 program — a `.nup` package, or the exefs + romfs | picked in the launcher's **Set up** |
+| add-on content (optional) | discovered from the same dump |
+| `upscalers/…` DLLs (optional) | FidelityFX / Streamline files for FSR or DLSS; TAAU needs nothing |
 
-The built executable embeds the lifted game code, so **builds are not distributed**: build it locally from
-your own dump (see `docs/BUILD.md`).
+Builds are never distributed: the executable embeds the game's lifted code, so it is built on your machine from your
+own dump.
+
+## Reporting a problem
+
+Use the launcher: **Play → Record a report** (or **About → Record a report**). It starts the game once more with the
+diagnostics on and writes `work\reports\report-<stamp>.zip` when you close the window; attach that zip to the issue.
+It holds the log, your settings and the driver's capability lines, and no game data.
+
+## Build from source
+
+Requirements: Windows 10/11 x64, a Vulkan 1.3 GPU, 16 GB of RAM (the runtime's footprint is ~10.5 GB), ~60 GB of free
+disk for the source path, and the toolchain (VS Build Tools, LLVM/clang-cl, CMake + Ninja, .NET 10 SDK, Vulkan SDK,
+Python 3.12, PowerShell 7). See [docs/BUILD.md](docs/BUILD.md) and [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md).
+
+```powershell
+# once, after placing the 3.0.1 exefs in xc2\game\xc2ns301\
+.\tools\build\build.ps1 -Exefs xc2\game\xc2ns301 -Run:$false `
+    -Modules 'main,sdk,subsdk0,subsdk1,subsdk2,subsdk3,rtld' `
+    -LiftDir xc2\build\301\lift -ObjDir xc2\build\301\obj -LibDir xc2\build\301\lib
+.\tools\build\build-boot.ps1 -Exefs xc2\game\xc2ns301 -OutDir xc2\build\301\boot `
+    -LibDir xc2\build\301\lib -MainLib xc2\build\301\lib\main.lib -Defines XC2_MODULES_7
+```
 
 ## How it works
 
@@ -68,92 +100,82 @@ ExeFS (NSO) ──nxrecomp lift──▶ C++ ──clang-cl──▶ main.lib �
                                                             ├──▶ xc2_boot.exe
 runtime (fefw-recomp: NVN/NVN2, hid, fs, audio, kernel) ────┘
         │
-        └─ NVN calls ──▶ Vulkan replay ──▶ SPIR-V shaders (offline harness, Ryujinx translator)
+        └─ NVN calls ──▶ Vulkan replay ──▶ SPIR-V (offline harness, Ryujinx translator)
 ```
 
-The runtime is a general Switch/NVN service layer (not XC2-specific); everything game-specific lives in this
-repository: the lift sites, the boot glue, the launcher, and the analysis tools.
+The runtime is a general Switch/NVN service layer; everything game-specific lives here: the lift sites, the boot
+glue, the launcher, the film path and the analysis tools.
 
-## Build
+## Repository layout
 
-See [docs/BUILD.md](docs/BUILD.md). In short: a Windows toolchain (MSVC + LLVM clang-cl, .NET 10 SDK,
-Vulkan SDK, Python 3.12), then
-
-```powershell
-# once, after placing your 3.0.1 ExeFS in xc2\game\xc2ns301\
-.\tools\build\build.ps1 -Exefs xc2\game\xc2ns301 -Run:$false `
-    -Modules 'main,sdk,subsdk0,subsdk1,subsdk2,subsdk3,rtld' `
-    -LiftDir xc2\build\301\lift -ObjDir xc2\build\301\obj -LibDir xc2\build\301\lib
-.\tools\build\build-boot.ps1 -Exefs xc2\game\xc2ns301 -OutDir xc2\build\301\boot `
-    -LibDir xc2\build\301\lib -MainLib xc2\build\301\lib\main.lib -Defines XC2_MODULES_7
-```
+| path | what |
+|---|---|
+| `xc2/` | the game's side: lift sites, boot glue, the `xc2_boot` stub |
+| `launcher/` | the Windows launcher (Tauri + a plain JS front end) |
+| `third_party/fefw-recomp/` | the runtime fork; every change is listed in its `MODIFICATIONS.md` |
+| `tools/` | build, run, CI and analysis tools |
+| `config/` | the settings schema (`keys.tsv`) and the install template |
+| `docs/` | the public documentation |
 
 ## Documentation
 
-* [docs/QUICKSTART.md](docs/QUICKSTART.md) — ten minutes from a clean clone to the title screen
+* [docs/QUICKSTART.md](docs/QUICKSTART.md) — from a clean clone to the title screen
 * [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the lift, the runtime and the shader pipeline fit together
-* [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) — what runs, what does not, and the measured frame rate
+* [docs/MEDIA.md](docs/MEDIA.md) — the film path: the codec protocol, the audio clock, inserted films
+* [docs/SETTINGS.md](docs/SETTINGS.md) — the two settings files, who maintains what, how to add an option
+* [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) — what runs, what does not, measured frame rates
 * [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) — symptom first: black screen, driver crashes, wrong frame rate
-* [docs/INVARIANTS.md](docs/INVARIANTS.md) — the three rules the project holds itself to
-* [CONTRIBUTING.md](CONTRIBUTING.md) — reporting a problem, building, opening a pull request
-* [CHANGELOG.md](CHANGELOG.md) — dated milestones
-* `docs/reports/` — the lift and NVN service reports
-* The §-numbered working notes (one file per round, with every experiment and dead end) are kept outside this
-repository. Code comments and the reports refer to them as `HANDOVER N` or `§N`: those numbers are kept so the
-code and the notes stay cross-referenced, but the notes themselves are not published.
-* [docs/MODS.md](docs/MODS.md) — the mod interface: folder layout, order, conflicts, code patches (draft)
-* `docs/ENVIRONMENT.md` — toolchain, Python packages, build entries, data layout
-* `tools/README.md` — the analysis and run tools
+* [docs/INVARIANTS.md](docs/INVARIANTS.md) — the rules the project holds itself to
+* [docs/MODS.md](docs/MODS.md) — the mod interface (draft): folder layout, order, conflicts, code patches
+* [CONTRIBUTING.md](CONTRIBUTING.md) · [CHANGELOG.md](CHANGELOG.md)
 
 ## Credits
 
-* [nxrecomp](https://github.com/drakolordx7/nxrecomp) — the static recompiler used to lift the game
-* **[Goldoire/fefw-recomp](https://github.com/Goldoire/fefw-recomp)** — the Switch runtime this project is built on,
-  and the reason it exists at all: the NVN/NVN2 replay layer, the service HLE, the shader pipeline and the
-  exe+DLL packaging split all started there. Our fork lives in [third_party/fefw-recomp](third_party/fefw-recomp)
-  and every change to it is listed in its `MODIFICATIONS.md`.
-* Ryujinx (MIT) — the Maxwell shader translator used by the offline shader harness
-* SDL3, Vulkan-Headers, VMA, and the other vendored dependencies (see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md))
-* [AksharDP/xc2-recomp](https://github.com/AksharDP/xc2-recomp) and the [Lichii](https://github.com/zortos293/Lichii) PRs — read for reference findings, no code copied
-* **DeepSeek V4.1 Flash** (build 1017, [@deepseek](https://github.com/deepseek)) — pair-programmed this project
-  with its author, from the first lift to this release: the runtime work, the replay optimisation, the
-  documentation and the review rounds
+* [nxrecomp](https://github.com/drakolordx7/nxrecomp) — the static recompiler that lifts the game
+* **[Goldoire/fefw-recomp](https://github.com/Goldoire/fefw-recomp)** — the Switch runtime this project is built on:
+  NVN/NVN2 replay, the service HLE, the shader pipeline and the exe + DLL packaging all started there
+* Ryujinx (MIT) — the Maxwell shader translator behind the offline harness
+* SDL3, Vulkan-Headers, VMA and the other vendored dependencies ([THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md))
+* [AksharDP/xc2-recomp](https://github.com/AksharDP/xc2-recomp) and the [Lichii](https://github.com/zortos293/Lichii)
+  PRs — read for reference finding
 * **[@capibawa](https://github.com/capibawa)** — [nxnative, branch `xc2-ns2-profile`](https://github.com/capibawa/nxnative/tree/xc2-ns2-profile):
-  the launch switches and the host-side movie/audio takeover that this project's film path follows
+  the launch switches and the host-side movie/audio takeover this project's film path follows
+* **[@nikolaybutnik](https://github.com/nikolaybutnik)** — [PR #19](https://github.com/weile10000/xc2-ns2-recomp/pull/19):
+  the mirror capture that made NVIDIA cards work
+* **[@UrsineBear](https://github.com/UrsineBear)** — [PR #27](https://github.com/weile10000/xc2-ns2-recomp/pull/27):
+  RDNA 2 cloud sea, native-resolution presets, the bilingual F1 page
+* **DeepSeek V4.1 Flash** — pair-programmed this project with its author, from the first lift to this release
 
 ## Licence
 
-The project's own code is **GPL-3.0-or-later** — [LICENSE](LICENSE) carries the GPL-3.0 text and the "or later" is
-this project's choice. Third-party components keep their own licences, listed in
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and in `third_party/fefw-recomp/MODIFICATIONS.md`. **No licence
-here grants any right to Nintendo's game.** The lifted code the build produces from your own dump is not covered by
-this licence, is not distributed, and remains the property of its rights holders.
+The project's own code is **GPL-3.0-or-later** ([LICENSE](LICENSE)). Third-party components keep their own licences
+([THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), `third_party/fefw-recomp/MODIFICATIONS.md`). **No licence here
+grants any right to Nintendo's game.** The lifted code a build produces from your own dump is not covered by this
+licence, is not distributed, and remains the property of its rights holders.
 
 ## Legal notice
 
-This is an independent, non-commercial fan project. It is not affiliated with, sponsored by, or endorsed by
-Nintendo. *Xenoblade Chronicles*, *Xenoblade Chronicles 2*, *Nintendo Switch* and *Nintendo Switch 2* are
-trademarks of Nintendo; *Xenoblade Chronicles 2* was developed by MONOLITH SOFT. This repository contains no game
-code, no game assets and no keys, and gives no help in obtaining them.
+This is an independent, non-commercial fan project. It is not affiliated with, sponsored by, or endorsed by Nintendo.
+*Xenoblade Chronicles*, *Xenoblade Chronicles 2*, *Nintendo Switch* and *Nintendo Switch 2* are trademarks of Nintendo;
+*Xenoblade Chronicles 2* was developed by MONOLITH SOFT. This repository contains no game code, no game assets and no
+keys, and gives no help in obtaining them.
 
-本项目是独立的非商业粉丝项目，与任天堂没有任何关联，也未获得任天堂的认可。《异度之刃 2》、Nintendo Switch
-与 Nintendo Switch 2 是任天堂的商标；《异度之刃 2》由 MONOLITH SOFT 开发。仓库中不含任何游戏代码、游戏资源或密钥，
-也不提供任何获取途径。
+本项目是独立的非商业粉丝项目，与任天堂没有任何关联，也未获得任天堂的认可。《异度之刃 2》、Nintendo Switch 与
+Nintendo Switch 2 是任天堂的商标；《异度之刃 2》由 MONOLITH SOFT 开发。仓库中不含任何游戏代码、游戏资源或密钥，也不提供
+任何获取途径。
 
 ## 中文说明
 
-本项目是《异度之刃 2（Nintendo Switch 2 Edition）》**3.0.1 零售版**的静态重编译（PC / Windows + Vulkan）：
-把游戏的 NSO 模块整体举升成 C++，再链接一个通用 Switch 运行时（自己实现的 NVN → Vulkan 重放层）运行。
+《异度之刃 2（Nintendo Switch 2 Edition）》**Switch 2 程序的静态重编译**（Windows + Vulkan）：把游戏的 NSO 模块整体
+举升成 C++，再链接一个通用 Switch 运行时（NVN/NVN2 → Vulkan 重放层）。不是模拟器。
 
-* **仓库里没有任何游戏代码、游戏资源或密钥**；需要你自己的游戏 dump（路径见上表），构建产物（含举升后的游戏代码）
-  **不随仓库分发**，只能本地构建。
-* 当前状态：能启动、读 2022 通关存档、进游戏；港口与多数区域 **59–60 fps**，大平原 43–52 fps，4K 输出几乎零成本；
-  **4K 过场 CG 30fps 正常播放、音画同步**。已知问题见 `docs/COMPATIBILITY.md`。
-* 遇到问题请**从启动器提交**：**关于 → 录制一份报告**，或者游戏异常退出后在 **开始游戏** 页点「录一份报告」。
-  它会用诊断模式再跑一次游戏，关掉窗口时把日志、设置、驱动能力行打包到 `work\reports\report-<时间>.zip`，
-  把这个 zip 附在 issue 里即可；里面没有任何游戏数据。带日志的问题几乎都能查，没有日志的大多只能猜。
-* 构建方法见 `docs/BUILD.md`；工具链见 `docs/ENVIRONMENT.md`；架构见 `docs/ARCHITECTURE.md`。
-* 影片/音频的宿主接管思路来自 [@capibawa 的 nxnative（`xc2-ns2-profile` 分支）](https://github.com/capibawa/nxnative/tree/xc2-ns2-profile)。
-* **本项目的运行时来自 [Goldoire 的 fefw-recomp](https://github.com/Goldoire/fefw-recomp)**：NVN/NVN2 重放层、
-  服务层 HLE、着色器管线、exe + DLL 的打包形态都奠基其上。没有那个项目，就没有这次重编译。我们的分支在
-  `third_party/fefw-recomp`，改动逐条记在它的 `MODIFICATIONS.md`。
+* **目标**：application `0100E95004038000`（与 NS1 版同一个 title）的 **program 1**，即 `0400E95004038001`，
+  SDK 21.4.4、NVN2 231.39、游戏版本 **3.0.1**；附加内容 id 为 `0100E95004039001`…`063`。
+* **仓库里没有任何游戏代码、资源或密钥**；需要你自己的 dump，构建产物（含举升后的游戏代码）不随仓库分发。
+* **当前版本 v0.2.0**：能启动、读档、进野外与过场；多数区域 59–60 fps，最重的大平原 43–52 fps；4K 过场正常播放，
+  叠在实时过场上的影片播完会交还场景。已知问题见 `docs/COMPATIBILITY.md`。
+* **游戏内**：F1 设置页 · F10 帧率 · F11 / Alt+Enter 全屏；文本语言在启动器里选（11 种），语音为日/英。
+* **遇到问题**：启动器 → **录一份报告**，会把日志打成 `work\reports\report-<时间>.zip`，附在 issue 里即可（不含游戏数据）。
+* **运行时来自 [Goldoire 的 fefw-recomp](https://github.com/Goldoire/fefw-recomp)**，我们的分支在
+  `third_party/fefw-recomp`，改动逐条记在它的 `MODIFICATIONS.md`。影片/音频的宿主接管思路来自
+  [@capibawa 的 nxnative](https://github.com/capibawa/nxnative/tree/xc2-ns2-profile)。
