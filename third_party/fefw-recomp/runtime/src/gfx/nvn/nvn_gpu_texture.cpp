@@ -793,7 +793,12 @@ float attachment_scale(const Texture& t) {
     const float scene = render_scale_now(), out = output_scale_now();
     if (scene == 1.0f && out == 1.0f) return 1.0f;
     static const int out_min = static_cast<int>(nxrt::config_get_int("gfx", "output_min_width", 1920));
-    const float sc = t.b.width >= out_min ? out : scene;
+    float sc = t.b.width >= out_min ? out : scene;
+    // The output scale takes the 1080-line output set to the output's height (output scale x 1080 lines); a taller target on that side
+    // goes to that height and no further. XC2 NS2 makes its final image in a 3840x2160 set of its own: at a 4K output a plain x2 drew
+    // it at 7680x4320 (~2 GB more video memory, and the 8K passes) only for the window to shrink it back to 4K.
+    if (t.b.width >= out_min && t.b.height > 1080 && sc > 1.0f)
+        sc = std::max(1.0f, std::min(sc, std::round(out * 1080.0f) / static_cast<float>(t.b.height)));
     if (sc == 1.0f) return 1.0f;
     const TextureBuilderInfo& b = t.b;
     if (!t.fmt || t.fmt->compressed || t.fmt->block_w != 1 || t.fmt->block_h != 1) return 1.0f;
