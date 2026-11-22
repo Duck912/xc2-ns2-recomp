@@ -60,7 +60,7 @@ add-on content discovery when `indices.txt` is absent.
 One defect stays: a thin **red edge** along a cloud-sea silhouette in the opening battle background. One scene, does not
 move, does not affect play — low priority in `docs/COMPATIBILITY.md`.
 
-### A settings page on F1
+### A settings page on F1 (PR #27, @UrsineBear)
 
 Two panes, Chinese and English, every option applying and saving to `controls.ini`: window mode and size, VSync, frame
 cap, the upscaler, colour grading, textures, HDR, audio, gamepad, the FPS counter (F10) and fullscreen (F11). Settings
@@ -186,7 +186,7 @@ RDNA 2 上物体与云海交界处的蓝灰边、运动中云海的闪动都消�
 仍有一个瑕疵：开场战斗背景的云海有一条**红边**。只在一个场景、不移动、不影响操作，在 `docs/COMPATIBILITY.md` 里
 标为低优先级。
 
-### F1 设置界面
+### F1 设置界面（PR #27，@UrsineBear）
 
 双栏、中英双语，每个选项都会**应用并保存到 `controls.ini`**：窗口模式与尺寸、垂直同步、帧率上限、超分器、色调、
 贴图、HDR、音频、手柄、帧率监控（F10）与全屏（F11）。需要重启的项目会写明。`docs/SETTINGS.md` 记述两套设置文件、
