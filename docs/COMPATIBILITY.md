@@ -48,11 +48,12 @@ Ryzen 7 5800X + Radeon RX 6800 XT, Adrenalin 26.10.1, 1440p window:
 
 ## Known issues
 
-- **Blue-grey rim** where objects meet the cloud sea: it lives inside the game's 640×360 volumetric-fog layer
-  (the in-scatter ramp across the depth step). Depth filtering, shadow-map compare, texture-gather rounding and
-  the upscalers were each tested and excluded.
-- **Cloud-sea shimmer** in motion: the game dithers its volumetric fog at 640×360 and leans on its neural
-  upscaler on the console.
+- **Red edge on the cloud sea in the opening battle background**: one thin red line along a cloud-sea silhouette,
+  in the same 640×360 volumetric-fog layer the blue-grey rim came from. Low priority - it is one scene, it does not
+  move, and it does not affect play.
+- The **RDNA 2 blue-grey rim** where objects meet the cloud sea and the **cloud-sea shimmer** in motion are fixed:
+  both came from the runtime letting the GPU read pool bytes the CPU had already rewritten, which the mirror-capture
+  work in pull requests 19 and 27 captures per submission (verified on an RX 6800 XT, 2026-11-22).
 - **First run compiles pipelines**: about 22 seconds with no frame, then it never happens again.
 - **Slow frames on area transitions** (texture uploads and memory-pool imports), not in steady play.
 - **Two shader patches are not distributed** (they are derived from the game's own shaders), so a build made from
