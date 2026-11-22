@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -258,23 +259,24 @@ void overlay_dir(Node& dir, const std::filesystem::path& host, ModStats& st) {
 
 // Applies the mods of [fs] mods, if the folder exists. Never fails the build: a broken mod loses its own files, not
 // the game.
-void apply_mods(Node& root, const std::filesystem::path& host_abs) {
+std::map<std::string, std::wstring> apply_mods(Node& root, const std::filesystem::path& host_abs) {
+    std::map<std::string, std::wstring> recs;
     // Every RomFS image is built here, the add-on packs included. A mod lays files over the *game's* romfs; overlaying
     // a pack's image as well would put the same file in seven storages and report it as 'added' six times.
     {
         std::error_code e;
         const std::filesystem::path want = std::filesystem::absolute(
             std::filesystem::path(config_get_str("fs", "romfs", "game/romfs")), e);
-        if (e || !std::filesystem::exists(want, e)) return;
-        if (!std::filesystem::equivalent(want, host_abs, e) || e) return;
+        if (e || !std::filesystem::exists(want, e)) return {};
+        if (!std::filesystem::equivalent(want, host_abs, e) || e) return {};
     }
     const std::string dir_s = config_get_str("fs", "mods", "mods");
-    if (dir_s.empty()) return;
+    if (dir_s.empty()) return {};
     const std::filesystem::path dir(dir_s);
     std::error_code ec;
     if (!std::filesystem::is_directory(dir, ec)) {
         NXLOG_I("mods", "mods: no folder at %s", dir_s.c_str());
-        return;
+        return {};
     }
     std::vector<std::string> present;
     for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
@@ -284,7 +286,7 @@ void apply_mods(Node& root, const std::filesystem::path& host_abs) {
     }
     if (present.empty()) {
         NXLOG_I("mods", "mods: %s is empty", dir_s.c_str());
-        return;
+        return {};
     }
     std::sort(present.begin(), present.end());
     const std::vector<std::string> order = config_name_list("order");
@@ -312,10 +314,30 @@ void apply_mods(Node& root, const std::filesystem::path& host_abs) {
         ModStats st;
         st.name = name;
         overlay_dir(root, r, st);
+        // Pre-built archive records for this mod (tools/mods/ard_pack.py): <mod>/.ard/<name>.rec
+        {
+            std::error_code rec_ec;
+            const std::filesystem::path recs_dir = (dir / name) / ".ard";
+            if (std::filesystem::is_directory(recs_dir, rec_ec)) {
+                size_t before = recs.size();
+                for (std::filesystem::recursive_directory_iterator it(recs_dir, rec_ec), end; !rec_ec && it != end; it.increment(rec_ec)) {
+                    if (!it->is_regular_file(rec_ec)) continue;
+                    std::string rel;
+                    if (!to_utf8(it->path().lexically_relative(recs_dir).wstring(), rel)) continue;
+                    if (rel.size() < 5 || rel.compare(rel.size() - 4, 4, ".rec") != 0) continue;
+                    rel.resize(rel.size() - 4);
+                    for (char& c : rel) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                    recs[rel] = long_path(it->path().wstring());
+                }
+                NXLOG_I("mods", "mods: %s: %zu archive record(s)", name.c_str(), recs.size() - before);
+            }
+        }
         NXLOG_I("mods", "mods: %s: %u file(s), %u replaced, %u added", name.c_str(), st.files, st.replaced, st.added);
         applied++;
     }
     NXLOG_I("mods", "mods: %u enabled, %u disabled, %u named in [mods] order", applied, off, static_cast<uint32_t>(order.size()));
+    if (!recs.empty()) NXLOG_I("mods", "mods: %zu archive record(s) from .ard folders", recs.size());
+    return recs;
 }
 
 
@@ -463,6 +485,7 @@ struct Layout {
     std::vector<Segment> segs;          // contiguous, covering [0, size)
     std::vector<FileRec> files;         // in data order
     std::map<std::string, uint32_t> by_path;
+    std::map<std::string, std::wstring> ard_recs;   // M2: lower-case name -> <mod>/.ard/<name>.rec
 };
 
 // Lays out the host folder: entries sorted by full path in each table, file data in that order, 16-byte aligned.
@@ -491,7 +514,7 @@ bool make_layout(const std::string& host_dir, Layout& L, std::string* err) {
     // The overlay is folded in here, before the tables are laid out: one image, no lookup at run time. A .nup serves
     // its own romfs, so mods only apply to the folder route.
     if (packaged) NXLOG_I("mods", "mods: not applied - the romfs comes from a package");
-    else apply_mods(root, abs);
+    else L.ard_recs = apply_mods(root, abs);
 
     std::vector<Node*> dirs{&root}, files;
     flatten(root, dirs, files);
@@ -704,6 +727,67 @@ struct RomfsImage::Impl {
         }
         return true;
     }
+
+    // ---- M2: archive records served from a mod's pre-built .ard files ------------------------------------------------
+    // tools/mods/ard_pack.py compresses a mod file into the record the game expects (header + zlib padded to the
+    // original comp), because the runtime has no zlib. Here we only slice it: the game asks for 0x30 bytes at a record
+    // offset, then for the comp it read from that header, and both land in the same .rec at the same relative offsets.
+    size_t ard_index = static_cast<size_t>(-1);          // the file index of bf2.ard, when the romfs holds one
+    std::map<std::string, std::wstring> ard_recs;         // lower-case logical name -> <mod>/.ard/<name>.rec
+    mutable std::map<uint64_t, std::wstring> ard_at;      // record offset -> .rec, learned when its header is read
+    mutable std::mutex ard_mu;
+
+    static constexpr uint64_t kArdHeader = 0x30;
+
+    bool read_rec(const std::wstring& path, uint64_t at, uint8_t* dst, uint64_t len) const {
+        HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (h == INVALID_HANDLE_VALUE) return false;
+        LARGE_INTEGER li;
+        li.QuadPart = static_cast<LONGLONG>(at);
+        bool ok = SetFilePointerEx(h, li, nullptr, FILE_BEGIN) != 0;
+        if (ok) {
+            DWORD got = 0;
+            ok = ReadFile(h, dst, static_cast<DWORD>(len), &got, nullptr) != 0 && got == len;
+        }
+        CloseHandle(h);
+        return ok;
+    }
+
+    bool serve_ard(uint64_t off, uint8_t* dst, uint64_t len) const {
+        if (ard_index == static_cast<size_t>(-1) || ard_recs.empty()) return false;
+        // The payload read starts 0x30 bytes past a record whose header was already served.
+        if (off >= kArdHeader) {
+            std::lock_guard<std::mutex> lk(ard_mu);
+            auto it = ard_at.find(off - kArdHeader);
+            if (it != ard_at.end()) return read_rec(it->second, kArdHeader, dst, len);
+        }
+        std::wstring rec;
+        {
+            std::lock_guard<std::mutex> lk(ard_mu);
+            auto it = ard_at.find(off);
+            if (it != ard_at.end()) rec = it->second;
+        }
+        if (rec.empty()) {
+            uint8_t hdr[kArdHeader];
+            if (!read_host(static_cast<uint32_t>(ard_index), off, hdr, kArdHeader)) return false;
+            if (std::memcmp(hdr, "xbc1", 4) != 0) return false;
+            std::string name;
+            for (size_t i = 0x14; i < kArdHeader && hdr[i] != 0; ++i) name.push_back(static_cast<char>(hdr[i]));
+            std::string low = name;
+            for (char& c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            auto it = ard_recs.find(low);
+            if (it == ard_recs.end()) return false;
+            rec = it->second;
+            {
+                std::lock_guard<std::mutex> lk(ard_mu);
+                ard_at[off] = rec;
+            }
+            static std::atomic<uint32_t> logged{0};
+            if (logged.fetch_add(1, std::memory_order_relaxed) < 200)
+                NXLOG_I("mods", "mods: ard: %s served from a mod record", name.c_str());
+        }
+        return read_rec(rec, 0, dst, len);
+    }
 };
 
 RomfsImage::RomfsImage() : p_(std::make_unique<Impl>()) {}
@@ -716,6 +800,12 @@ bool RomfsImage::build(const std::string& host_dir, std::string* err) {
     p_->cache.clear();
     p_->l = ok ? std::move(fresh) : Layout{};
     p_->read_seen.assign(p_->l.files.size(), 0);
+    p_->ard_recs = std::move(p_->l.ard_recs);
+    p_->ard_index = static_cast<size_t>(-1);
+    if (ok) {
+        auto it = p_->l.by_path.find("/bf2.ard");
+        if (it != p_->l.by_path.end()) p_->ard_index = it->second;
+    }
     return ok;
 }
 
@@ -727,6 +817,21 @@ bool RomfsImage::read(uint64_t offset, void* dst, uint64_t len) const {
     const Layout& L = p_->l;
     if (!L.built || offset > L.size || len > L.size - offset) return false;
     if (len == 0) return true;
+    // M2 probe (temporary): the first 240 reads that touch the game's archive, by file offset and length. [log] level =
+    // debug turns it on; the counter keeps a busy run from filling the log. Used to find out whether the game reads a
+    // record as 'header first, then the size the header states' - which decides how an archive override can be served.
+    {
+        static std::atomic<uint32_t> n_ard_reads{0};
+        if (n_ard_reads.load(std::memory_order_relaxed) < 240) {
+            uint64_t aid_off = 0, aid_size = 0;
+            if (file_extent("/bf2.ard", &aid_off, &aid_size) && offset < aid_off + aid_size && offset + len > aid_off) {
+                const uint32_t k = n_ard_reads.fetch_add(1, std::memory_order_relaxed);
+                if (k < 240)
+                    NXLOG_D("fs", "ard read #%u: off 0x%llx len %llu", k, static_cast<unsigned long long>(offset - aid_off),
+                            static_cast<unsigned long long>(len));
+            }
+        }
+    }
     uint8_t* out = static_cast<uint8_t*>(dst);
     auto it = std::upper_bound(L.segs.begin(), L.segs.end(), offset,
                                [](uint64_t v, const Segment& g) { return v < g.off; });
@@ -741,6 +846,7 @@ bool RomfsImage::read(uint64_t offset, void* dst, uint64_t len) const {
             case Segment::Kind::kZero: std::memset(out, 0, n); break;
             case Segment::Kind::kFile:
                 p_->note_read(g.file);
+                if (g.file == p_->ard_index && !p_->ard_recs.empty() && p_->serve_ard(g.src + within, out, n)) break;
                 if (!p_->read_host(g.file, g.src + within, out, n)) return false;
                 break;
         }

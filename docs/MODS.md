@@ -166,6 +166,26 @@ mods: TestMod: 1 file(s), 1 replaced, 0 added
 mods: 1 enabled, 0 disabled, 0 named in [mods] order
 ```
 
+## Files inside the archive (M2, built)
+
+The game reads an archive file as 48 bytes of header at the record offset, then the comp bytes the header states.
+A mod therefore ships a pre-built record instead of a plain file:
+
+    mods/<mod>/.ard/<name>.rec
+
+`tools/mods/ard_pack.py` builds it: the original header with `unc` set to the mod file's size, `comp` and the
+checksum left alone, followed by the zlib stream padded to `comp`. Keeping comp means the game's read lengths
+stay valid; keeping the checksum means an id that the engine may key on does not change.
+
+Two limits of this first version:
+
+* the mod file must compress into the original comp - a 512-to-2048 texture swap will not, and is reported rather
+  than truncated;
+* only the record the game asks for by that name is replaced, one .rec per file.
+
+The next step (M2b) appends oversized records after the archive and repoints an in-memory copy of `bf2.arh`, which
+lifts the size limit.
+
 ## The asset catalog (M0, built)
 
 Where a mod can put a file depends on where the game reads it from, and most of this game's assets are inside
@@ -189,6 +209,6 @@ committed.
 | M0.5 | the porting check: `tools/mods/mod_check.py` says, per file, `same` / `differs` / `only-archive` / `absent` | **built** |
 | M1 | a mod folder's `romfs` laid over the game's, load report, `[mods] order` / `[mods] disabled` | **built** (folded into the image tables, `fs_romfs.cpp`) |
 | M1.5 | the emulator layouts, filtered by application id | **built** (`mod_romfs_root()`) |
-| M2 | files inside `bf2.ard`: the archive index in the runtime, and the override | not started |
+| M2 | files inside `bf2.ard`: a mod file becomes a pre-built record (`tools/mods/ard_pack.py`), served at read time | **built (v1)** |
 | M3 | `.pchtxt` / `.ips` applied at Set up | not started |
 | M4 | the size table, cheats, `mod.json` options | not started |

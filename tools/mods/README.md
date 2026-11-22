@@ -7,6 +7,7 @@ Everything the mod work needs lives here, so a future round finds it in one plac
 |---|---|---|
 | `asset_index.py` | **M0**: one table of every file the game can read — romfs, `bf2.ard`, add-on content | works |
 | `mod_check.py` | **M0.5**: for each file of a mod — `same` / `differs` / `only-archive` / `absent`, and where the game reads it from | works |
+| `ard_pack.py` | **M2**: turns a mod file into the archive record the game expects (`<mod>/.ard/<name>.rec`) | works |
 | `mod_pack.py` | validates and packs a mod folder (manifest, path escapes, no game data) | not started |
 
 ## What it reads
@@ -50,6 +51,22 @@ folder can hold, and the console is case-sensitive while Windows is not.
 | `no-hash` | the dump side was not hashed (above the catalog's `--hash-limit-mb`) |
 
 Report: `work/mods/mods-report.json` (the 50 first absent and only-archive paths, plus every file's record).
+
+## Archive replacements (M2)
+
+Most of this game's assets are inside `bf2.ard`, which the game reads as "48 bytes of xbc1 header at the
+record offset, then comp bytes right after it". `ard_pack.py` writes that pair once, per replaced file:
+
+    mods/<mod>/.ard/<name>.rec        original header (unc = the mod file size, comp and checksum kept) + zlib(padded)
+
+The runtime has no zlib, so it never compresses: it slices the .rec at the same relative offsets the game asks for.
+The name is the archive's logical name (`font_binary2.txt`), not a romfs path - the runtime learns it from
+the header the game reads.
+
+    python tools/mods/ard_pack.py --mod "<mod folder>" --catalog work/mods/assets.tsv
+
+A file whose zlib stream is larger than the original comp does not fit and is reported, not truncated. That is the
+v1 limit; large textures (AI upscales) need the append-and-repoint path (M2b).
 
 ## The contract the later milestones rely on
 
