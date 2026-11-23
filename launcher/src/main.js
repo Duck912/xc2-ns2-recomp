@@ -5,6 +5,7 @@ import { listen } from '@tauri-apps/api/event';
 import { api, esc, icon, refreshIcons, errText, toast } from './util.js';
 import { t, initLang, getLang } from './i18n.js';
 import * as play from './pages/play.js';
+import * as mods from './pages/mods.js';
 import * as settings from './pages/settings.js';
 import * as setup from './pages/setup.js';
 import * as about from './pages/about.js';
@@ -12,6 +13,7 @@ import { upd, notify, checkNow, available } from './update.js';
 
 const PAGES = {
   play: { mod: play, key: 'nav.play', icon: 'play' },
+  mods: { mod: mods, key: 'nav.mods', icon: 'package' },
   setup: { mod: setup, key: 'nav.setup', icon: 'hammer' },
   settings: { mod: settings, key: 'nav.settings', icon: 'settings' },
   about: { mod: about, key: 'nav.about', icon: 'info' },
@@ -23,12 +25,20 @@ let current = null;
 let statusHandler = null;
 let setupHandler = null;
 let logHandler = null;
+let modsNeedsRebuild = false;
 
 const ctx = {
   go,
   onStatus(fn) { statusHandler = fn; },
   onSetup(fn) { setupHandler = fn; },
   onLog(fn) { logHandler = fn; },
+  setModsRebuild(v) {
+    const next = Boolean(v);
+    if (next !== modsNeedsRebuild) {
+      modsNeedsRebuild = next;
+      drawNav();
+    }
+  },
   /** Repaints the surrounding chrome only: window title, nav labels, language attribute. The open page keeps its state. */
   shell() { drawShell(); },
   /** Repaints the chrome and renders the open page again from disk. */
@@ -39,7 +49,10 @@ function drawNav() {
   nav.innerHTML =
     `<div class="brand"><span class="name">${esc(t('brand.name'))}</span></div>` +
     Object.entries(PAGES)
-      .map(([id, p]) => `<button class="nav-item ${id === current ? 'active' : ''}" data-page="${id}">${icon(p.icon)}<span class="label">${esc(t(p.key))}</span></button>`)
+      .map(([id, p]) => {
+        const dot = id === 'mods' && modsNeedsRebuild ? `<span class="nav-dot" title="${esc(t('mods.rebuildPendingNav'))}"></span>` : '';
+        return `<button class="nav-item ${id === current ? 'active' : ''}" data-page="${id}">${icon(p.icon)}<span class="label">${esc(t(p.key))}</span>${dot}</button>`;
+      })
       .join('') +
     (available() || upd.status.state === 'done'
       ? `<button class="nav-item update-pill" data-page="about">${icon('circle-arrow-up')}<span class="label">${esc(
@@ -81,7 +94,12 @@ async function go(page, opts = {}) {
 
 async function boot() {
   await listen('game-status', (ev) => statusHandler && statusHandler(ev.payload));
-  await listen('setup-status', (ev) => setupHandler && setupHandler(ev.payload));
+  await listen('setup-status', (ev) => {
+    setupHandler && setupHandler(ev.payload);
+    if (ev.payload?.state === 'done' || ev.payload?.state === 'idle') {
+      api('list_mods').then((s) => ctx.setModsRebuild(s.needs_rebuild)).catch(() => {});
+    }
+  });
   await listen('setup-log', (ev) => logHandler && logHandler(ev.payload));
   await listen('update-status', (ev) => {
     upd.status = ev.payload;
@@ -96,6 +114,7 @@ async function boot() {
   }
   await initLang(() => redrawForLang(), cfg.lang);
   drawShell();
+  api('list_mods').then((s) => ctx.setModsRebuild(s.needs_rebuild)).catch(() => {});
   // first run: no game files chosen yet
   go('setup', { firstRun: !cfg.dump_dir });
   if (!cfg.skip_update_check) checkNow(); // quietly: a failure only shows on the About page

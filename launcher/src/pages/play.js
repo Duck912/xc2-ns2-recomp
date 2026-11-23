@@ -38,6 +38,7 @@ export async function render(el, ctx) {
   const setup = ov.repo_ok ? await api('setup_status') : null;
   const report = cfg.dump_dir && ov.repo_ok ? await api('validate_dump', { path: cfg.dump_dir }) : null;
   const chosen = report && report.chosen;
+  const modsSnap = ov.repo_ok ? await api('list_mods').catch(() => null) : null;
   let status = await api('game_status');
   // Linux: fefw.exe as a non-Steam game (steam.rs)
   let steam = await api('steam_status').catch(() => ({ available: false }));
@@ -83,11 +84,20 @@ export async function render(el, ctx) {
             <dt>${esc(t('play.runFolder'))}</dt>
             <dd><span class="faint">${esc(t('play.runFolderContents'))}</span><div class="path">${esc(ov.game_dir)}</div></dd>
             <dt>${esc(t('play.mods'))}</dt>
-            <dd><span class="faint">${esc(t('play.modsHint'))}</span></dd>
+            <dd>${(() => {
+              if (!modsSnap || !modsSnap.mods.length) return `<span class="faint">${esc(t('play.modsHint'))}</span>`;
+              const enabled = modsSnap.mods.filter((m) => m.enabled).length;
+              const disabled = modsSnap.mods.length - enabled;
+              const base = t('mods.summaryChip', { enabled, disabled });
+              const pending = modsSnap.mods.filter((m) => m.pending_rebuild).length;
+              const text = pending ? `${base} · ${t('play.modsPendingRebuild', { count: pending })}` : base;
+              return `${esc(text)}<div class="path">${esc(modsSnap.mods_dir)}</div>`;
+            })()}</dd>
           </dl>
-          <div class="row" style="margin-top: var(--space-4)">
+          <div class="row wrap" style="margin-top: var(--space-4)">
             <button class="btn" id="open-dir" ${ov.repo_ok ? '' : 'disabled'}>${icon('folder-open')}${esc(t('play.openRunFolder'))}</button>
-            <button class="btn" id="open-mods" ${ov.repo_ok ? '' : 'disabled'}>${icon('package')}${esc(t('play.openModsFolder'))}</button>
+            <button class="btn" id="manage-mods" ${ov.repo_ok ? '' : 'disabled'}>${icon('package')}${esc(t('play.manageMods'))}</button>
+            <button class="btn" id="open-mods" ${ov.repo_ok ? '' : 'disabled'}>${icon('folder-open')}${esc(t('play.openModsFolder'))}</button>
             <button class="btn" id="import-saves" ${ov.repo_ok ? '' : 'disabled'} title="${esc(t('play.importSavesHint'))}">${icon('folder-open')}${esc(t('play.importSaves'))}</button>
             ${steam.available ? `<button class="btn" id="add-steam" title="${esc(t('play.addToSteamHint'))}" ${ov.exe_exists && !addingSteam ? '' : 'disabled'}>${icon(addingSteam ? 'loader-circle' : 'gamepad-2', addingSteam ? 'spin' : '')}${esc(t(steam.added ? 'play.updateSteam' : 'play.addToSteam'))}</button>` : ''}
           </div>
@@ -105,6 +115,7 @@ export async function render(el, ctx) {
     });
     el.querySelector('#to-setup')?.addEventListener('click', () => ctx.go('setup'));
     el.querySelector('#open-dir')?.addEventListener('click', () => api('open_game_dir').catch((e) => toast(errText(e), 'error')));
+    el.querySelector('#manage-mods')?.addEventListener('click', () => ctx.go('mods'));
     el.querySelector('#open-mods')?.addEventListener('click', () => api('open_mods_dir').catch((e) => toast(errText(e), 'error')));
     el.querySelector('#import-saves')?.addEventListener('click', async () => {
       const folder = await api('pick_folder', { title: t('play.importSavesTitle'), start: null });
