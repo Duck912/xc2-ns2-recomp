@@ -16,6 +16,18 @@ body:
 
         The report zip is the important one: it holds the frame times, what grew during a slow frame, and whether a
         cutscene had just ended. Without it a stutter report can only be guessed at.
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      description: Initial releases only officially support native Windows 11 x64. Future platform support is not ruled out, and forks adapting Windows 10 / Linux / Wine are welcome.
+      options:
+        - "Windows 11 x64"
+        - "Windows 10 x64 (unsupported in initial phase)"
+        - "Linux / SteamOS / Wine / Proton (unsupported in initial phase)"
+        - "Other (unsupported)"
+    validations:
+      required: true
   - type: input
     id: where
     attributes:

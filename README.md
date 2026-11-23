@@ -8,7 +8,7 @@
 
 [![Latest Release](https://img.shields.io/github/v/release/weile10000/xc2-ns2-recomp?display_name=tag&style=flat-square&color=2b7fff)](https://github.com/weile10000/xc2-ns2-recomp/releases/latest)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg?style=flat-square)](LICENSE)
-[![Platform: Windows x64](https://img.shields.io/badge/Platform-Windows%2010%2F11%20x64-0078D6?style=flat-square)](#build-from-source)
+[![Platform: Windows 11 x64](https://img.shields.io/badge/Platform-Windows%2011%20x64-0078D6?style=flat-square)](#build-from-source)
 [![Graphics: Vulkan 1.3](https://img.shields.io/badge/Graphics-Vulkan%201.3-AC162C?style=flat-square)](docs/COMPATIBILITY.md)
 
 **English** · [中文](#中文) · [Releases](https://github.com/weile10000/xc2-ns2-recomp/releases) · [Changelog](CHANGELOG.md) · [Compatibility](docs/COMPATIBILITY.md) · [Issues](https://github.com/weile10000/xc2-ns2-recomp/issues)
@@ -92,7 +92,7 @@ The underlying Switch/NVN layer lives in `third_party/fefw-recomp/`, while every
 
 ## Build from Source
 
-Requirements: **Windows 10/11 x64**, **Vulkan 1.3 GPU**, **16 GB+ RAM**, **~60 GB free disk** (for source checkout + lifted C++ + objects), and the dev toolchain (VS Build Tools, LLVM/`clang-cl`, CMake + Ninja, .NET 10 SDK, Vulkan SDK, Python 3.12+, PowerShell 7). Full steps: [docs/BUILD.md](docs/BUILD.md) & [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md).
+Requirements: **Native Windows 11 x64** *(initial target; future support for other platforms is not ruled out and community forks are welcome)*, **Vulkan 1.3 GPU**, **16 GB+ RAM**, **~60 GB free disk** (for source checkout + lifted C++ + objects), and the dev toolchain (VS Build Tools, LLVM/`clang-cl`, CMake + Ninja, .NET 10 SDK, Vulkan SDK, Python 3.12+, PowerShell 7). Full steps: [docs/BUILD.md](docs/BUILD.md) & [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md).
 
 ```powershell
 # Place your 3.0.1 ExeFS modules in xc2\game\xc2ns301\

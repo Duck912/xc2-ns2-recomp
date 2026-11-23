@@ -20,12 +20,26 @@ body:
     attributes:
       label: Build (optional)
       description: Release tag or commit you ran; the report zip carries it too.
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      description: Initial releases only officially support native Windows 11 x64. Future platform support is not ruled out, and forks adapting Windows 10 / Linux / Wine are welcome.
+      options:
+        - "Windows 11 x64"
+        - "Windows 10 x64 (unsupported in initial phase)"
+        - "Linux / SteamOS / Wine / Proton (unsupported in initial phase)"
+        - "Other (unsupported)"
+    validations:
+      required: true
   - type: input
     id: gpu
     attributes:
-      label: GPU, driver and Windows version (optional)
-      description: The report zip already records these; fill them in if you know them.
+      label: GPU, driver and Windows 11 build version
+      description: The report zip already records GPU/driver; please also confirm your OS build (e.g. `winver`).
       placeholder: RX 6800 XT, Adrenalin 26.10.1, Windows 11 26200
+    validations:
+      required: true
   - type: textarea
     id: what
     attributes:
