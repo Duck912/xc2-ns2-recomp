@@ -788,6 +788,10 @@ void xfb_end_in_pass() {
     g_xfb_slot_written[g_xfb_cur] = true;
 }
 
+// Feedback copies (feedback_prepare): bumped whenever a render pass ends and at every game barrier. A copy made in one epoch serves the
+// later draws of that epoch that sample the same attachment.
+uint64_t g_fb_epoch = 1;
+
 // GPU pass profiler: closes the interval since the previous stamp under this label (no-op unless [prof] gpu_passes).
 void gstamp(const char* label) {
     if (gpass_on()) gpass_stamp(*F, label, 0);
@@ -812,6 +816,7 @@ void end_pass(bool to_pass = false) {
     xfb_end_in_pass();
     vkCmdEndRendering(F->cb);
     P.open = false;
+    ++g_fb_epoch;   // a feedback copy is reused only inside the pass that follows it
     if (gpass_on()) {
         char b[112];
         std::snprintf(b, sizeof b, "pass %ux%u c%u:%d d%d%s", P.extent.width, P.extent.height, P.ncolor, static_cast<int>(P.color_fmt[0]), static_cast<int>(P.depth_fmt),
@@ -1374,7 +1379,18 @@ bool is_color_feedback(Texture* t) {
 struct FbClone {
     Ref<Texture> tex;
     uint64_t last = 0;                                     // serial of the last submission that used the copy
+    uint64_t epoch = 0;                                    // g_fb_epoch when the copy was made (0: none current)
+    uint64_t serial = 0;                                   // and in which submission
 };
+// [nvn] fb_copy_reuse (default on): draws that sample their own colour attachment share one copy until the render pass after it ends or
+// the game issues a barrier, instead of a copy (and a pass restart) per draw. On the console a draw sees what earlier draws wrote into
+// the texture it samples only after a texture barrier, so between two barriers the copy holds what a well-defined read can see.
+// Uraya's water and effects made hundreds of copies a frame at 4K (~7 ms of GPU time). 0: a copy per draw, as before.
+bool fb_copy_reuse() {
+    static const bool on = nxrt::config_get_bool("nvn", "fb_copy_reuse", true);
+    return on;
+}
+uint64_t g_fb_made = 0, g_fb_reused = 0;
 std::unordered_map<Texture*, FbClone> g_fb_clone;          // attachment -> its copy (same shape, no storage in game memory)
 std::unordered_map<Texture*, Texture*> g_fb_use;           // attachment -> the copy the current draw samples
 bool g_fb_seen = false;                                    // the last check found a feedback binding: check every draw until it goes away
@@ -1478,6 +1494,16 @@ void feedback_prepare(const ProgLayout& pl) {
         }
         if (!r.tex || !tex_gpu(r.tex) || !is_color_feedback(r.tex) || r.tex->b.samples > 1 || g_fb_use.count(r.tex)) continue;
         any = true;
+        if (fb_copy_reuse()) {   // a copy made earlier in this pass, with no barrier since: this draw samples it too
+            const auto it = g_fb_clone.find(r.tex);
+            if (it != g_fb_clone.end() && it->second.tex && it->second.epoch == g_fb_epoch && it->second.serial == F->serial &&
+                it->second.tex->gpu && it->second.tex->b.width == r.tex->b.width && it->second.tex->b.height == r.tex->b.height &&
+                it->second.tex->fmt == r.tex->fmt) {
+                g_fb_use[r.tex] = it->second.tex.get();
+                ++g_fb_reused;
+                continue;
+            }
+        }
         Texture* c = feedback_clone(r.tex);
         if (!c) continue;
         end_pass();
@@ -1497,6 +1523,19 @@ void feedback_prepare(const ProgLayout& pl) {
         tex_mark_gpu_written(c);
         tex_transition(c, *F, tex_sampled_layout(c));
         g_fb_use[r.tex] = c;
+        {
+            FbClone& fe = g_fb_clone[r.tex];
+            fe.epoch = g_fb_epoch;   // after the end_pass above: the pass the next draws open keeps this epoch
+            fe.serial = F->serial;
+            ++g_fb_made;
+            static auto next = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+            if (std::chrono::steady_clock::now() >= next) {
+                next = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+                NXLOG_I(kTag, "feedback copies, last 10 s: %llu made, %llu draws reused one ([nvn] fb_copy_reuse %s)",
+                        static_cast<unsigned long long>(g_fb_made), static_cast<unsigned long long>(g_fb_reused), fb_copy_reuse() ? "on" : "off");
+                g_fb_made = g_fb_reused = 0;
+            }
+        }
         {   // one line per fragment shader that samples its own colour attachment (HANDOVER 51: which draws the copy covers)
             static std::set<std::string> told;
             const char* fsh = S.stage[kFragment] ? S.stage[kFragment]->hash.c_str() : "-";
@@ -6173,6 +6212,7 @@ void run_list(const CmdList& list, int depth) {
             case Op::Barrier: {
                 const auto& pb = r.payload<P_Barrier>();
                 TRACE("barrier bits %x", pb.bits);
+                ++g_fb_epoch;   // what the draws before it wrote is visible to texture reads after it: no feedback copy is current
                 if (!barrier_keeps_pass()) end_pass();
                 memory_barrier(F->cb);
                 break;
