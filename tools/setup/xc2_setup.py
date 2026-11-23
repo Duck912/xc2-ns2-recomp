@@ -661,10 +661,9 @@ GAME_ENV = {
     # the whole frame stays at the G-buffer's albedo (flat, untextured, black-looking). tools/run/play-301.cmd uses 2;
     # the runtime default is 1, so a launcher that forgets this renders the scene wrong.
     "NXRT_NVN_FRONT_FACE_MODE": "2",
-    # The game's language is NOT here on purpose: the player changes it in the launcher, which writes [system] language
-    # into nxrt.ini. An env value would win over that file and the setting would do nothing.
-    "NXRT_TITLE_SUPPORTED_LANGUAGES": "Japanese,AmericanEnglish,BritishEnglish,French,German,Italian,Spanish,"
-                                       "LatinAmericanSpanish,Chinese,Taiwanese,Korean,SimplifiedChinese,TraditionalChinese",
+    # Only the languages the game has: American English / Latin American Spanish fall back to British / Spanish.
+    "NXRT_TITLE_SUPPORTED_LANGUAGES": "Japanese,BritishEnglish,French,German,Italian,Spanish,"
+                                       "Chinese,Taiwanese,Korean,SimplifiedChinese,TraditionalChinese",
 }
 
 
