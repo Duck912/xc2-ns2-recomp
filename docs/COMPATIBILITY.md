@@ -17,7 +17,7 @@ You need your own dump: the ExeFS of the 3.0.1 program and its romfs. No game da
 | Hardware / Environment | Coverage | Current Notes & Open Issues |
 |---|---|---|
 | **AMD RDNA 2** (RX 6800 XT) | Primary dev & benchmark | 59–60 fps typical, 43–52 fps open plains (`1440p` HDR10); mirror-capture fixes cloud-sea rim & motion shimmer |
-| **NVIDIA** (RTX series) | Community & partial repro | `#32` Tyrannotitan Kurodil freeze (TDR), `#15` blinking/flicker (`view_reinterpret` opt-in); `#39` 4K/quality 3D dot-grid fixed on integration branch after `v0.2.1`; see [`tools/shader/PATCHES.md`](../tools/shader/PATCHES.md) for NVIDIA validation state |
+| **NVIDIA** (RTX series) | Community & partial repro | `#32` Tyrannotitan Kurodil freeze (TDR); `#39` 4K/quality 3D dot-grid fixed after `v0.2.1`; `#15` blinking/dialogue flicker fixed on integration branch after `v0.2.2` (requires re-translated shader cache); see [`tools/shader/PATCHES.md`](../tools/shader/PATCHES.md) for NVIDIA validation state |
 | **Intel GPU / Wine-Proton** | Limited reports | `#25` / `#33` startup & setup reports, `#35` Wine/Proton movie handling |
 
 ## Measured frame rate

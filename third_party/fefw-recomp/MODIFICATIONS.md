@@ -114,6 +114,7 @@ This directory is a **modified fork** of `Goldoire/fefw-recomp` (the original Gi
 | `tools/shaders/harness/Program.cs` | 2026-11-14 | shaders: take the NVN2 stage from the control section - 518 to 2813 of 4222 blocks translate (HANDOVER 73) |
 | `tools/shaders/harness/StaticGpuAccessor.cs` | 2026-11-16 | 3.0.1 bring-up through 2026-11-16: rim audit, cloud shimmer, upscaler chain, FSR version override |
 | `tools/shaders/harness/translator/Ryujinx.Graphics.Shader.csproj` | 2026-11-19 | shaders: take the NVN2 stage from the control section - 518 to 2813 of 4222 blocks translate (HANDOVER 73); `spirv-call-args.patch` back in the series - without it 563 of 12,132 blocks throw in `GenerateCall` and only translate through the DebugMode retry (handover 56 section 179) |
+| `tools/shaders/harness/translator/spirv-call-args.patch` | 2026-11-24 | shaders (`AstOptimizer`): add `CanPropagate` recursive guard stopping single-use mutable memory loads (`StorageBuffer`/`GlobalMemory`/`SharedMemory`/`LocalMemory`/`Output`/`ImageLoad`) from folding past later stores/barriers (fixes XC2 morph-target prev-pos clobber, issue #15), and add `ImageAtomic` to `HasSideEffects` |
 
 ## Reproduce
 
