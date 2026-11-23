@@ -941,3 +941,59 @@ NXTEST(romfs_mods_m2b_multi_mod_tails_and_arh_compose) {
     CHECK_EQ(get64(got_arh.data() + 0x48), 128ull + tail_low.size());
     CHECK_EQ(get32(got_arh.data() + 0x50), 32u);
 }
+
+NXTEST(romfs_mods_m4_option_layers_and_pending_rebuild) {
+    TempTree t;
+    const auto rom = t.root / "romfs";
+    const auto mods = t.root / "mods";
+    const auto opt_mod = mods / "BetterTex";
+    const auto pend_mod = mods / "CodeMod";
+    const auto dot_dir = mods / ".hidden";
+    std::error_code ec;
+    std::filesystem::create_directories(rom, ec);
+    std::filesystem::create_directories(opt_mod / "romfs", ec);
+    std::filesystem::create_directories(opt_mod / "romfs_high", ec);
+    std::filesystem::create_directories(pend_mod / "romfs", ec);
+    std::filesystem::create_directories(dot_dir / "romfs", ec);
+
+    { std::ofstream(long_path(rom / "a.txt"), std::ios::binary) << "vanilla-a"; }
+    { std::ofstream(long_path(rom / "b.txt"), std::ios::binary) << "vanilla-b"; }
+    { std::ofstream(long_path(rom / "c.txt"), std::ios::binary) << "vanilla-c"; }
+    { std::ofstream(long_path(opt_mod / "romfs" / "a.txt"), std::ios::binary) << "base-a"; }
+    { std::ofstream(long_path(opt_mod / "romfs" / "b.txt"), std::ios::binary) << "base-b"; }
+    { std::ofstream(long_path(opt_mod / "romfs_high" / "a.txt"), std::ios::binary) << "high-a"; }
+    { std::ofstream(long_path(pend_mod / "romfs" / "c.txt"), std::ios::binary) << "code-c"; }
+    { std::ofstream(long_path(dot_dir / "romfs" / "c.txt"), std::ios::binary) << "dot-c"; }
+    // Unsafe traversal layer must be ignored without escaping mod_dir.
+    {
+        std::ofstream layers(long_path(mods / ".mod_layers.tsv"), std::ios::binary);
+        layers << "BetterTex\tromfs_high\n";
+        layers << "BetterTex\t../escape\n";
+    }
+
+    struct ConfigGuard {
+        ~ConfigGuard() { nxrt::config_clear(); }
+    } cg;
+    nxrt::config_set("fs", "romfs", utf8(rom).c_str());
+    nxrt::config_set("fs", "mods", utf8(mods).c_str());
+    nxrt::config_set("mods", "pending_rebuild", "CodeMod");
+
+    RomfsImage img;
+    REQUIRE(build_from(rom, img));
+
+    auto read_txt = [&](const char* path) -> std::string {
+        uint64_t off = 0, sz = 0;
+        if (!img.file_extent(path, &off, &sz)) return {};
+        std::string s(static_cast<size_t>(sz), '\0');
+        if (!img.read(off, s.data(), sz)) return {};
+        return s;
+    };
+    CHECK_EQ(read_txt("/a.txt"), "high-a");
+    CHECK_EQ(read_txt("/b.txt"), "base-b");
+    CHECK_EQ(read_txt("/c.txt"), "vanilla-c");
+
+    // Once Set up clears pending_rebuild, CodeMod's romfs takes effect cleanly.
+    nxrt::config_set("mods", "pending_rebuild", "");
+    REQUIRE(build_from(rom, img));
+    CHECK_EQ(read_txt("/c.txt"), "code-c");
+}

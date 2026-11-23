@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -174,6 +175,47 @@ std::vector<std::string> config_name_list(const char* key) {
 
 bool list_has(const std::vector<std::string>& list, const std::string& name) {
     return std::find(list.begin(), list.end(), name) != list.end();
+}
+
+// Validate a relative subdirectory path from mods/.mod_layers.tsv (no traversal, drive, or absolute prefix).
+bool is_safe_layer_rel(const std::string& rel) {
+    if (rel.empty() || rel.front() == '/' || rel.front() == '\\') return false;
+    if (rel.find(':') != std::string::npos || rel.find('\0') != std::string::npos) return false;
+    size_t i = 0;
+    while (i < rel.size()) {
+        const size_t sep = rel.find_first_of("/\\", i);
+        const size_t end = sep == std::string::npos ? rel.size() : sep;
+        const std::string part = rel.substr(i, end - i);
+        if (part.empty() || part == "." || part == "..") return false;
+        if (sep == std::string::npos) break;
+        i = sep + 1;
+    }
+    return true;
+}
+
+// Reads mods/.mod_layers.tsv (<mod_name>\t<rel_subdir> lines) written by the launcher for mod.json option layers.
+std::map<std::string, std::vector<std::string>> read_mod_layers(const std::filesystem::path& mods_dir) {
+    std::map<std::string, std::vector<std::string>> out;
+    std::error_code ec;
+    const std::filesystem::path p = mods_dir / ".mod_layers.tsv";
+    if (!std::filesystem::is_regular_file(p, ec)) return out;
+    std::ifstream in(long_path(p), std::ios::binary);
+    if (!in) return out;
+    std::string line;
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty() || line[0] == '#') continue;
+        const size_t tab = line.find('\t');
+        if (tab == std::string::npos || tab == 0) continue;
+        const std::string mod_name = line.substr(0, tab);
+        const std::string rel = line.substr(tab + 1);
+        if (!is_safe_layer_rel(rel)) {
+            NXLOG_W("mods", "mods: ignoring unsafe option layer path %s for %s", rel.c_str(), mod_name.c_str());
+            continue;
+        }
+        out[mod_name].push_back(rel);
+    }
+    return out;
 }
 
 // The application id a mod's emulator layout is filed under. The game layer sets [process] program_id (xc2_boot:
@@ -371,6 +413,7 @@ ModsResult apply_mods(Node& root, const std::filesystem::path& host_abs) {
     for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
         std::string name;
         if (!to_utf8(it->path().filename().wstring(), name)) continue;
+        if (name.empty() || name[0] == '.') continue;  // skip launcher side-files (.mod_layers.tsv, etc.)
         if (std::filesystem::is_directory(it->symlink_status(ec))) present.push_back(name);
     }
     if (present.empty()) {
@@ -380,6 +423,8 @@ ModsResult apply_mods(Node& root, const std::filesystem::path& host_abs) {
     std::sort(present.begin(), present.end());
     const std::vector<std::string> order = config_name_list("order");
     const std::vector<std::string> disabled = config_name_list("disabled");
+    const std::vector<std::string> pending_rebuild = config_name_list("pending_rebuild");
+    const std::map<std::string, std::vector<std::string>> extra_layers = read_mod_layers(dir);
 
     std::vector<std::string> seq;
     for (const std::string& n : order)
@@ -395,14 +440,49 @@ ModsResult apply_mods(Node& root, const std::filesystem::path& host_abs) {
             off++;
             continue;
         }
-        const std::filesystem::path r = mod_romfs_root(dir / name);
-        if (r.empty()) {
+        if (list_has(pending_rebuild, name)) {
+            NXLOG_W("mods", "mods: %s held off until Set up rebuilds code patches", name.c_str());
+            off++;
+            continue;
+        }
+        const std::filesystem::path mod_dir = dir / name;
+        const std::filesystem::path r = mod_romfs_root(mod_dir);
+        ModStats st;
+        st.name = name;
+        if (!r.empty()) {
+            overlay_dir(root, r, st);
+        }
+        // M4 optional mod.json option sub-layers (mods/.mod_layers.tsv): applied after base romfs in declared order.
+        auto lit = extra_layers.find(name);
+        if (lit != extra_layers.end()) {
+            for (const std::string& rel : lit->second) {
+                std::error_code lec;
+                const std::filesystem::path opt_dir = mod_dir / std::filesystem::path(rel);
+                const std::filesystem::file_status fst = std::filesystem::symlink_status(opt_dir, lec);
+                if (lec || std::filesystem::is_symlink(fst) || !std::filesystem::is_directory(fst)) {
+                    NXLOG_W("mods", "mods: %s: option layer %s missing or invalid: skipped", name.c_str(), rel.c_str());
+                    continue;
+                }
+                const std::filesystem::path use_dir = std::filesystem::is_directory(opt_dir / "romfs", lec) ? (opt_dir / "romfs") : opt_dir;
+                overlay_dir(root, use_dir, st);
+                const std::filesystem::path opt_ard = opt_dir / ".ard";
+                if (std::filesystem::is_directory(opt_ard, lec)) {
+                    for (std::filesystem::recursive_directory_iterator it(opt_ard, lec), end; !lec && it != end; it.increment(lec)) {
+                        if (!it->is_regular_file(lec)) continue;
+                        std::string a_rel;
+                        if (!to_utf8(it->path().lexically_relative(opt_ard).wstring(), a_rel)) continue;
+                        if (a_rel.size() < 5 || a_rel.compare(a_rel.size() - 4, 4, ".rec") != 0) continue;
+                        a_rel.resize(a_rel.size() - 4);
+                        for (char& c : a_rel) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                        out.recs[a_rel] = long_path(it->path().wstring());
+                    }
+                }
+            }
+        }
+        if (r.empty() && lit == extra_layers.end()) {
             NXLOG_W("mods", "mods: %s has no romfs folder: skipped", name.c_str());
             continue;
         }
-        ModStats st;
-        st.name = name;
-        overlay_dir(root, r, st);
         // Pre-built archive records and optional bf2.arh overrides for this mod
         {
             uint64_t this_tail_base = 0;

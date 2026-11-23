@@ -398,9 +398,7 @@ def apply_exefs_patches(
         "active": bool(active_mods),
         "modules": {
             m: hashlib.sha256(
-                json.dumps(
-                    [{"source": p["source"], "sha256": p["sha256"]} for p in by_mod[m]], sort_keys=True
-                ).encode("utf-8")
+                "".join(f"{p['source']}\t{p['sha256']}\n" for p in by_mod[m]).encode("utf-8")
             ).hexdigest()
             if by_mod[m]
             else ""

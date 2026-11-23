@@ -8,6 +8,7 @@ mod dump;
 mod fsr;
 mod ini;
 mod locale;
+mod mods;
 mod nup;
 mod play;
 mod settings;
@@ -587,6 +588,49 @@ fn open_mods_dir(app: AppHandle) -> Result<(), String> {
     play::open_with_shell(&dir)
 }
 
+fn mods_context(app: &AppHandle, state: &State<play::PlayState>) -> Result<(PathBuf, mods::ExefsTargetInfo, bool), String> {
+    let cfg = load_config(app);
+    let repo = need_repo(&cfg)?;
+    let game_dir = game_dir_of(&cfg, &repo);
+    let plain = if package_tools().is_some() { game_dir.join("exefs") } else { repo.join("game").join("dump").join("exefs") };
+    let exefs_dir = if plain.join("main").is_file() { Some(plain) } else { paths(&cfg).ok().map(|p| p.exefs) };
+    let target = mods::exefs_target_info(exefs_dir.as_deref(), Some(&repo));
+    let running = state.0.lock().map(|s| s.state == "running").unwrap_or(false);
+    Ok((game_dir, target, running))
+}
+
+#[tauri::command]
+fn list_mods(app: AppHandle, state: State<play::PlayState>) -> Result<mods::ModsSnapshot, String> {
+    let (game_dir, target, running) = mods_context(&app, &state)?;
+    Ok(mods::compute_snapshot(&game_dir, &target, running))
+}
+
+#[tauri::command]
+fn save_mods_state(app: AppHandle, state: State<play::PlayState>, input: mods::SaveModsStateInput) -> Result<mods::ModsSnapshot, String> {
+    let (game_dir, target, running) = mods_context(&app, &state)?;
+    mods::save_state(&game_dir, &target, input, running)
+}
+
+#[tauri::command]
+fn open_mod_folder(app: AppHandle, name: String) -> Result<(), String> {
+    if name.trim().is_empty() || name.starts_with('.') || name.contains(['/', '\\', ':']) || name == ".." {
+        return Err("Invalid mod folder name.".into());
+    }
+    let cfg = load_config(&app);
+    let dir = game_dir_of(&cfg, &need_repo(&cfg)?).join("mods").join(&name);
+    if !dir.is_dir() {
+        return Err(format!("Mod folder '{name}' does not exist."));
+    }
+    play::open_with_shell(&dir)
+}
+
+#[tauri::command]
+fn install_mod_folder(app: AppHandle, state: State<play::PlayState>, source_path: String) -> Result<mods::ModsSnapshot, String> {
+    let (game_dir, target, running) = mods_context(&app, &state)?;
+    mods::install_folder(&game_dir.join("mods"), Path::new(source_path.trim()))?;
+    Ok(mods::compute_snapshot(&game_dir, &target, running))
+}
+
 #[tauri::command]
 fn open_setup_log(app: AppHandle) -> Result<(), String> {
     let cfg = load_config(&app);
@@ -849,6 +893,10 @@ fn main() {
             open_game_file,
             open_game_dir,
             open_mods_dir,
+            list_mods,
+            save_mods_state,
+            open_mod_folder,
+            install_mod_folder,
             open_setup_log,
             start_report,
             open_reports_dir,

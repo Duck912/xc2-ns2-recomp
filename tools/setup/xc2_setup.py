@@ -355,6 +355,7 @@ def prepare_patched_exefs(r, repo, install):
             prev = {}
 
     changed = [m for m, h in state.get("modules", {}).items() if prev.get(m, "") != h]
+    pending_file = install / "build" / "m3_pending.json"
     if changed and not r.dry:
         r.log("  m3: code patches changed for: %s" % ", ".join(changed))
         for m in changed:
@@ -377,14 +378,51 @@ def prepare_patched_exefs(r, repo, install):
                 exe_cand.unlink()
             except FileNotFoundError:
                 pass
-        applied_file.parent.mkdir(parents=True, exist_ok=True)
-        applied_file.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+        pending_file.parent.mkdir(parents=True, exist_ok=True)
+        pending_file.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+    elif not changed and not applied_file.is_file() and not r.dry:
+        pending_file.parent.mkdir(parents=True, exist_ok=True)
+        pending_file.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
 
     for entry in state.get("applied", []):
         r.log("  m3: %s <- %s (%d record(s))" % (entry["module"], entry["source"], entry["records"]))
     for entry in state.get("unmatched", []):
         r.log("  m3: skipped %s (build_id %s does not match this dump)" % (entry["source"], entry["build_id"]))
     return patched_dir if state.get("active") else vanilla
+
+
+def finalize_m3_state(r, install):
+    """Promote build/m3_pending.json -> m3_applied.json and clear [mods] pending_rebuild after link succeeds."""
+    if r.dry:
+        return
+    pending = install / "build" / "m3_pending.json"
+    applied = install / "build" / "m3_applied.json"
+    if pending.is_file():
+        applied.parent.mkdir(parents=True, exist_ok=True)
+        applied.write_text(pending.read_text(encoding="utf-8"), encoding="utf-8")
+        try:
+            pending.unlink()
+        except OSError:
+            pass
+    ini_path = install / "nxrt.ini"
+    if ini_path.is_file():
+        lines = ini_path.read_text(encoding="utf-8", errors="replace").splitlines(True)
+        in_mods = False
+        changed = False
+        out = []
+        for ln in lines:
+            st = ln.strip()
+            if st.startswith("[") and st.endswith("]"):
+                in_mods = st[1:-1].strip().lower() == "mods"
+            elif in_mods and "=" in ln and not st.startswith(("#", ";")):
+                k, _ = ln.split("=", 1)
+                if k.strip().lower() == "pending_rebuild" and ln.split("=", 1)[1].strip():
+                    eol = "\r\n" if ln.endswith("\r\n") else ("\n" if ln.endswith("\n") else "")
+                    ln = f"{k.rstrip()} ={eol}"
+                    changed = True
+            out.append(ln)
+        if changed:
+            ini_path.write_text("".join(out), encoding="utf-8")
 
 
 def step_lift(r, repo, install, jobs=0):
@@ -417,6 +455,8 @@ def step_link(r, repo, install):
                     "-OutDir", repo / "xc2" / "build" / "301" / "boot", "-LibDir", repo / "xc2" / "build" / "301" / "lib",
                     "-MainLib", repo / "xc2" / "build" / "301" / "lib" / "main.lib", "-Defines", "XC2_MODULES_7"), cwd=repo,
                 on_line=build_progress(r, "link"))
+    if rc == 0:
+        finalize_m3_state(r, install)
     return r.end_step("link", started, rc == 0, "" if rc == 0 else "build-boot.ps1 failed")
 
 
@@ -666,6 +706,7 @@ def step_link_package(r, repo, install, zig, rtlib, jobs):
     if r.run(argv) != 0:
         return r.end_step("link", started, False, "the exe did not link")
     copy_runtime_dlls(r, rtlib.parent, install)
+    finalize_m3_state(r, install)
     return r.end_step("link", started, True)
 
 def junction(link, target, r):
