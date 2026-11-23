@@ -103,7 +103,10 @@ struct AudioDecoder {
     // movie::AudioFrame::SetEndOfStreamState writes (subsdk0+0x1b2c0, one store).
     bool eos_pending = false;   // the stream ended; the next frame delivered carries the flag
     bool eos_sent = false;
+    bool eos_acquired = false;  // the client actually popped an AudioFrame carrying the end flag
+    bool finalized = false;
     uint64_t last_delivered = 0;   // the frame handed out last: the one that carries the flag when the film ends
+    uint64_t last_acquired = 0;    // the frame handed to the client most recently
     bool warned_packet = false;
     services::ServiceEvent in_ready, out_ready;
     alignas(16) uint8_t in_ev[0x100]{}, out_ev[0x100]{};
@@ -150,6 +153,11 @@ void attach_event(::Ctx* c, uint8_t* guest_ev, services::ServiceEvent& host) {
     gcall(c, fns().attach_event, reinterpret_cast<uint64_t>(guest_ev), h, 1, 1);
 }
 
+void signal_output_ready(AudioDecoder& d) {
+    d.out_ready.signal();
+    kernel::signal_system_event(reinterpret_cast<uint64_t>(d.out_ev));
+}
+
 void adec_ctor(::Ctx* c) {
     if (A(0)) { wr64(A(0), 0); wr64(A(0) + 8, 0); }
 }
@@ -157,10 +165,17 @@ void adec_ctor(::Ctx* c) {
 void adec_finalize(::Ctx* c) {
     AudioDecoder* d = adec_of(A(0));
     if (d) {
+        {
+            std::lock_guard<std::mutex> g(g_reg_mu);
+            g_reg.erase(std::remove(g_reg.begin(), g_reg.end(), d), g_reg.end());
+        }
         std::lock_guard<std::mutex> lk(d->mu);
+        d->finalized = true;
         d->frames.clear();
         d->free_.clear();
         d->ready.clear();
+        d->sound.clear();
+        d->eos_pending = false;
     }
     RET(0);
 }
@@ -403,6 +418,12 @@ void adec_flush(::Ctx* c) {
         std::lock_guard<std::mutex> lk(d->mu);
         d->ready.clear();
         d->free_.clear();
+        d->sound.clear();
+        d->eos_pending = false;
+        d->eos_sent = false;
+        d->eos_acquired = false;
+        d->last_delivered = 0;
+        d->last_acquired = 0;
         for (size_t i = d->frames.size(); i > 0; --i) d->free_.push_back(d->frames[i - 1]);
     }
     RET(0);
@@ -461,10 +482,7 @@ void deliver_sound(AudioDecoder& d) {
         any = true;
         NXLOG_I(kTag, "AudioDecoder: end of stream marked on the last audio frame");
     }
-    if (any) {
-        d.out_ready.signal();
-        kernel::signal_system_event(reinterpret_cast<uint64_t>(d.out_ev));
-    }
+    if (any) signal_output_ready(d);
 }
 
 void adec_decode_async(::Ctx* c) {
@@ -490,11 +508,21 @@ void adec_decode_async(::Ctx* c) {
     // A packet with nothing in it is the end of the track, not a packet: feeding it as "the whole capacity" (what the
     // length fallback below does) turns the marker into 256 KB of garbage. The demuxer sends this once, at the end.
     if (bytes == 0) {
+        bool need_out_signal = false;
         {
             std::lock_guard<std::mutex> lk(d->mu);
             d->eos_pending = true;
+            // All sound chunks may already sit in d->ready when the zero-byte EOS marker arrives.
+            if (d->sound.empty() && !d->ready.empty() && !d->eos_sent) {
+                wr8(d->ready.back() + 0x10, 1);
+                d->eos_pending = false;
+                d->eos_sent = true;
+                need_out_signal = true;
+                NXLOG_I(kTag, "AudioDecoder: end of stream marked on queued audio frame");
+            }
         }
         d->in_ready.signal();
+        if (need_out_signal) signal_output_ready(*d);
         NXLOG_I(kTag, "AudioDecoder: end-of-stream packet after %llu packets", static_cast<unsigned long long>(d->packets));
         RET(0);
         return;
@@ -583,23 +611,35 @@ void adec_acquire(::Ctx* c) {
     if (A(1)) wr64(A(1), 0);
     if (A(2)) wr32(A(2), 0xffffffffu);
     if (!d) { RET(kResultNoFrame); return; }
-    std::lock_guard<std::mutex> lk(d->mu);
-    g_adec_acquire.fetch_add(1, std::memory_order_relaxed);
-    adec_state_tick(d);
-    if (d->ready.empty()) deliver_sound(*d);   // a frame may have come back since; the backlog goes into it
-    if (d->ready.empty()) {
-        g_adec_miss.fetch_add(1, std::memory_order_relaxed);
-        if (g_log) {
-            static std::atomic<uint64_t> n{0};
-            const uint64_t k = n.fetch_add(1);
-            if (k < 20 || k % 200 == 0)
-                NXLOG_I(kTag, "AudioDecoder: AcquireAudioFrame found nothing (call %llu): frames %zu, free %zu, packets %llu",
-                        static_cast<unsigned long long>(k), d->frames.size(), d->free_.size(), static_cast<unsigned long long>(d->packets));
+    uint64_t f = 0;
+    bool more_ready = false;
+    {
+        std::lock_guard<std::mutex> lk(d->mu);
+        g_adec_acquire.fetch_add(1, std::memory_order_relaxed);
+        adec_state_tick(d);
+        if (d->ready.empty()) deliver_sound(*d);   // a frame may have come back since; the backlog goes into it
+        if (d->ready.empty()) {
+            g_adec_miss.fetch_add(1, std::memory_order_relaxed);
+            if (g_log) {
+                static std::atomic<uint64_t> n{0};
+                const uint64_t k = n.fetch_add(1);
+                if (k < 20 || k % 200 == 0)
+                    NXLOG_I(kTag, "AudioDecoder: AcquireAudioFrame found nothing (call %llu): frames %zu, free %zu, packets %llu",
+                            static_cast<unsigned long long>(k), d->frames.size(), d->free_.size(), static_cast<unsigned long long>(d->packets));
+            }
+            RET(kResultNoFrame);
+            return;
         }
-        RET(kResultNoFrame);
+        f = d->ready.front();
+        d->ready.pop_front();
+        d->last_acquired = f;
+        if (rd8(f + 0x10) != 0) d->eos_acquired = true;
+        more_ready = !d->ready.empty();
     }
-    const uint64_t f = d->ready.front();
-    d->ready.pop_front();
+    // out_ev is AutoClear (binary), while AudioHandler counts one wakeup per AcquireAudioFrame call:
+    // burst deliveries coalesce signals, so leaving >0 frames in d->ready without re-signaling strands
+    // trailing frames (including the EOS-marked frame if audio ended before video).
+    if (more_ready) signal_output_ready(*d);
     if (A(1)) wr64(A(1), f);
     RET(0);
 }
@@ -669,24 +709,49 @@ bool install_audio_decoder_hle() {
 // condition covers every track, so waiting for an audio end of its own would wait forever (the demuxer's zero-byte marker
 // may never come; measured 2026-11-22). Called from video_codec.cpp when the video end-of-stream marker arrives.
 void movie_adec_film_end() {
-    std::lock_guard<std::mutex> g(g_reg_mu);
-    for (AudioDecoder* d : g_reg) {
-        std::lock_guard<std::mutex> lk(d->mu);
-        if (d->eos_sent) continue;
-        // The picture is over, so the placeholder track is over: mark the last frame it handed out right here, rather than
-        // waiting for the player to pull the rest of a queue it has no reason to drain. It stopped pulling at the last
-        // picture; the chunks still queued are silence nobody hears (measured 2026-11-22: the video end arrived, the flag
-        // never did, and the player released the end-of-stream output without acting on it).
-        if (d->last_delivered) {
+    std::vector<AudioDecoder*> to_signal;
+    {
+        std::lock_guard<std::mutex> g(g_reg_mu);
+        for (AudioDecoder* d : g_reg) {
+            std::lock_guard<std::mutex> lk(d->mu);
+            if (d->finalized || d->eos_acquired) continue;
+            // The picture is over, so the placeholder track is over: ensure the guest acquires a frame carrying the EOS flag
+            // rather than waiting on buffered chunks or an already-coalesced output-ready signal (measured 2026-11-23: when
+            // audio ended 0.8 s early with 2 frames queued in d->ready, AutoClear coalescing left the last frame stranded).
             const size_t dropped = d->sound.size();
-            wr8(d->last_delivered + 0x10, 1);
-            d->eos_pending = false;
-            d->eos_sent = true;
-            NXLOG_I(kTag, "AudioDecoder: end of stream marked on the last audio frame at the film's end (%zu chunk(s) dropped)", dropped);
-        } else {
-            d->eos_pending = true;
+            d->sound.clear();
+            if (!d->ready.empty()) {
+                wr8(d->ready.back() + 0x10, 1);
+                d->eos_pending = false;
+                d->eos_sent = true;
+                to_signal.push_back(d);
+                NXLOG_I(kTag, "AudioDecoder: end of stream signaled on queued frame at the film's end (%zu chunk(s) dropped)", dropped);
+            } else if (!d->free_.empty()) {
+                const uint64_t f = d->free_.back();
+                d->free_.pop_back();
+                const uint64_t buf = rd64(f + kAfBuffer);
+                if (buf) {
+                    wr64(buf + kBufFilled, 0);
+                    wr64(buf + kBufTime, static_cast<uint64_t>(media_film_video_pts()));
+                }
+                wr8(f + 0x10, 1);
+                d->ready.push_back(f);
+                d->last_delivered = f;
+                d->eos_pending = false;
+                d->eos_sent = true;
+                to_signal.push_back(d);
+                NXLOG_I(kTag, "AudioDecoder: end of stream pushed as empty audio frame at the film's end (%zu chunk(s) dropped)", dropped);
+            } else if (const uint64_t target = d->last_acquired ? d->last_acquired : d->last_delivered) {
+                wr8(target + 0x10, 1);
+                d->eos_pending = false;
+                d->eos_sent = true;
+                NXLOG_I(kTag, "AudioDecoder: end of stream marked on the last audio frame at the film's end (%zu chunk(s) dropped)", dropped);
+            } else {
+                d->eos_pending = true;
+            }
         }
     }
+    for (AudioDecoder* d : to_signal) signal_output_ready(*d);
 }
 
 }  // namespace nxrt::media
