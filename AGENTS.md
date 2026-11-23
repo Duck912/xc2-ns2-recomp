@@ -104,15 +104,28 @@ The second one also runs as a git hook (`pwsh -File tools/ci/install-git-hooks.p
 If you change a file under `third_party/fefw-recomp/`, add the change to that directory's `MODIFICATIONS.md`
 — GPL-3.0 requires a modification notice.
 
-## If you have the maintainer's local tree
+## If you have the maintainer's local tree (`docs/internal/`)
 
-This repository is developed alongside git-ignored notes: `docs/internal/` holds the working state, the
-decision log and the round-by-round history, and `work/` holds logs and scratch. If `docs/internal/` exists in
-your checkout, start with:
+This repository is developed alongside git-ignored local notes: `docs/internal/` holds the working state, the
+decision log, and round-by-round history, while `work/` holds logs and scratch.
+
+**Mandatory cross-session protocol (applies to every harness/agent, even if started mid-conversation without an onboarding prompt):**
+
+1. **At session start**: if `E:\XC2-开新会话先读这个.md` exists, read it first, then run:
 
 ```powershell
-pwsh -File tools/agent-brief.ps1
+pwsh -File E:\XC2\repo\tools\agent-brief.ps1
 ```
 
-That prints the current state, the decisions that are already settled, and the recent history — enough to be
-useful without reading the 85 MB of notes. `docs/internal/AGENTS.md` is the full protocol.
+   Do **not** scan all of `docs/internal/handover/` (or the 84 MB `docs/internal/analysis/` archive) upfront — grep only inside `docs/internal/handover/` when needed. Full maintainer rules live in `docs/internal/AGENTS.md`.
+
+2. **Before finishing any code/doc task**: follow the closeout checklist in `docs/internal/AGENTS.md`:
+   - Overwrite `docs/internal/STATE.md` (current status, verified facts, next steps)
+   - Append newly settled decisions with `§` numbers to `docs/internal/DECISIONS.md`
+   - Write `docs/internal/handover/NN-<date>-<topic>.md` and update `docs/internal/handover/_index.json`
+   - Update the top status lines of `E:\XC2-开新会话先读这个.md` (keeping its NTFS hardlink to `E:\XC2\maintenance\XC2-开新会话先读这个.md` intact)
+   - Run the closeout verification & commit tracked files cleanly by path, then run NAS sync (`sync-to-nas-quiet.cmd`):
+
+```powershell
+pwsh -File E:\XC2\repo\tools\agent-brief.ps1 -VerifyCloseout
+```
