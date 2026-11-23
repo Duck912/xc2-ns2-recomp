@@ -108,6 +108,7 @@ struct AudioDecoder {
     bool eos_acquired = false;  // the client actually popped an AudioFrame carrying the end flag
     bool finalized = false;
     bool gated = false;         // held back by the audio-ahead-of-picture gate; resume when video_pts advances
+    bool in_paused = false;     // input-ready event held low while sound backlog exceeds kSoundHighWater
     uint64_t last_delivered = 0;   // the frame handed out last: the one that carries the flag when the film ends
     uint64_t last_acquired = 0;    // the frame handed to the client most recently
     bool warned_packet = false;
@@ -180,6 +181,8 @@ void adec_finalize(::Ctx* c) {
         d->ready.clear();
         d->sound.clear();
         d->eos_pending = false;
+        d->in_paused = false;
+        d->gated = false;
     }
     RET(0);
 }
@@ -418,6 +421,7 @@ void adec_stop(::Ctx* c) { RET(0); }
 
 void adec_flush(::Ctx* c) {
     AudioDecoder* d = adec_of(A(0));
+    bool resume_in = false;
     if (d) {
         std::lock_guard<std::mutex> lk(d->mu);
         d->ready.clear();
@@ -428,8 +432,12 @@ void adec_flush(::Ctx* c) {
         d->eos_acquired = false;
         d->last_delivered = 0;
         d->last_acquired = 0;
+        resume_in = d->in_paused;
+        d->in_paused = false;
+        d->gated = false;
         for (size_t i = d->frames.size(); i > 0; --i) d->free_.push_back(d->frames[i - 1]);
     }
+    if (resume_in) d->in_ready.signal();
     RET(0);
 }
 // Moves decoded sound into free frames (caller holds the lock): PCM into the nn::movie::Buffer the AudioFrame carries, then the
@@ -493,6 +501,11 @@ void deliver_sound(AudioDecoder& d) {
         NXLOG_I(kTag, "AudioDecoder: end of stream marked on the last audio frame");
     }
     if (any) signal_output_ready(d);
+    constexpr size_t kSoundLowWater = 32;
+    if (d.in_paused && d.sound.size() <= kSoundLowWater) {
+        d.in_paused = false;
+        d.in_ready.signal();
+    }
 }
 
 void adec_decode_async(::Ctx* c) {
@@ -562,7 +575,8 @@ void adec_decode_async(::Ctx* c) {
                 static_cast<unsigned long long>(bytes), static_cast<unsigned long long>(cap), static_cast<long long>(time),
                 static_cast<unsigned long long>(rd64(buf + kBufFlags)), static_cast<unsigned long long>(nz), head);
     }
-    d->in_ready.signal();   // room for the next packet
+    constexpr size_t kSoundHighWater = 64;   // ~1.36 s of Vorbis chunks: enough to keep audio gate fed without decoding the whole file up front
+    bool signal_in = true;
 #if NXRT_HAVE_VORBIS
     // What the player calls the packet's length differs between the paths this library takes; take the field that looks like a
     // packet (a Vorbis packet is a few hundred bytes; the capacity is 0x40000).
@@ -602,8 +616,11 @@ void adec_decode_async(::Ctx* c) {
             }
         }
         deliver_sound(*d);
+        signal_in = d->sound.size() < kSoundHighWater;
+        d->in_paused = !signal_in;
     }
 #endif
+    if (signal_in) d->in_ready.signal();   // room for the next packet unless backpressured
     if (d) adec_state_tick(d);
     if (g_log) {
         static std::atomic<uint64_t> n{0};
