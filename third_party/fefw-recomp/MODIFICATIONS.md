@@ -21,9 +21,9 @@ This directory is a **modified fork** of `Goldoire/fefw-recomp` (the original Gi
 
 | `file` | date | change |
 |---|---|---|
-| `runtime/src/services/fs_romfs.cpp` | 2026-11-23 | fix `RomfsImage::build()` (`ard_index` / `ard_at` / `ard_real_size` on rebuild), `ard_tail` appended archive reads, and multi-chunk `serve_ard()` locking |
+| `runtime/src/services/fs_romfs.cpp` | 2026-11-23 | fix `RomfsImage::build()` (`ard_index` / `ard_at` / `ard_real_size`), multi-mod `append.bin` (`TailSlice` + `read_tail`), and in-memory `bf2.arh` delta relocation/composition (`compose_arh_layers`) + `serve_ard()` locking |
 | `runtime/tests/gfx/test_play_config.cpp` | 2026-11-23 | add `render_quality_tuning_contract` regression test covering `[upscale] render_quality` ratios and `game_handles_render_quality` |
-| `runtime/tests/test_svc_fs_romfs.cpp` | 2026-11-23 | add `romfs_mods_m2_and_m2b_archive_override` regression test for M2/M2b archive layering |
+| `runtime/tests/test_svc_fs_romfs.cpp` | 2026-11-23 | add `romfs_mods_m2_and_m2b_archive_override` and `romfs_mods_m2b_multi_mod_tails_and_arh_compose` regression tests |
 | `UPSTREAM.md` / `README.md` / `MODIFICATIONS.md` | 2026-11-23 | note removed upstream GitHub repo (`Goldoire/fefw-recomp`, 404) and mark `third_party/fefw-recomp/launcher/` as unused upstream snapshot |
 | `runtime/include/nxrt/render_quality.h` | 2026-11-23 | new: `[upscale] render_quality` modes (`native`, `quality`, `balanced`, `performance`, `ultra_performance`, `console`) and their implied scale ratios (shared by runtime and F1 menu) |
 | `runtime/include/nxrt/symbols.h` | 2026-11-22 | guest names: symbols_load_guest_names[_text], symbols_guest_count, symbols_describe_guest (the map's f_<guest VA> entries named from the lift's dynsym) |

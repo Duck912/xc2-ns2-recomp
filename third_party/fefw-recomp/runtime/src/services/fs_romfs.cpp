@@ -104,6 +104,7 @@ struct Node {
     std::string path;            // image path: "" for the root, "/a/b" otherwise
     std::wstring host;           // host path to open
     bool is_dir = false;
+    bool is_blob = false;
     uint64_t size = 0;           // files only
     uint64_t src = 0;            // files: offset of the data in the host file (0, or the extent in a .nup)
     std::vector<Node> kids;      // sorted by name bytes
@@ -114,6 +115,30 @@ struct Node {
     uint32_t first_file = kNone;   // directories: first file entry
     uint64_t data = 0;           // files: offset of the data from the partition start
 };
+
+bool read_whole_host_file(const std::wstring& path, std::vector<uint8_t>& out) {
+    HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    LARGE_INTEGER sz{};
+    if (!GetFileSizeEx(h, &sz) || sz.QuadPart < 0 || sz.QuadPart > (128ll << 20)) {
+        CloseHandle(h);
+        return false;
+    }
+    out.resize(static_cast<size_t>(sz.QuadPart));
+    size_t pos = 0;
+    while (pos < out.size()) {
+        const DWORD chunk = static_cast<DWORD>(std::min<size_t>(out.size() - pos, 1u << 24));
+        DWORD got = 0;
+        if (!ReadFile(h, out.data() + pos, chunk, &got, nullptr) || got == 0) {
+            CloseHandle(h);
+            return false;
+        }
+        pos += got;
+    }
+    CloseHandle(h);
+    return true;
+}
 
 std::string shown(const Node& n) { return n.path.empty() ? std::string("/") : n.path; }
 
@@ -259,12 +284,69 @@ void overlay_dir(Node& dir, const std::filesystem::path& host, ModStats& st) {
 
 // Applies the mods of [fs] mods, if the folder exists. Never fails the build: a broken mod loses its own files, not
 // the game.
+struct TailSlice {
+    std::wstring path;    // <mod>/.ard/append.bin
+    uint64_t offset = 0;  // relative byte offset within the virtual concatenated tail [0, tail_size)
+    uint64_t size = 0;
+    std::string owner;
+};
+
+struct ArhLayer {
+    std::wstring path;    // <mod>/romfs/bf2.arh
+    uint64_t tail_base = 0;
+    bool has_tail = false;
+    std::string owner;
+};
+
 struct ModsResult {
     std::map<std::string, std::wstring> recs;   // lower-case logical name -> <mod>/.ard/<name>.rec
-    std::wstring tail;                          // <mod>/.ard/append.bin of the highest-priority mod that has one
+    std::vector<TailSlice> tails;               // lowest -> highest priority, concatenated at ard_real_size
+    std::vector<ArhLayer> arh_layers;           // lowest -> highest priority bf2.arh overrides
     uint64_t tail_size = 0;
-    std::string tail_owner;
 };
+
+// Composes multiple mod bf2.arh files over the vanilla bf2.arh so entries repointed into each mod's append.bin
+// are relocated by that mod's tail_base without colliding at +0. Priority runs lowest -> highest (last writer wins).
+bool compose_arh_layers(const std::wstring& vanilla_arh, uint64_t ard_real_size,
+                        const std::vector<ArhLayer>& layers, std::vector<uint8_t>& merged) {
+    auto get32 = [](const uint8_t* p) -> uint32_t {
+        return uint32_t(p[0]) | (uint32_t(p[1]) << 8) | (uint32_t(p[2]) << 16) | (uint32_t(p[3]) << 24);
+    };
+    auto get64 = [&](const uint8_t* p) -> uint64_t {
+        return uint64_t(get32(p)) | (uint64_t(get32(p + 4)) << 32);
+    };
+    std::vector<uint8_t> base;
+    if (!read_whole_host_file(vanilla_arh, base) || base.size() < 0x24 || std::memcmp(base.data(), "arh1", 4) != 0)
+        return false;
+    const uint32_t ent_off = get32(base.data() + 0x1C);
+    const uint32_t ent_count = get32(base.data() + 0x20);
+    if (static_cast<uint64_t>(ent_off) + static_cast<uint64_t>(ent_count) * 24 > base.size()) return false;
+
+    merged = base;
+    for (const ArhLayer& layer : layers) {
+        std::vector<uint8_t> mod_arh;
+        if (!read_whole_host_file(layer.path, mod_arh) || mod_arh.size() != base.size() ||
+            std::memcmp(mod_arh.data(), "arh1", 4) != 0) {
+            NXLOG_W("mods", "mods: skipping incompatible bf2.arh from %s", layer.owner.c_str());
+            continue;
+        }
+        uint32_t applied_entries = 0;
+        for (uint32_t i = 0; i < ent_count; ++i) {
+            const size_t pos = static_cast<size_t>(ent_off) + static_cast<size_t>(i) * 24;
+            if (std::memcmp(mod_arh.data() + pos, base.data() + pos, 24) == 0) continue;
+            std::memcpy(merged.data() + pos, mod_arh.data() + pos, 24);
+            uint64_t off = get64(mod_arh.data() + pos);
+            if (layer.has_tail && layer.tail_base > 0 && off >= ard_real_size) {
+                off += layer.tail_base;
+                for (int b = 0; b < 8; ++b) merged[pos + b] = static_cast<uint8_t>(off >> (8 * b));
+            }
+            applied_entries++;
+        }
+        NXLOG_I("mods", "mods: bf2.arh merged %u entry change(s) from %s (tail_base=+0x%llx)",
+                applied_entries, layer.owner.c_str(), static_cast<unsigned long long>(layer.tail_base));
+    }
+    return true;
+}
 
 ModsResult apply_mods(Node& root, const std::filesystem::path& host_abs) {
     ModsResult out;
@@ -321,8 +403,10 @@ ModsResult apply_mods(Node& root, const std::filesystem::path& host_abs) {
         ModStats st;
         st.name = name;
         overlay_dir(root, r, st);
-        // Pre-built archive records for this mod (tools/mods/ard_pack.py): <mod>/.ard/<name>.rec
+        // Pre-built archive records and optional bf2.arh overrides for this mod
         {
+            uint64_t this_tail_base = 0;
+            bool this_has_tail = false;
             std::error_code rec_ec;
             const std::filesystem::path recs_dir = (dir / name) / ".ard";
             if (std::filesystem::is_directory(recs_dir, rec_ec)) {
@@ -340,12 +424,21 @@ ModsResult apply_mods(Node& root, const std::filesystem::path& host_abs) {
                 std::error_code tail_ec;
                 const std::filesystem::path tail = recs_dir / "append.bin";
                 if (std::filesystem::is_regular_file(tail, tail_ec)) {
-                    if (!out.tail.empty()) NXLOG_W("mods", "mods: %s and %s both append to the archive; %s wins", out.tail_owner.c_str(), name.c_str(), name.c_str());
-                    out.tail = long_path(tail.wstring());
-                    out.tail_size = std::filesystem::file_size(tail, tail_ec);
-                    out.tail_owner = name;
-                    NXLOG_I("mods", "mods: %s: %llu byte(s) appended after the archive", name.c_str(), static_cast<unsigned long long>(out.tail_size));
+                    const uint64_t sz = std::filesystem::file_size(tail, tail_ec);
+                    if (!tail_ec && sz > 0) {
+                        this_tail_base = out.tail_size;
+                        this_has_tail = true;
+                        out.tails.push_back(TailSlice{long_path(tail.wstring()), this_tail_base, sz, name});
+                        out.tail_size += sz;
+                        NXLOG_I("mods", "mods: %s: %llu byte(s) appended after the archive (+0x%llx)",
+                                name.c_str(), static_cast<unsigned long long>(sz), static_cast<unsigned long long>(this_tail_base));
+                    }
                 }
+            }
+            std::error_code arh_ec;
+            const std::filesystem::path mod_arh = r / "bf2.arh";
+            if (std::filesystem::is_regular_file(mod_arh, arh_ec)) {
+                out.arh_layers.push_back(ArhLayer{long_path(mod_arh.wstring()), this_tail_base, this_has_tail, name});
             }
         }
         NXLOG_I("mods", "mods: %s: %u file(s), %u replaced, %u added", name.c_str(), st.files, st.replaced, st.added);
@@ -475,12 +568,12 @@ void flatten(Node& n, std::vector<Node*>& dirs, std::vector<Node*>& files) {
 }
 
 struct Segment {
-    enum class Kind : uint8_t { kHeader, kTables, kZero, kFile };
+    enum class Kind : uint8_t { kHeader, kTables, kZero, kFile, kBlob };
     uint64_t off = 0;            // image offset
     uint64_t len = 0;
     Kind kind = Kind::kZero;
-    uint64_t src = 0;            // kHeader/kTables: offset in that buffer; kFile: offset in the host file
-    uint32_t file = 0;           // kFile: index into Layout::files
+    uint64_t src = 0;            // kHeader/kTables/kBlob: offset in buffer; kFile: offset in host file
+    uint32_t file = 0;           // kFile/kBlob: index into Layout::files
 };
 
 struct FileRec {
@@ -498,11 +591,12 @@ struct Layout {
     RomfsImage::Stats stats;
     std::array<uint8_t, kHeaderSize> header{};
     std::vector<uint8_t> tables;        // dir hash, dir table, file hash, file table, in that order from dir_hash_table_ofs
+    std::vector<uint8_t> blob;          // optional composed bf2.arh when multiple mods alter bf2.arh / append.bin
     std::vector<Segment> segs;          // contiguous, covering [0, size)
     std::vector<FileRec> files;         // in data order
     std::map<std::string, uint32_t> by_path;
     std::map<std::string, std::wstring> ard_recs;   // M2: lower-case name -> <mod>/.ard/<name>.rec
-    std::wstring ard_tail;                          // M2b: <mod>/.ard/append.bin, served past the real archive
+    std::vector<TailSlice> ard_tails;               // M2b: concatenated <mod>/.ard/append.bin slices
     uint64_t ard_tail_size = 0;
 };
 
@@ -533,21 +627,37 @@ bool make_layout(const std::string& host_dir, Layout& L, std::string* err) {
     // its own romfs, so mods only apply to the folder route.
     if (packaged) NXLOG_I("mods", "mods: not applied - the romfs comes from a package");
     else {
+        std::wstring vanilla_arh;
+        uint64_t vanilla_ard_size = 0;
+        for (const Node& k : root.kids) {
+            if (!k.is_dir && k.name == "bf2.arh") vanilla_arh = k.host;
+            if (!k.is_dir && k.name == "bf2.ard") vanilla_ard_size = k.size;
+        }
         ModsResult mr = apply_mods(root, abs);
         L.ard_recs = std::move(mr.recs);
-        if (!mr.tail.empty() && mr.tail_size > 0) {
+        if (!mr.tails.empty() && mr.tail_size > 0) {
             // The image is ours to build, so the archive file can simply be longer than the archive: the bytes past the
-            // real size come from the mod's append.bin, and the entry we repointed reads them. Nothing copies 15 GB.
+            // real size come from each mod's append.bin slice in order, and the repointed entries read them. Nothing copies 15 GB.
+            bool grew = false;
             for (Node& k : root.kids) {
                 if (k.is_dir || k.name != "bf2.ard") continue;
                 k.size += mr.tail_size;
-                L.ard_tail = mr.tail;
+                L.ard_tails = std::move(mr.tails);
                 L.ard_tail_size = mr.tail_size;
-                NXLOG_I("mods", "mods: bf2.ard grown by %llu byte(s) for %s", static_cast<unsigned long long>(mr.tail_size),
-                        mr.tail_owner.c_str());
+                grew = true;
+                NXLOG_I("mods", "mods: bf2.ard grown by %llu byte(s) across %zu tail slice(s)",
+                        static_cast<unsigned long long>(mr.tail_size), L.ard_tails.size());
                 break;
             }
-            if (L.ard_tail.empty()) NXLOG_W("mods", "mods: %s appends to the archive but this romfs has no bf2.ard", mr.tail_owner.c_str());
+            if (!grew) NXLOG_W("mods", "mods: append.bin present (%zu slice(s)) but this romfs has no bf2.ard", mr.tails.size());
+        }
+        if (mr.arh_layers.size() > 1 && !vanilla_arh.empty() && compose_arh_layers(vanilla_arh, vanilla_ard_size, mr.arh_layers, L.blob)) {
+            for (Node& k : root.kids) {
+                if (k.is_dir || k.name != "bf2.arh") continue;
+                k.is_blob = true;
+                k.size = L.blob.size();
+                break;
+            }
         }
     }
 
@@ -665,7 +775,10 @@ bool make_layout(const std::string& host_dir, Layout& L, std::string* err) {
         if (img > cursor) L.segs.push_back({cursor, img - cursor, Segment::Kind::kZero, 0, 0});
         const uint32_t idx = static_cast<uint32_t>(L.files.size());
         L.files.push_back({f->host, f->size, img, f->src, f->path});
-        if (f->size > 0) L.segs.push_back({img, f->size, Segment::Kind::kFile, f->src, idx});
+        if (f->size > 0) {
+            const Segment::Kind sk = f->is_blob ? Segment::Kind::kBlob : Segment::Kind::kFile;
+            L.segs.push_back({img, f->size, sk, f->is_blob ? 0 : f->src, idx});
+        }
         L.by_path[f->path] = idx;
         cursor = img + f->size;
         data_bytes += f->size;
@@ -774,10 +887,28 @@ struct RomfsImage::Impl {
     size_t ard_index = static_cast<size_t>(-1);          // the file index of bf2.ard, when the romfs holds one
     std::map<std::string, std::wstring> ard_recs;         // lower-case logical name -> <mod>/.ard/<name>.rec
     mutable std::map<uint64_t, ArdRec> ard_at;            // record offset -> .rec + byte size, learned when its header is read
-    std::wstring ard_tail;                               // bytes past the real archive, served from a mod's append.bin
+    std::vector<TailSlice> ard_tails;                     // sorted by .offset, served past the real archive
     uint64_t ard_tail_size = 0;
     uint64_t ard_real_size = 0;                          // the on-disk archive size, before growning for the tail
     mutable std::mutex ard_mu;
+
+    bool read_tail(uint64_t at, uint8_t* dst, uint64_t len) const {
+        if (at > ard_tail_size || len > ard_tail_size - at || ard_tails.empty()) return false;
+        while (len > 0) {
+            auto it = std::upper_bound(ard_tails.begin(), ard_tails.end(), at,
+                                       [](uint64_t v, const TailSlice& s) { return v < s.offset; });
+            if (it == ard_tails.begin()) return false;
+            --it;
+            const uint64_t in_slice = at - it->offset;
+            if (in_slice >= it->size) return false;
+            const uint64_t chunk = std::min(len, it->size - in_slice);
+            if (!read_rec(it->path, in_slice, dst, chunk)) return false;
+            dst += chunk;
+            at += chunk;
+            len -= chunk;
+        }
+        return true;
+    }
 
     static constexpr uint64_t kArdHeader = 0x30;
 
@@ -853,7 +984,7 @@ bool RomfsImage::build(const std::string& host_dir, std::string* err) {
     p_->l = ok ? std::move(fresh) : Layout{};
     p_->read_seen.assign(p_->l.files.size(), 0);
     p_->ard_recs = std::move(p_->l.ard_recs);
-    p_->ard_tail = std::move(p_->l.ard_tail);
+    p_->ard_tails = std::move(p_->l.ard_tails);
     p_->ard_tail_size = p_->l.ard_tail_size;
     p_->ard_index = static_cast<size_t>(-1);
     p_->ard_real_size = 0;
@@ -908,13 +1039,18 @@ bool RomfsImage::read(uint64_t offset, void* dst, uint64_t len) const {
             case Segment::Kind::kHeader: std::memcpy(out, L.header.data() + g.src + within, n); break;
             case Segment::Kind::kTables: std::memcpy(out, L.tables.data() + g.src + within, n); break;
             case Segment::Kind::kZero: std::memset(out, 0, n); break;
+            case Segment::Kind::kBlob:
+                p_->note_read(g.file);
+                if (g.src + within + n > L.blob.size()) return false;
+                std::memcpy(out, L.blob.data() + g.src + within, n);
+                break;
             case Segment::Kind::kFile:
                 p_->note_read(g.file);
                 if (g.file == p_->ard_index && p_->ard_tail_size > 0) {
                     const uint64_t file_off = g.src + within;
                     if (file_off >= p_->ard_real_size) {
                         const uint64_t at = file_off - p_->ard_real_size;
-                        if (at + n > p_->ard_tail_size || !p_->read_rec(p_->ard_tail, at, out, n)) return false;
+                        if (!p_->read_tail(at, out, n)) return false;
                         static std::atomic<uint32_t> tail_logged{0};
                         if (tail_logged.fetch_add(1, std::memory_order_relaxed) < 8)
                             NXLOG_I("mods", "mods: ard: tail read at +0x%llx, %llu byte(s)", static_cast<unsigned long long>(at),

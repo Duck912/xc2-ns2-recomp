@@ -24,6 +24,8 @@ import sys
 import zlib
 from pathlib import Path
 
+import arh_index
+
 HDR = 0x30
 
 
@@ -64,6 +66,35 @@ def append_record(out_dir, header_payload, tail_off):
             f.truncate(0)                      # a fresh build: start the tail over
         f.write(header_payload)
     return path
+
+
+def load_arh_catalog(arh_bytes, cat_records):
+    """Map normalized full bf2.arh path -> list of (idx, offset, unc, comp, checksum, flags)."""
+    chk_by_off = {}
+    for recs in cat_records.values():
+        for off, _, _, ck in recs:
+            chk_by_off.setdefault(off, ck)
+    out = {}
+    for ent in arh_index.load_arh_entries(arh_bytes):
+        key = ent["path"].replace("\\", "/").lstrip("/").lower()
+        chk = chk_by_off.get(ent["offset"], 0)
+        out.setdefault(key, []).append((ent["idx"], ent["offset"], ent["unc"], ent["comp"], chk, ent["flags"]))
+    return out
+
+
+def patch_index_at(arh_bytes, entry_idx, new_offset, comp, unc):
+    """Repoint a known arh1 entry index directly without ambiguous offset scanning."""
+    if len(arh_bytes) < 0x24 or arh_bytes[:4] != b"arh1":
+        return None
+    ent_off, ent_cnt = struct.unpack_from("<II", arh_bytes, 0x1C)
+    if entry_idx < 0 or entry_idx >= ent_cnt:
+        return None
+    pos = ent_off + entry_idx * 24
+    if pos + 24 > len(arh_bytes):
+        return None
+    out = bytearray(arh_bytes)
+    struct.pack_into("<QII", out, pos, new_offset, comp, unc)
+    return bytes(out), pos
 
 
 def patch_index(arh_bytes, orig_offset, new_offset, comp, unc):
@@ -129,7 +160,9 @@ def main(argv=None):
         root = mod
     out_dir = mod / ".ard"
     written = 0
-    arh = None
+    arh = Path(a.arh).read_bytes() if a.arh else None
+    arh_catalog = load_arh_catalog(arh, catalog) if arh is not None else {}
+    arh_dirty = False
     append_pos = 0
     if not a.dry_run:
         for stale in ((mod / ".ard" / "append.bin"), (mod / "romfs" / "bf2.arh")):
@@ -144,30 +177,75 @@ def main(argv=None):
     for p in sorted(x for x in root.rglob("*") if x.is_file()):
         rel = p.relative_to(root).as_posix()
         key = rel.lower()
-        recs = catalog.get(key)
-        if not recs:
-            missing += 1
-            report.append({"file": rel, "status": "not-in-archive"})
+        if key == "bf2.arh":
             continue
-        uncs = {r[1] for r in recs}
-        if len(uncs) > 1:
-            too_big += 1
-            report.append({"file": rel, "status": "multi-part", "parts": len(recs), "sizes": sorted(uncs)})
-            continue
-        offset, unc, comp, checksum = min(recs, key=lambda r: r[2])
-        data = p.read_bytes()
+        arh_recs = arh_catalog.get(key)
+        if arh_recs:
+            data = p.read_bytes()
+            # Prefer arh1 full-path match: separates localized/same-tail files (e.g. /bdat/cn vs /bdat/gb).
+            # Raw uncompressed archive entries (flags == 0, unc == 0) always append cleanly as raw tail slices.
+            raw_mode = all(r[5] == 0 and r[2] == 0 for r in arh_recs)
+            if raw_mode:
+                if not a.ard_size or arh is None:
+                    too_big += 1
+                    report.append({"file": rel, "status": "requires-ard-size"})
+                    continue
+                if len(data) == arh_recs[0][3]:
+                    same += 1
+                tail_off = append_pos
+                new_off = a.ard_size + tail_off
+                entries = []
+                patched_arh = arh
+                for e_idx, _, _, _, _, _ in arh_recs:
+                    patched = patch_index_at(patched_arh, e_idx, new_off, len(data), 0)
+                    if patched is None:
+                        entries = []
+                        break
+                    patched_arh = patched[0]
+                    entries.append(patched[1])
+                if not entries:
+                    too_big += 1
+                    report.append({"file": rel, "status": "index-entry-not-found"})
+                    continue
+                append_record(out_dir, data, tail_off)
+                append_pos += len(data)
+                arh = patched_arh
+                arh_dirty = True
+                written += 1
+                report.append({"file": rel, "status": "appended-raw", "size": len(data), "at": new_off, "entries": entries})
+                continue
+            uncs = {r[2] for r in arh_recs}
+            if len(uncs) > 1:
+                too_big += 1
+                report.append({"file": rel, "status": "multi-part", "parts": len(arh_recs), "sizes": sorted(uncs)})
+                continue
+            _, offset, unc, comp, checksum, _ = min(arh_recs, key=lambda r: r[3])
+            recs = [(r[1], r[2], r[3], r[4]) for r in arh_recs]
+            idx_list = [r[0] for r in arh_recs]
+        else:
+            recs = catalog.get(key)
+            if not recs:
+                missing += 1
+                report.append({"file": rel, "status": "not-in-archive"})
+                continue
+            uncs = {r[1] for r in recs}
+            if len(uncs) > 1:
+                too_big += 1
+                report.append({"file": rel, "status": "multi-part", "parts": len(recs), "sizes": sorted(uncs)})
+                continue
+            offset, unc, comp, checksum = min(recs, key=lambda r: r[2])
+            data = p.read_bytes()
+            idx_list = None
         if len(data) == unc:
             same += 1
         z = zlib.compress(data, a.level)
         if len(z) > comp or a.force_append:
-            if not a.arh or not a.ard_size:
+            if arh is None or not a.ard_size:
                 too_big += 1
                 report.append({"file": rel, "status": "does-not-fit", "mod": len(data), "zlib": len(z), "room": comp})
                 continue
             # M2b: the record is too big for the original slot, so it goes after the archive and its index entry is
             # repointed. The entry read from the arh is patched in a copy the mod ships as romfs/bf2.arh.
-            if arh is None:
-                arh = Path(a.arh).read_bytes()
             tail_off = append_pos
             new_off = a.ard_size + tail_off
             if len(z) > len(data):
@@ -178,13 +256,22 @@ def main(argv=None):
             record = header + z
             entries = []
             patched_arh = arh
-            for r_off, _, _, _ in recs:
-                patched = patch_index(patched_arh, r_off, new_off, len(z), len(data))
-                if patched is None:
-                    entries = []
-                    break
-                patched_arh = patched[0]
-                entries.append(patched[1])
+            if idx_list is not None:
+                for e_idx in idx_list:
+                    patched = patch_index_at(patched_arh, e_idx, new_off, len(z), len(data))
+                    if patched is None:
+                        entries = []
+                        break
+                    patched_arh = patched[0]
+                    entries.append(patched[1])
+            else:
+                for r_off, _, _, _ in recs:
+                    patched = patch_index(patched_arh, r_off, new_off, len(z), len(data))
+                    if patched is None:
+                        entries = []
+                        break
+                    patched_arh = patched[0]
+                    entries.append(patched[1])
             if not entries:
                 too_big += 1
                 report.append({"file": rel, "status": "index-entry-not-found", "offset": offset})
@@ -192,6 +279,7 @@ def main(argv=None):
             append_record(out_dir, record, tail_off)
             append_pos += len(record)
             arh = patched_arh
+            arh_dirty = True
             written += 1
             report.append({"file": rel, "status": "appended", "zlib": len(z), "at": new_off, "entries": entries})
             continue
@@ -207,7 +295,7 @@ def main(argv=None):
         written += 1
         report.append({"file": rel, "status": "packed", "zlib": len(z), "room": comp})
 
-    if arh is not None:
+    if arh_dirty and arh is not None:
         romfs = mod / "romfs"
         romfs.mkdir(parents=True, exist_ok=True)
         (romfs / "bf2.arh").write_bytes(arh)

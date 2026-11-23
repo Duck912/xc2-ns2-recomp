@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools" / "mods"))
 
 import ard_pack  # noqa: E402
+import arh_index  # noqa: E402
 import asset_index  # noqa: E402
 import mod_check  # noqa: E402
 
@@ -131,6 +132,133 @@ class ArdPackTests(unittest.TestCase):
             with mock.patch.object(ard_pack, "__file__", str(fake_script)):
                 rc = ard_pack.main(["--mod", str(tmp / "mod"), "--catalog", str(cat)])
             self.assertEqual(rc, 1)
+
+    def test_arh1_full_path_decode_resolves_diff_unc_and_raw_entries(self):
+        # Build a synthetic arh1 with trie + XOR'd strings mirroring bf2.arh:
+        #   0: /bdat/cn/msg.bdat  (flags=2 compressed, a>0 tail)
+        #   1: /bdat/gb/msg.bdat  (flags=2 compressed, a>0 tail)
+        #   2: /bdat/cn/raw.bdat  (flags=0 uncompressed, unc=0)
+        #   3: /event/a.motstm    (flags=2 compressed, edge==0 & a<0 in-trie NUL leaf)
+        entries = [
+            (b"/bdat/cn/msg.bdat", 0x1000, 30, 50, 2, 0),
+            (b"/bdat/gb/msg.bdat", 0x2000, 40, 80, 2, 1),
+            (b"/bdat/cn/raw.bdat", 0x3000, 64, 0, 0, 2),
+            (b"/event/a.motstm", 0x4000, 50, 90, 2, 3),
+        ]
+        # Construct deterministic XOR radix trie:
+        # Allocate node indices sequentially using unique xor keys per branch (pa = -(next_base + 1)).
+        # Node 0 is root. For node parent with branch offset `base`, child = base ^ ch, parent.a = -(base + 1), child.b = -(parent + 1).
+        nodes = {0: [0, 0]}
+        next_free = 256
+        str_buf = bytearray(4)
+
+        def insert_in_trie(path_bytes, entry_idx, tail_bytes=None):
+            nonlocal next_free
+            # For entries with tail_bytes != None, walk prefix bytes then place leaf at final char node with a = str_off - 1.
+            # For tail_bytes is None, walk all path_bytes then add NUL (0x00) edge leaf with a = -(entry_idx + 1).
+            walk = path_bytes if tail_bytes is None else path_bytes[:-len(tail_bytes)]
+            cur = 0
+            for ch in walk:
+                pa, pb = nodes[cur]
+                if pa == 0:
+                    # Pick base that gives unused child indices for likely ASCII/NUL bytes
+                    base = next_free
+                    next_free += 256
+                    nodes[cur][0] = -(base + 1)
+                else:
+                    base = -pa - 1
+                nxt = base ^ ch
+                if nxt not in nodes:
+                    nodes[nxt] = [0, -(cur + 1)]
+                cur = nxt
+            if tail_bytes is None:
+                pa, _ = nodes[cur]
+                if pa == 0:
+                    base = next_free
+                    next_free += 256
+                    nodes[cur][0] = -(base + 1)
+                else:
+                    base = -pa - 1
+                leaf = base ^ 0
+                nodes[leaf] = [-(entry_idx + 1), -(cur + 1)]
+            else:
+                # Split last prefix byte before tail? Match arh1 convention: split at split_pos, leaf has a = tail_pos - 1
+                str_buf.extend(b"X")
+                tail_pos = len(str_buf)
+                str_buf.extend(tail_bytes + b"\x00" + struct.pack("<I", entry_idx))
+                nodes[cur][0] = tail_pos - 1
+
+        insert_in_trie(entries[0][0], 0, b"sg.bdat")
+        insert_in_trie(entries[1][0], 1, b"sg.bdat")
+        insert_in_trie(entries[2][0], 2, b"aw.bdat")
+        insert_in_trie(entries[3][0], 3, None)
+
+        max_node = max(nodes) + 1
+        plain_trie = bytearray(max_node * 8)
+        for n, (a, b) in nodes.items():
+            struct.pack_into("<ii", plain_trie, n * 8, a, b)
+        struct.pack_into("<I", str_buf, 0, len(str_buf))
+
+        key = 0x12345678
+        str_off = 0x28
+        trie_off = str_off + len(str_buf)
+        ent_off = trie_off + len(plain_trie)
+        arh = bytearray(ent_off + len(entries) * 24)
+        struct.pack_into(
+            "<10I", arh, 0,
+            0x31687261, len(str_buf), 0, str_off, len(str_buf), trie_off, len(plain_trie), ent_off, len(entries), key,
+        )
+        arh[str_off:trie_off] = arh_index._xor4(bytes(str_buf), key ^ arh_index.TRIE_XOR ^ 0xFFFFFFFF)
+        arh[trie_off:ent_off] = arh_index._xor4(bytes(plain_trie), key ^ arh_index.TRIE_XOR)
+        for i, (_, off, comp, unc, flags, serial) in enumerate(entries):
+            struct.pack_into("<QIIII", arh, ent_off + i * 24, off, comp, unc, flags, serial)
+
+        decoded = arh_index.decode_arh_paths(bytes(arh))
+        self.assertEqual(decoded[0], "/bdat/cn/msg.bdat")
+        self.assertEqual(decoded[1], "/bdat/gb/msg.bdat")
+        self.assertEqual(decoded[2], "/bdat/cn/raw.bdat")
+        self.assertEqual(decoded[3], "/event/a.motstm")
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            arh_path = tmp / "bf2.arh"
+            arh_path.write_bytes(bytes(arh))
+            # Deliberately put truncated ambiguous names into assets.tsv (diff_unc!)
+            cat = tmp / "assets.tsv"
+            cat.write_text(
+                "source\tpath\tkind\tsize\tunc\tcomp\toffset\tchecksum\tsha256\n"
+                "ard\tmsg.bdat\ttable\t\t50\t30\t4096\t111\t\n"
+                "ard\tmsg.bdat\ttable\t\t80\t40\t8192\t222\t\n",
+                encoding="utf-8",
+            )
+            mod_dir = tmp / "bdat_mod"
+            (mod_dir / "romfs" / "bdat" / "gb").mkdir(parents=True)
+            (mod_dir / "romfs" / "bdat" / "cn").mkdir(parents=True)
+            gb_payload = bytes((i * 19) & 0xFF for i in range(512))
+            cn_raw = b"raw-replacement-payload"
+            (mod_dir / "romfs" / "bdat" / "gb" / "msg.bdat").write_bytes(gb_payload)
+            (mod_dir / "romfs" / "bdat" / "cn" / "raw.bdat").write_bytes(cn_raw)
+
+            fake_script = tmp / "tools" / "mods" / "ard_pack.py"
+            fake_script.parent.mkdir(parents=True)
+            fake_script.write_text("", encoding="utf-8")
+            with mock.patch.object(ard_pack, "__file__", str(fake_script)):
+                rc = ard_pack.main([
+                    "--mod", str(mod_dir),
+                    "--catalog", str(cat),
+                    "--arh", str(arh_path),
+                    "--ard-size", "200000",
+                ])
+            self.assertEqual(rc, 0)
+
+            rep = {r["file"]: r for r in json.loads((tmp / "work" / "mods" / "ard-pack.json").read_text(encoding="utf-8"))["report"]}
+            self.assertEqual(rep["bdat/gb/msg.bdat"]["status"], "appended")
+            self.assertEqual(rep["bdat/cn/raw.bdat"]["status"], "appended-raw")
+            out_arh = (mod_dir / "romfs" / "bf2.arh").read_bytes()
+            # Entry 0 (cn/msg.bdat) must remain untouched; entry 1 (gb/msg.bdat) and entry 2 (cn/raw.bdat) updated.
+            self.assertEqual(struct.unpack_from("<QII", out_arh, ent_off)[0], 0x1000)
+            self.assertEqual(struct.unpack_from("<QII", out_arh, ent_off + 24)[0], 200000 + len(cn_raw))
+            self.assertEqual(struct.unpack_from("<QII", out_arh, ent_off + 48), (200000, len(cn_raw), 0))
 
 
 class ModCheckAndIndexTests(unittest.TestCase):

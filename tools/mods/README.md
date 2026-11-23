@@ -52,21 +52,21 @@ folder can hold, and the console is case-sensitive while Windows is not.
 
 Report: `work/mods/mods-report.json` (the 50 first absent and only-archive paths, plus every file's record).
 
-## Archive replacements (M2)
+## Archive replacements (M2 / M2b)
 
-Most of this game's assets are inside `bf2.ard`, which the game reads as "48 bytes of xbc1 header at the
-record offset, then comp bytes right after it". `ard_pack.py` writes that pair once, per replaced file:
+Most of this game's assets are inside `bf2.ard`, which the game reads either raw (`flags = 0`) or as "48 bytes of `xbc1`
+header at the record offset, then `comp` bytes right after it" (`flags = 2`). `ard_pack.py` handles both:
 
     mods/<mod>/.ard/<name>.rec        original header (unc = the mod file size, comp and checksum kept) + zlib(padded)
+    mods/<mod>/.ard/append.bin        M2b tail records (xbc1 or raw) for files larger than original comp / flags=0 files
+    mods/<mod>/romfs/bf2.arh          repointed arh1 index entries for appended files
 
-The runtime has no zlib, so it never compresses: it slices the .rec at the same relative offsets the game asks for.
-The name is the archive's logical name (`font_binary2.txt`), not a romfs path - the runtime learns it from
-the header the game reads.
+    python tools/mods/ard_pack.py --mod "<mod folder>" --catalog work/mods/assets.tsv --arh "<romfs>/bf2.arh" --ard-size <bf2.ard bytes>
 
-    python tools/mods/ard_pack.py --mod "<mod folder>" --catalog work/mods/assets.tsv
-
-A file whose zlib stream is larger than the original comp does not fit and is reported, not truncated. That is the
-v1 limit; large textures (AI upscales) need the append-and-repoint path (M2b).
+Passing `--arh` lets `arh_index.py` decode the full untruncated `arh1` path trie (eliminating false `diff_unc` collisions
+on localized `.bdat` and truncated 27-byte `xbc1` headers) and append uncompressed `flags = 0` entries as raw slices. When
+multiple active mods ship `append.bin` + `romfs/bf2.arh`, `fs_romfs.cpp` concatenates each mod's tail in `[mods] order`
+and composes their `bf2.arh` entry deltas in memory with relocated offsets.
 
 ## The contract the later milestones rely on
 
