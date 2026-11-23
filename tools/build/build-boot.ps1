@@ -182,7 +182,7 @@ $mapFile = Join-Path $bd 'xc2_boot.map'
     "$gfxDir\nxrt_imgui.lib" "$gfxDir\nxrt_volk.lib" "$gfxDir\nxrt_tiling.lib" "$gfxDir\nxrt_astc2bc7.lib" "$gfxDir\nxrt_zstd.lib" `
     "$gfxDir\_deps\sdl3-build\SDL3-static.lib" "$gfxDir\third_party\dav1d\nxrt_dav1d.lib" `
     kernel32.lib user32.lib gdi32.lib winmm.lib imm32.lib ole32.lib oleaut32.lib version.lib uuid.lib advapi32.lib `
-    setupapi.lib shell32.lib dinput8.lib psapi.lib /link "/MAP:$mapFile"
+    setupapi.lib shell32.lib dinput8.lib psapi.lib /link "/MAP:$mapFile" "/HIGHENTROPYVA:NO"
 if ($LASTEXITCODE -ne 0) { throw 'link failed' }
 Write-Host ("boot exe: {0} ({1:N1} MB)" -f $exe, ((Get-Item $exe).Length / 1MB))
 

@@ -605,10 +605,32 @@ def copy_runtime_dlls(r, runtime_dir, install):
     return n
 
 
+def clear_high_entropy_va(exe):
+    """Disable IMAGE_DLLCHARACTERISTICS_HIGH_ENTROPY_VA (0x20) on xc2_boot.exe so Windows keeps bottom-up allocations
+    low and out of the guest alias/module address ranges (issue #25). Zig's GNU linker omits /HIGHENTROPYVA:NO."""
+    with open(exe, "r+b") as f:
+        f.seek(0x3C)
+        pe = int.from_bytes(f.read(4), "little")
+        f.seek(pe + 24)
+        if f.read(2) != b"\x0b\x02":
+            return False
+        off = pe + 24 + 70
+        f.seek(off)
+        dc = int.from_bytes(f.read(2), "little")
+        if not (dc & 0x20):
+            return False
+        f.seek(off)
+        f.write((dc & ~0x20).to_bytes(2, "little"))
+        return True
+
+
 def step_link_package(r, repo, install, zig, rtlib, jobs):
     started = r.step("link")
     exe = install / "xc2_boot.exe"
     if exe.is_file():
+        # Clear high-entropy ASLR on existing installs across upgrades without forcing a full Zig relink.
+        if not r.dry and clear_high_entropy_va(exe):
+            r.log("  patched %s: cleared HIGH_ENTROPY_VA" % exe.name)
         # The exe is kept across an upgrade; the DLLs still have to land next to it (issue #2).
         copy_runtime_dlls(r, rtlib.parent, install)
         return r.end_step("link", started, True, "the boot exe is already there")
@@ -705,6 +727,8 @@ def step_link_package(r, repo, install, zig, rtlib, jobs):
              "-I" + str(inc), "-I" + str(stub.parent), str(rtlib), "-o", str(exe)])
     if r.run(argv) != 0:
         return r.end_step("link", started, False, "the exe did not link")
+    if not r.dry and exe.is_file() and clear_high_entropy_va(exe):
+        r.log("  patched %s: cleared HIGH_ENTROPY_VA" % exe.name)
     copy_runtime_dlls(r, rtlib.parent, install)
     finalize_m3_state(r, install)
     return r.end_step("link", started, True)

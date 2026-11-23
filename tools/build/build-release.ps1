@@ -241,6 +241,21 @@ if ($LASTEXITCODE -ne 0) {
     ($o -split "`n") | Where-Object { $_ -match 'error|undefined' } | Select-Object -First 10 | ForEach-Object { Write-Host ('  ' + $_.Trim()) }
     throw 'the exe did not link'
 }
+# Clear HIGH_ENTROPY_VA (0x20) from DllCharacteristics: Zig/LLD leaves high-entropy ASLR enabled by default, which can
+# place bottom-up Windows host allocations inside the guest's [0x2000000000, 0x4000000000) alias window (issue #25).
+$peBytes = [System.IO.File]::ReadAllBytes($exe)
+$peOff = [BitConverter]::ToInt32($peBytes, 0x3C)
+if ($peBytes[$peOff + 24] -eq 0x0B -and $peBytes[$peOff + 25] -eq 0x02) {
+    $dcOff = $peOff + 24 + 70
+    $dc = [BitConverter]::ToUInt16($peBytes, $dcOff)
+    if ($dc -band 0x0020) {
+        $dc = $dc -band (-bnot 0x0020)
+        $dcBytes = [BitConverter]::GetBytes([uint16]$dc)
+        $peBytes[$dcOff] = $dcBytes[0]
+        $peBytes[$dcOff + 1] = $dcBytes[1]
+        [System.IO.File]::WriteAllBytes($exe, $peBytes)
+    }
+}
 Copy-Item -LiteralPath $dll -Destination $OutDir -Force
 Write-Host ("exe: {0:N1} MB + xc2_rt.dll, linked in {1:N0} s -> {2}" -f ((Get-Item $exe).Length / 1MB), $t.Elapsed.TotalSeconds, $OutDir)
 
