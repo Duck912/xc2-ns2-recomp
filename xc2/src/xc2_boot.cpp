@@ -2190,6 +2190,8 @@ int main(int argc, char **argv) {
     // the frame limiter (above) holds it. NXRT_NVN_PRESENT_INTERVAL_HZ=0 turns pacing off, =60 asks for 60.
     if (!nxrt::config_has("nvn", "present_interval_hz")) nxrt::config_set("nvn", "present_interval_hz", "30");
     nxrt::config_set("system", "language", "AmericanEnglish");   // Monolith dev_setting refuses the zh-Hans the host reports
+    // The game's own languages (an older launch.env listed American English, which crashes the Event Theater); env wins over config_set.
+    _putenv_s("NXRT_TITLE_SUPPORTED_LANGUAGES", "Japanese,BritishEnglish,French,German,Italian,Spanish,Chinese,Taiwanese,Korean,SimplifiedChinese,TraditionalChinese");
     nxrt::config_set("system", "region", "USA");
     // F11 (see LiveInput) traces the next frame; with this default the trace also writes every sampled texture's prepared
     // bytes next to the render target dumps (texdump_f11\t<id>.bin/.txt/.raw), so a hands-on bug report carries its own

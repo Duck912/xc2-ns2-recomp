@@ -84,8 +84,7 @@ const SECTIONS = [
       { id: 'log_path', type: 'path', label: 'settings.logPath.label', sec: 'log', key: 'path', def: 'nxrt.log',
         placeholder: 'settings.logPath.placeholder', hint: 'settings.logPath.hint' },
       // The game's own language: it follows the console's, so the value is a Switch code (zh-CN is a Windows locale
-      // The game's own text language. Every value below is one the retail 3.0.1 title lists as supported
-      // (NXRT_TITLE_SUPPORTED_LANGUAGES, written by setup); voice is Japanese and English whatever is chosen.
+      // The game's own text language (AmericanEnglish runs as BritishEnglish). Voice is Japanese and English whatever is chosen.
       { id: 'game_lang', type: 'select', label: 'settings.gameLang.label', sec: 'system', key: 'language', def: 'auto',
         // Order is a statement, not alphabetical: Simplified first, Traditional next, then the two English entries,
         // then Japanese, then the rest. Automatic (follow the Windows language) sits last.
