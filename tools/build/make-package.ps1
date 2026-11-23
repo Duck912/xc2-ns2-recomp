@@ -214,7 +214,9 @@ Copy-Item (Join-Path $root 'tools\shader\patch_ds_samplers.py') (Join-Path $Out 
 # The engine's --nup path runs this with the bundled Python (zstandard is in it), for a player whose dump is a .nup.
 New-Item -ItemType Directory -Force (Join-Path $Out 'tools\analysis') | Out-Null
 Copy-Item (Join-Path $root 'tools\analysis\nup_extract.py') (Join-Path $Out 'tools\analysis') -Force
-Say 'engine        xc2_setup.py + the shader chain + nup_extract.py'
+New-Item -ItemType Directory -Force (Join-Path $Out 'tools\mods') | Out-Null
+Copy-Item (Join-Path $root 'tools\mods\exefs_patch.py') (Join-Path $Out 'tools\mods') -Force
+Say 'engine        xc2_setup.py + the shader chain + nup_extract.py + exefs_patch.py'
 New-Item -ItemType Directory -Force (Join-Path $Out 'xc2\sites') | Out-Null
 Copy-Item (Join-Path $root 'xc2\sites\*.txt') (Join-Path $Out 'xc2\sites') -Force
 New-Item -ItemType Directory -Force (Join-Path $Out 'xc2\src') | Out-Null

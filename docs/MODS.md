@@ -209,6 +209,6 @@ committed.
 | M0.5 | the porting check: `tools/mods/mod_check.py` says, per file, `same` / `differs` / `only-archive` / `absent` | **built** |
 | M1 | a mod folder's `romfs` laid over the game's, load report, `[mods] order` / `[mods] disabled` | **built** (folded into the image tables, `fs_romfs.cpp`) |
 | M1.5 | the emulator layouts, filtered by application id | **built** (`mod_romfs_root()`) |
-| M2 | files inside `bf2.ard`: a mod file becomes a pre-built record (`tools/mods/ard_pack.py`), served at read time | **built (v1)** |
-| M3 | `.pchtxt` / `.ips` applied at Set up | not started |
+| M2 | files inside `bf2.ard`: a mod file becomes a pre-built record (`tools/mods/ard_pack.py`), served at read time; oversized/uncompressed entries go to M2b multi-mod `append.bin` + composed `bf2.arh` | **built** |
+| M3 | `.pchtxt` / `.ips` applied onto an ExeFS copy at Set up (`tools/mods/exefs_patch.py`) | **built** |
 | M4 | the size table, cheats, `mod.json` options | not started |

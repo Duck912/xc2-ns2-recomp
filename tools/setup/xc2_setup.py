@@ -324,12 +324,76 @@ def step_runtime(r, repo):
     return r.end_step("runtime", started, True)
 
 
+def prepare_patched_exefs(r, repo, install):
+    """M3: apply active .pchtxt/.ips mod code patches onto a staging copy (never modifying vanilla exefs).
+
+    Invalidates only modules whose patch state changed since the previous build so Set up incrementally
+    re-lifts and re-links without rebuilding unaffected modules. Returns the ExeFS Path to lift/run with.
+    """
+    vanilla = install / "exefs"
+    mods_dir = install / "mods"
+    patch_mod = repo / "tools" / "mods" / "exefs_patch.py"
+    patched_dir = install / "build" / "exefs-patched"
+    applied_file = install / "build" / "m3_applied.json"
+    if not vanilla.is_dir() or not mods_dir.is_dir() or not patch_mod.is_file():
+        return vanilla
+
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("xc2_exefs_patch", patch_mod)
+    if spec is None or spec.loader is None:
+        return vanilla
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    ini_path = install / "nxrt.ini"
+    state = mod.apply_exefs_patches(vanilla, patched_dir, mods_dir, ini_path=ini_path if ini_path.is_file() else None, dry_run=r.dry)
+    prev = {}
+    if applied_file.is_file():
+        try:
+            prev = json.loads(applied_file.read_text(encoding="utf-8")).get("modules", {})
+        except Exception:
+            prev = {}
+
+    changed = [m for m, h in state.get("modules", {}).items() if prev.get(m, "") != h]
+    if changed and not r.dry:
+        r.log("  m3: code patches changed for: %s" % ", ".join(changed))
+        for m in changed:
+            for stale_dir in (
+                install / "build" / "lift" / m,
+                install / "build" / "obj-zig" / m,
+                repo / "xc2" / "build" / "301" / "lift" / m,
+                repo / "xc2" / "build" / "301" / "obj" / m,
+            ):
+                shutil.rmtree(stale_dir, ignore_errors=True)
+            for stale_file in (
+                repo / "xc2" / "build" / "301" / "lib" / (m + ".lib"),
+            ):
+                try:
+                    stale_file.unlink()
+                except FileNotFoundError:
+                    pass
+        for exe_cand in (install / "xc2_boot.exe", repo / "xc2" / "build" / "301" / "boot" / "xc2_boot.exe"):
+            try:
+                exe_cand.unlink()
+            except FileNotFoundError:
+                pass
+        applied_file.parent.mkdir(parents=True, exist_ok=True)
+        applied_file.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+
+    for entry in state.get("applied", []):
+        r.log("  m3: %s <- %s (%d record(s))" % (entry["module"], entry["source"], entry["records"]))
+    for entry in state.get("unmatched", []):
+        r.log("  m3: skipped %s (build_id %s does not match this dump)" % (entry["source"], entry["build_id"]))
+    return patched_dir if state.get("active") else vanilla
+
+
 def step_lift(r, repo, install, jobs=0):
     started = r.step("lift")
+    exefs_dir = prepare_patched_exefs(r, repo, install)
     lib = repo / "xc2" / "build" / "301" / "lib"
     if all((lib / (m + ".lib")).is_file() for m in MODULES):
         return r.end_step("lift", started, True, "the libraries are already there")
-    argv = pwsh(repo / "tools" / "build" / "build.ps1", "-Exefs", install / "exefs", "-Run:$false",
+    argv = pwsh(repo / "tools" / "build" / "build.ps1", "-Exefs", exefs_dir, "-Run:$false",
                 "-Modules", ",".join(MODULES), "-LiftDir", repo / "xc2" / "build" / "301" / "lift",
                 "-ObjDir", repo / "xc2" / "build" / "301" / "obj", "-LibDir", lib)
     if jobs > 0:
@@ -347,7 +411,9 @@ def step_link(r, repo, install):
     exe = repo / "xc2" / "build" / "301" / "boot" / "xc2_boot.exe"
     if exe.is_file():
         return r.end_step("link", started, True, "the boot exe is already there")
-    rc = r.run(pwsh(repo / "tools" / "build" / "build-boot.ps1", "-Exefs", install / "exefs",
+    patched = install / "build" / "exefs-patched"
+    exefs_dir = patched if (patched / "m3_state.json").is_file() and (patched / "main").is_file() else install / "exefs"
+    rc = r.run(pwsh(repo / "tools" / "build" / "build-boot.ps1", "-Exefs", exefs_dir,
                     "-OutDir", repo / "xc2" / "build" / "301" / "boot", "-LibDir", repo / "xc2" / "build" / "301" / "lib",
                     "-MainLib", repo / "xc2" / "build" / "301" / "lib" / "main.lib", "-Defines", "XC2_MODULES_7"), cwd=repo,
                 on_line=build_progress(r, "link"))
@@ -426,6 +492,7 @@ def step_doctor_package(r, repo, tools):
 
 def step_lift_package(r, repo, install, py, jobs):
     started = r.step("lift")
+    exefs_dir = prepare_patched_exefs(r, repo, install)
     # Build products live with the game, not in the package: a player's install folder is theirs to fill, and the
     # package stays exactly as it was unpacked.
     lift = install / "build" / "lift"
@@ -442,7 +509,7 @@ def step_lift_package(r, repo, install, py, jobs):
         s = sites / ("sites-%s.txt" % m)
         tasks.append({
             "name": m,
-            "input": str(install / "exefs" / m),
+            "input": str(exefs_dir / m),
             "out": str(out),
             "base": BASES[m],
             "sites": str(s) if s.is_file() else None,
@@ -944,7 +1011,9 @@ def prefill_package(r, repo, install, py, harness, spirv, seconds=40, jobs=0):
         "NXRT_FS_SAVE_DIR": str(install / "save"),
     }
     log = install / "setup" / "prefill.log"
-    argv = [str(exe), "--exefs", str(install / "exefs"), "--link", "host", "--gfx", "headless", "--log", str(log)]
+    patched = install / "build" / "exefs-patched"
+    exefs_dir = patched if (patched / "m3_state.json").is_file() and (patched / "main").is_file() else install / "exefs"
+    argv = [str(exe), "--exefs", str(exefs_dir), "--link", "host", "--gfx", "headless", "--log", str(log)]
     r.log("  prefill: the game runs headless for up to %d s to name the blocks no file contains" % seconds)
     full = os.environ.copy()
     full.update(launch_env(install))

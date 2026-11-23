@@ -242,10 +242,16 @@ fn package_command(dir: &Path, exe: &Path) -> Command {
     // The preload pack is read before the loose .spv files, so a pack older than a replaced shader hides the
     // replacement: the project deletes it on every launch for that reason (tools/run/play-301.cmd does the same).
     let _ = std::fs::remove_file(dir.join("shader_cache").join("spirv.preload.pack"));
+    let patched_exefs = dir.join("build").join("exefs-patched");
+    let exefs = if patched_exefs.join("m3_state.json").is_file() && patched_exefs.join("main").is_file() {
+        patched_exefs
+    } else {
+        dir.join("exefs")
+    };
     let mut c = Command::new(exe);
     c.current_dir(dir)
         .arg("--exefs")
-        .arg(dir.join("exefs"))
+        .arg(exefs)
         .arg("--link")
         .arg("host")
         .arg("--gfx")

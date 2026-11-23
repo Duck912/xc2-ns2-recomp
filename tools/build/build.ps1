@@ -22,7 +22,9 @@ param(
     # each other. Relative paths resolve against the directory you run the script from.
     [string]$LiftDir = '',
     [string]$ObjDir = '',
-    [string]$LibDir = ''
+    [string]$LibDir = '',
+    [string]$ModsDir = '',
+    [string]$IniPath = ''
 )
 $ErrorActionPreference = 'Stop'
 $root = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'xc2'   # tools\build -> the checkout's xc2
@@ -68,6 +70,19 @@ Write-Host ("python: " + $py)
 # The lift runs with the nxrecomp directory as the working directory, so a relative -Exefs has to be resolved here,
 # against the directory the caller used.
 if (-not [System.IO.Path]::IsPathRooted($Exefs)) { $Exefs = Join-Path (Get-Location).Path $Exefs }
+
+if ($ModsDir -and (Test-Path $ModsDir)) {
+    $patchedDir = Join-Path $build 'exefs-patched'
+    $patchScript = Join-Path $root '..\tools\mods\exefs_patch.py'
+    $pArgs = @($patchScript, '--exefs', $Exefs, '--mods', $ModsDir, '--out', $patchedDir)
+    if ($IniPath -and (Test-Path $IniPath)) { $pArgs += @('--ini', $IniPath) }
+    $outJson = & $py @pArgs
+    if ($LASTEXITCODE -ne 0) { throw 'M3 ExeFS code patching failed' }
+    if ((Test-Path (Join-Path $patchedDir 'm3_state.json')) -and (Test-Path (Join-Path $patchedDir 'main'))) {
+        $Exefs = $patchedDir
+        Write-Host "m3: using patched ExeFS copy at $Exefs"
+    }
+}
 
 if ($Clean) { Remove-Item -Recurse -Force (Join-Path $build 'obj'), (Join-Path $build 'bin') -ErrorAction SilentlyContinue }
 

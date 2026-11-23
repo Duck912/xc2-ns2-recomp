@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT / "tools" / "mods"))
 import ard_pack  # noqa: E402
 import arh_index  # noqa: E402
 import asset_index  # noqa: E402
+import exefs_patch  # noqa: E402
 import mod_check  # noqa: E402
 
 
@@ -259,6 +260,119 @@ class ArdPackTests(unittest.TestCase):
             self.assertEqual(struct.unpack_from("<QII", out_arh, ent_off)[0], 0x1000)
             self.assertEqual(struct.unpack_from("<QII", out_arh, ent_off + 24)[0], 200000 + len(cn_raw))
             self.assertEqual(struct.unpack_from("<QII", out_arh, ent_off + 48), (200000, len(cn_raw), 0))
+
+
+class ExefsPatchM3Tests(unittest.TestCase):
+    @staticmethod
+    def _make_nso(bid_hex: str, text: bytes, ro: bytes, data: bytes) -> bytes:
+        hdr = bytearray(0x100)
+        hdr[0:4] = b"NSO0"
+        struct.pack_into("<I", hdr, 0x0C, 0x38)  # uncompressed, hash flags set
+        bid = bytes.fromhex(bid_hex.ljust(64, "0"))
+        hdr[0x40:0x60] = bid
+        cursor = 0x100
+        va = 0
+        for i, ((ho, cso), seg) in enumerate(zip(((0x10, 0x60), (0x20, 0x64), (0x30, 0x68)), (text, ro, data))):
+            struct.pack_into("<III", hdr, ho, cursor, va, len(seg))
+            struct.pack_into("<I", hdr, cso, len(seg))
+            import hashlib
+            hdr[0xA0 + i * 0x20 : 0xC0 + i * 0x20] = hashlib.sha256(seg).digest()
+            cursor += len(seg)
+            va += len(seg)
+        return bytes(hdr) + text + ro + data
+
+    def test_parse_pchtxt_and_ips32_formats(self):
+        bid = "8bef68ed1eebc24bf7278040e63b83f6e417e2e2"
+        txt = (
+            "// comment\n"
+            f"@nsobid-{bid}\n"
+            "@flag offset_shift 0x100\n"
+            "00000004 AAAAAAAA // before @enabled, must be ignored\n"
+            "@enabled\n"
+            "00000010 1F 20 03 D5 # ARM64 NOP\n"
+            '00000100 "Hi"\n'
+            "@disabled\n"
+            "00000020 FFFFFFFF\n"
+            "@enabled\n"
+            "@stop\n"
+            "00000030 11223344\n"
+        )
+        p = exefs_patch.parse_pchtxt(txt)
+        self.assertEqual(p["build_id"], bid)
+        self.assertEqual(p["records"], [(0x110, bytes.fromhex("1F2003D5")), (0x200, b"Hi")])
+
+        # IPS32 + RLE record
+        ips32 = (
+            b"IPS32"
+            + struct.pack(">IH", 0x104, 4) + b"\x01\x02\x03\x04"
+            + struct.pack(">IHHB", 0x120, 0, 3, 0xAA)
+            + b"EEOF"
+        )
+        ip = exefs_patch.parse_ips(ips32, build_id_hint=bid)
+        self.assertEqual(ip["records"], [(0x104, b"\x01\x02\x03\x04"), (0x120, b"\xAA\xAA\xAA")])
+
+        # IPS 24-bit
+        ips24 = b"PATCH" + (0x108).to_bytes(3, "big") + struct.pack(">H", 2) + b"\xDE\xAD" + b"EOF"
+        ip2 = exefs_patch.parse_ips(ips24, build_id_hint=bid.ljust(64, "0"))
+        self.assertEqual(ip2["records"], [(0x108, b"\xDE\xAD")])
+
+    def test_apply_patches_priority_sha_and_disable_revert(self):
+        bid = "8bef68ed1eebc24bf7278040e63b83f6e417e2e2"
+        text = bytearray(b"\x00" * 0x40)
+        ro = bytearray(b"hello_world" + b"\x00" * 0x20)
+        data = bytearray(b"\x55" * 0x10)
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            van = tmp / "exefs"
+            out = tmp / "exefs-patched"
+            mods = tmp / "mods"
+            van.mkdir()
+            (van / "main").write_bytes(self._make_nso(bid, bytes(text), bytes(ro), bytes(data)))
+            (van / "sdk").write_bytes(self._make_nso("1111" * 10, b"\x11" * 0x20, b"", b""))
+
+            # ModLow uses atmosphere/exefs_patches layout; ModHigh uses exefs/ + .ips overlapping 0x100..0x104.
+            low_dir = mods / "ModLow" / "atmosphere" / "exefs_patches" / "patchA"
+            high_dir = mods / "ModHigh" / "exefs"
+            low_dir.mkdir(parents=True)
+            high_dir.mkdir(parents=True)
+            (low_dir / "a.pchtxt").write_text(
+                f"@nsobid-{bid}\n@enabled\n00000100 11223344\n00000108 55667788\n",
+                encoding="utf-8",
+            )
+            ips32 = b"IPS32" + struct.pack(">IH", 0x100, 4) + b"\x1F\x20\x03\xD5" + b"EEOF"
+            (high_dir / f"{bid.upper()}.ips").write_bytes(ips32)
+
+            # Non-matching mod should show in unmatched without failing matching patches
+            wrong_dir = mods / "WrongVer" / "exefs"
+            wrong_dir.mkdir(parents=True)
+            (wrong_dir / "old.pchtxt").write_text("@nsobid-" + ("ab" * 20) + "\n@enabled\n00000100 00000000\n", encoding="utf-8")
+
+            ini = tmp / "nxrt.ini"
+            ini.write_text("[mods]\norder = ModHigh, ModLow\ndisabled =\n", encoding="utf-8")
+
+            st = exefs_patch.apply_exefs_patches(van, out, mods, ini_path=ini)
+            self.assertTrue(st["active"])
+            self.assertEqual(len(st["unmatched"]), 1)
+            patched_main = (out / "main").read_bytes()
+            self.assertTrue((out / "sdk").is_file())
+            self.assertTrue((out / "m3_state.json").is_file())
+            # 0x100 gets ModHigh (1F2003D5), 0x108 keeps ModLow (55667788)
+            self.assertEqual(patched_main[0x100:0x104], bytes.fromhex("1F2003D5"))
+            self.assertEqual(patched_main[0x108:0x10C], bytes.fromhex("55667788"))
+            # Segment SHA-256 at 0xA0 matches updated text segment
+            import hashlib
+            t_len = struct.unpack_from("<I", patched_main, 0x18)[0]
+            self.assertEqual(patched_main[0xA0:0xC0], hashlib.sha256(patched_main[0x100 : 0x100 + t_len]).digest())
+
+            # Disabling both matching mods cleans out_exefs back to inactive
+            ini.write_text("[mods]\norder =\ndisabled = ModHigh, ModLow, WrongVer\n", encoding="utf-8")
+            st2 = exefs_patch.apply_exefs_patches(van, out, mods, ini_path=ini)
+            self.assertFalse(st2["active"])
+            self.assertFalse(out.exists())
+
+            # Out-of-bounds offset raises cleanly instead of corrupting
+            with self.assertRaises(ValueError):
+                exefs_patch.patch_nso_bytes((van / "main").read_bytes(), [(0x90000, b"\x00")])
 
 
 class ModCheckAndIndexTests(unittest.TestCase):
