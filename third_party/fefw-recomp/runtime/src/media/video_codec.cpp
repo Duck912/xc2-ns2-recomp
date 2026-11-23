@@ -640,6 +640,19 @@ void after_change(::Ctx* c, Decoder& d, bool fences) {
 bool media_film_active() { return g_film_active.load(std::memory_order_relaxed); }
 int64_t media_film_video_pts() { return g_film_video_pts.load(std::memory_order_relaxed); }
 
+bool media_decoder_has_backlog() {
+    std::vector<std::shared_ptr<Decoder>> decs;
+    {
+        std::lock_guard<std::mutex> lk(g_reg_mu);
+        for (auto& e : g_decoders) decs.push_back(e.second);
+    }
+    for (auto& d : decs) {
+        std::lock_guard<std::mutex> lk(d->mu);
+        if (!d->ready.empty()) return true;
+    }
+    return false;
+}
+
 // Diagnostic for the player trace's stall watchdog (no locks held by the caller): what the decoder holds, and what the client
 // is still armed on. "REACHED" means the picture is in the buffer and our signal never got out; "not reached" means no picture
 // was placed at all; nothing printed means the client is not waiting on a fence - it is waiting on something else entirely.
@@ -1360,6 +1373,7 @@ void worker_loop(Decoder& d) {
     // picture: below normal during loading, the frame arrived 1089 ms after the acquire, the player counted it as late and
     // jumped the film forward (measured 2026-11-21). So: normal priority until a picture exists, below normal after.
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL);
+    if (g_hwdec) ffdec_prewarm();
     bool lowered = false;
     std::unique_lock<std::mutex> lk(d.mu);
     const auto born = std::chrono::steady_clock::now();
@@ -1936,11 +1950,8 @@ bool install_video_codec_hle() {
     const int64_t def_threads = std::min<int64_t>(8, std::max<int64_t>(4, static_cast<int64_t>(std::thread::hardware_concurrency()) / 2));
     g_threads = static_cast<int>(std::clamp<int64_t>(config_get_int("media", "video_decoder_threads", def_threads), 1, 16));
     g_hwdec = config_get_bool("media", "hwdec", true);
-    if (g_hwdec) {
-        // The first film frame used to wait for the D3D11 device to come up (183 ms inside a 213 ms frame on 0.1.4).
-        // Build it now, off the game's threads, so that cost lands in the loading screen instead of in the film.
-        std::thread([] { ffdec_prewarm(); }).detach();
-    }
+    // ffdec_prewarm() is deferred to worker_loop when the first movie decoder is created: running av_hwdevice_ctx_create(VULKAN)
+    // on a detached thread at t=0.001s raced the main thread's gfx::Device::create() inside amdvlk64.dll on RX 9070 XT (#42).
         // Diagnostic: the player drops a frame whose timestamp is more than a frame or so behind its own movie clock, and a software 4K
         // AV1 decode plus the pool->VideoFrame copies put every frame ~85 ms behind, so it dropped all but the first. Reporting the
         // timestamps this much later makes them look on time (at the cost of that much A/V offset).

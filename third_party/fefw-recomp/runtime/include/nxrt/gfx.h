@@ -121,6 +121,7 @@ struct DeviceFeatures {
     bool image_cube_array = false, shader_draw_parameters = false, sampler_mirror_clamp_to_edge = false;
     bool descriptor_indexing = false, host_query_reset = false;
     bool fragment_shader_interlock = false, depth_clip_control = false, depth_clip_enable = false, custom_border_color = false;
+    bool depth_bias_control_force_unorm = false;   // VK_EXT_depth_bias_control (depthBiasControl + leastRepresentableValueForceUnormRepresentation)
     bool early_and_late_fragment_tests_amd = false;
     bool attachment_feedback_loop_layout = false;
     bool extended_dynamic_state3 = false, vertex_input_dynamic_state = false;

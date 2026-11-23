@@ -800,8 +800,8 @@ struct Xc2RenderIntent {
 
 // Resolve effective XC2 render mode & target dimensions:
 // 1. Explicit [xc2] native_res > 0 takes precedence with [xc2] native_w/native_h / [xc2] res_class.
-// 2. Otherwise [upscale] render_quality (native..ultra_performance) maps onto XC2's own rtmgr/DLSS native_res=2 path
-//    unless manual [gfx] render_scale / output_scale overrides are set.
+// 2. When [xc2] native_res == 0 (the default), [upscale] render_quality uses the NVN attachment scaling path in
+//    nvn_gpu_texture.cpp (quality_scales) together with xc2_lock_render_size() (#47).
 static Xc2RenderIntent resolve_xc2_render_intent() {
     static const Xc2RenderIntent resolved = [] {
         Xc2RenderIntent r;
@@ -821,9 +821,6 @@ static Xc2RenderIntent resolve_xc2_render_intent() {
         }();
         const int64_t explicit_mode = nxrt::config_get_int("xc2", "native_res", 0);
         const int64_t explicit_rcls = nxrt::config_get_int("xc2", "res_class", 0);
-        const std::string q_key = nxrt::config_get_str("upscale", "render_quality", "");
-        const nxrt::RenderQualityMode* rq = nxrt::render_quality_mode(q_key.c_str());
-        const bool manual_nvn_scale = nxrt::config_has("gfx", "render_scale") || nxrt::config_has("gfx", "output_scale");
         if (explicit_mode > 0) {
             r.mode = explicit_mode;
             r.rcls = explicit_rcls;
@@ -833,15 +830,6 @@ static Xc2RenderIntent resolve_xc2_render_intent() {
             const int64_t ch = nxrt::config_get_int("xc2", "native_h", 0);
             r.w = cw > 0 ? static_cast<int32_t>(cw) : def_w;
             r.h = ch > 0 ? static_cast<int32_t>(ch) : def_h;
-        } else if (rq && rq->share > 0.0 && !manual_nvn_scale) {
-            // Translate F1 / launcher [upscale] render_quality into XC2's own rtmgr/DLSS native_res=2 scaling instead of NVN
-            // attachment scaling so 640x360/1280x720 storage-image passes never split across 1x/Nx scales (issue #39).
-            r.mode = 2;
-            r.from_quality = true;
-            r.quality_key = rq->key;
-            r.rcls = explicit_rcls > 0 ? explicit_rcls : (am_h > 1440 ? 1 : am_h > 1080 ? 2 : 3);
-            r.w = std::clamp<int32_t>(static_cast<int32_t>(std::llround(static_cast<double>(am_w) * rq->share * 0.5) * 2), 640, am_w);
-            r.h = std::clamp<int32_t>(static_cast<int32_t>(std::llround(static_cast<double>(am_h) * rq->share * 0.5) * 2), 360, am_h);
         } else {
             r.rcls = explicit_rcls;
             r.w = am_w;
@@ -2211,10 +2199,6 @@ int main(int argc, char **argv) {
         const Xc2RenderIntent ri = resolve_xc2_render_intent();
         if (ri.mode > 0 && !nxrt::config_has("gfx", "render_scale") && !nxrt::config_has("gfx", "output_scale")) {
             nxrt::gfx::tuning().game_handles_render_quality.store(true, std::memory_order_relaxed);
-        }
-        // Guard manual NVN scaling ([gfx] render_scale with native_res=0) against split 1x/Nx storage-image passes on XC2 NS2.
-        if (!nxrt::config_has("gfx", "render_scale_min_width")) {
-            nxrt::config_set("gfx", "render_scale_min_width", "1920");
         }
         nxrt::nvn::BackendDesc bd;
         bd.device = gfx_device.get();

@@ -667,6 +667,7 @@ bool Device::init(const DeviceDesc& desc, std::string* error) {
     VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT afsi = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADER_INTERLOCK_FEATURES_EXT};
     VkPhysicalDeviceDepthClipControlFeaturesEXT adcc = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_CLIP_CONTROL_FEATURES_EXT};
     VkPhysicalDeviceDepthClipEnableFeaturesEXT adce = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_CLIP_ENABLE_FEATURES_EXT};
+    VkPhysicalDeviceDepthBiasControlFeaturesEXT adbc = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_BIAS_CONTROL_FEATURES_EXT};
     VkPhysicalDeviceCustomBorderColorFeaturesEXT acbc = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CUSTOM_BORDER_COLOR_FEATURES_EXT};
     VkPhysicalDeviceExtendedDynamicState3FeaturesEXT aeds3 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_3_FEATURES_EXT};
     VkPhysicalDeviceVertexInputDynamicStateFeaturesEXT avids = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_INPUT_DYNAMIC_STATE_FEATURES_EXT};
@@ -691,6 +692,7 @@ bool Device::init(const DeviceDesc& desc, std::string* error) {
     const bool x_fsi = add_ext(VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME, &afsi);
     const bool x_dcc = add_ext(VK_EXT_DEPTH_CLIP_CONTROL_EXTENSION_NAME, &adcc);
     const bool x_dce = add_ext(VK_EXT_DEPTH_CLIP_ENABLE_EXTENSION_NAME, &adce);
+    const bool x_dbc = add_ext(VK_EXT_DEPTH_BIAS_CONTROL_EXTENSION_NAME, &adbc);
     const bool x_cbc = add_ext(VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME, &acbc);
     const bool x_eds3 = add_ext(VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME, &aeds3);
     const bool x_vids = add_ext(VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME, &avids);
@@ -792,6 +794,7 @@ bool Device::init(const DeviceDesc& desc, std::string* error) {
     features_.attachment_feedback_loop_layout = x_fbl && afbl.attachmentFeedbackLoopLayout;
     features_.depth_clip_control = x_dcc && adcc.depthClipControl;
     features_.depth_clip_enable = x_dce && adce.depthClipEnable;
+    features_.depth_bias_control_force_unorm = x_dbc && adbc.depthBiasControl && adbc.leastRepresentableValueForceUnormRepresentation;
     features_.custom_border_color = x_cbc && acbc.customBorderColors && acbc.customBorderColorWithoutFormat;
     features_.extended_dynamic_state3 = x_eds3;
     features_.vertex_input_dynamic_state = x_vids && avids.vertexInputDynamicState;
@@ -820,10 +823,10 @@ bool Device::init(const DeviceDesc& desc, std::string* error) {
     features_.ubo_robustness = (x_prb && aprb.pipelineRobustness) ? (rba2 ? 2 : 1) : 0;   // robustBufferAccess itself is a required feature
     NXLOG_I(kTag, "texture compression on this GPU: BC %s, ASTC-LDR %s, ETC2 %s", features_.bc ? "yes" : "no",
             features_.astc_ldr ? "yes" : "no", features_.etc2 ? "yes" : "no");
-    NXLOG_I(kTag, "features: geometry %d float64 %d int64 %d dualSrc %d logicOp %d multiViewport %d drawParams %d descIndexing %d interlock %d depthClipControl %d customBorder %d hostMemImport %d pushDesc %d uboRobustness %d deviceFault %d",
+    NXLOG_I(kTag, "features: geometry %d float64 %d int64 %d dualSrc %d logicOp %d multiViewport %d drawParams %d descIndexing %d interlock %d depthClipControl %d depthBiasForceUnorm %d customBorder %d hostMemImport %d pushDesc %d uboRobustness %d deviceFault %d",
             features_.geometry_shader, features_.shader_float64, features_.shader_int64, features_.dual_src_blend, features_.logic_op,
             features_.multi_viewport, features_.shader_draw_parameters, features_.descriptor_indexing, features_.fragment_shader_interlock,
-            features_.depth_clip_control, features_.custom_border_color, features_.external_memory_host, features_.push_descriptor,
+            features_.depth_clip_control, features_.depth_bias_control_force_unorm, features_.custom_border_color, features_.external_memory_host, features_.push_descriptor,
             features_.ubo_robustness, adf.deviceFault ? 1 : 0);
     {
         VkPhysicalDeviceExternalMemoryHostPropertiesEXT xh = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_MEMORY_HOST_PROPERTIES_EXT};

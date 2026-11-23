@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstring>
 #include <map>
+#include <set>
 #include <string>
 
 namespace nxrt::nvn::be::gpu {
@@ -1273,9 +1274,9 @@ bool spirv_uint_samplers(const std::vector<uint32_t>& in, const std::vector<SpvS
     }
 
     uint32_t bound = in[3];
-    size_t first_function = 0, first_img_at = 0;
+    size_t first_function = 0, first_img_at = 0, u32_at = 0;
     std::map<uint32_t, uint32_t> sets, bindings;
-    std::map<uint32_t, size_t> img_at;
+    std::map<uint32_t, size_t> img_at, simg_at, ptr_at, var_at;
     std::map<uint32_t, uint32_t> simg_to_img;
     std::map<uint32_t, std::pair<uint32_t, uint32_t>> ptrs;
     std::map<uint32_t, std::pair<uint32_t, uint32_t>> vecs;
@@ -1288,14 +1289,23 @@ bool spirv_uint_samplers(const std::vector<uint32_t>& in, const std::vector<SpvS
             if (w[2] == DecorationDescriptorSetOp) sets[w[1]] = w[3];
             else if (w[2] == DecorationBindingOp) bindings[w[1]] = w[3];
         } else if (n.op == OpTypeFloat && n.len >= 3 && w[2] == 32) f32 = w[1];
-        else if (n.op == OpTypeInt && n.len == 4 && w[2] == 32 && w[3] == 0) u32 = w[1];
-        else if (n.op == OpTypeVector && n.len == 4) vecs[w[1]] = {w[2], w[3]};
+        else if (n.op == OpTypeInt && n.len == 4 && w[2] == 32 && w[3] == 0) {
+            u32 = w[1];
+            u32_at = n.at;
+        } else if (n.op == OpTypeVector && n.len == 4) vecs[w[1]] = {w[2], w[3]};
         else if (n.op == OpTypeImageOp && n.len >= 9) {
             img_at[w[1]] = n.at;
             if (!first_img_at) first_img_at = n.at;
-        } else if (n.op == OpTypeSampledImageOp && n.len == 3) simg_to_img[w[1]] = w[2];
-        else if (n.op == OpTypePointer && n.len == 4) ptrs[w[1]] = {w[2], w[3]};
-        else if (n.op == OpVariable && n.len >= 4 && w[3] == StorageUniformConstant && !first_function) var_ptr[w[2]] = w[1];
+        } else if (n.op == OpTypeSampledImageOp && n.len == 3) {
+            simg_to_img[w[1]] = w[2];
+            simg_at[w[1]] = n.at;
+        } else if (n.op == OpTypePointer && n.len == 4) {
+            ptrs[w[1]] = {w[2], w[3]};
+            ptr_at[w[1]] = n.at;
+        } else if (n.op == OpVariable && n.len >= 4 && w[3] == StorageUniformConstant && !first_function) {
+            var_ptr[w[2]] = w[1];
+            var_at[w[2]] = n.at;
+        }
     }
     if (!first_function || !first_img_at || !f32) return false;
     if (u32) {
@@ -1312,22 +1322,29 @@ bool spirv_uint_samplers(const std::vector<uint32_t>& in, const std::vector<SpvS
         return false;
     };
 
+    std::map<size_t, std::vector<uint32_t>> after_type_decls;
     std::vector<uint32_t> pre_types;
     if (!u32) {
         u32 = bound++;
         pre_types.insert(pre_types.end(), {(4u << 16) | OpTypeInt, u32, 32u, 0u});
+        u32_at = first_img_at;
     }
     if (!v4u) {
         v4u = bound++;
-        pre_types.insert(pre_types.end(), {(4u << 16) | OpTypeVector, v4u, u32, 4u});
+        if (u32_at > first_img_at) {
+            auto& ins = after_type_decls[u32_at];
+            ins.insert(ins.end(), {(4u << 16) | OpTypeVector, v4u, u32, 4u});
+        } else {
+            pre_types.insert(pre_types.end(), {(4u << 16) | OpTypeVector, v4u, u32, 4u});
+        }
         vecs[v4u] = {u32, 4u};
     }
 
-    std::map<std::vector<uint32_t>, uint32_t> created_images;
-    std::map<uint32_t, uint32_t> created_simgs;
-    std::map<std::pair<uint32_t, uint32_t>, uint32_t> created_ptrs;
-    std::map<size_t, std::vector<uint32_t>> after_type_decls;
+    std::map<std::vector<uint32_t>, std::pair<uint32_t, size_t>> created_images;
+    std::map<uint32_t, std::pair<uint32_t, size_t>> created_simgs;
+    std::map<std::pair<uint32_t, uint32_t>, std::pair<uint32_t, size_t>> created_ptrs;
     std::map<uint32_t, uint32_t> var_new_ptr, var_load_ty, var_img_ty;
+    std::set<uint32_t> relocated_vars;
 
     for (const auto& kv : var_ptr) {
         const uint32_t vid = kv.first;
@@ -1347,59 +1364,92 @@ bool spirv_uint_samplers(const std::vector<uint32_t>& in, const std::vector<SpvS
         const std::vector<uint32_t> tail(in.begin() + static_cast<std::ptrdiff_t>(iat + 3),
                                          in.begin() + static_cast<std::ptrdiff_t>(iat + ilen));
         uint32_t new_img = 0;
-        if (auto ci = created_images.find(tail); ci != created_images.end()) new_img = ci->second;
-        else {
+        size_t img_def_at = std::max(iat, u32_at);
+        if (auto ci = created_images.find(tail); ci != created_images.end()) {
+            new_img = ci->second.first;
+            img_def_at = ci->second.second;
+        } else {
             for (const auto& ex : img_at) {
                 const uint32_t ex_len = in[ex.second] >> 16;
                 if (in[ex.second + 2] == u32 && ex_len == ilen &&
                     std::equal(in.begin() + static_cast<std::ptrdiff_t>(ex.second + 3),
                                in.begin() + static_cast<std::ptrdiff_t>(ex.second + ex_len), tail.begin())) {
                     new_img = ex.first;
+                    img_def_at = ex.second;
                     break;
                 }
             }
             if (!new_img) {
                 new_img = bound++;
-                auto& ins = after_type_decls[iat];
+                auto& ins = after_type_decls[img_def_at];
                 ins.push_back((ilen << 16) | OpTypeImageOp);
                 ins.push_back(new_img);
                 ins.push_back(u32);
                 ins.insert(ins.end(), tail.begin(), tail.end());
-                created_images[tail] = new_img;
+                created_images[tail] = {new_img, img_def_at};
             }
         }
 
         uint32_t new_pointee = new_img;
+        size_t pointee_def_at = img_def_at;
         if (sampled) {
             uint32_t new_simg = 0;
-            if (auto cs = created_simgs.find(new_img); cs != created_simgs.end()) new_simg = cs->second;
-            else {
-                for (const auto& ex : simg_to_img) if (ex.second == new_img) { new_simg = ex.first; break; }
+            if (auto cs = created_simgs.find(new_img); cs != created_simgs.end()) {
+                new_simg = cs->second.first;
+                pointee_def_at = cs->second.second;
+            } else {
+                for (const auto& ex : simg_to_img) {
+                    if (ex.second == new_img) {
+                        new_simg = ex.first;
+                        pointee_def_at = std::max(pointee_def_at, simg_at[ex.first]);
+                        break;
+                    }
+                }
                 if (!new_simg) {
                     new_simg = bound++;
-                    auto& ins = after_type_decls[iat];
+                    auto& ins = after_type_decls[pointee_def_at];
                     ins.insert(ins.end(), {(3u << 16) | OpTypeSampledImageOp, new_simg, new_img});
-                    created_simgs[new_img] = new_simg;
+                    created_simgs[new_img] = {new_simg, pointee_def_at};
                 }
             }
             new_pointee = new_simg;
         }
 
         uint32_t new_ptr = 0;
+        size_t ptr_def_at = pointee_def_at;
         const std::pair<uint32_t, uint32_t> pk = {storage, new_pointee};
-        if (auto cp = created_ptrs.find(pk); cp != created_ptrs.end()) new_ptr = cp->second;
-        else {
-            for (const auto& ex : ptrs) if (ex.second == pk) { new_ptr = ex.first; break; }
+        if (auto cp = created_ptrs.find(pk); cp != created_ptrs.end()) {
+            new_ptr = cp->second.first;
+            ptr_def_at = cp->second.second;
+        } else {
+            for (const auto& ex : ptrs) {
+                if (ex.second == pk) {
+                    new_ptr = ex.first;
+                    ptr_def_at = std::max(ptr_def_at, ptr_at[ex.first]);
+                    break;
+                }
+            }
             if (!new_ptr) {
                 new_ptr = bound++;
-                auto& ins = after_type_decls[iat];
+                auto& ins = after_type_decls[ptr_def_at];
                 ins.insert(ins.end(), {(4u << 16) | OpTypePointer, new_ptr, storage, new_pointee});
-                created_ptrs[pk] = new_ptr;
+                created_ptrs[pk] = {new_ptr, ptr_def_at};
             }
         }
         var_new_ptr[vid] = new_ptr;
         var_load_ty[vid] = new_pointee;
         var_img_ty[vid] = new_img;
+        const size_t vat = var_at[vid];
+        if (vat <= ptr_def_at) {
+            relocated_vars.insert(vid);
+            const uint32_t vlen = in[vat] >> 16;
+            auto& ins = after_type_decls[ptr_def_at];
+            ins.push_back(in[vat]);
+            ins.push_back(new_ptr);
+            ins.insert(ins.end(),
+                       in.begin() + static_cast<std::ptrdiff_t>(vat + 2),
+                       in.begin() + static_cast<std::ptrdiff_t>(vat + vlen));
+        }
     }
     if (var_new_ptr.empty()) return false;
 
@@ -1448,6 +1498,12 @@ bool spirv_uint_samplers(const std::vector<uint32_t>& in, const std::vector<SpvS
 
     for (const Inst& n : insts) {
         if (n.at == first_img_at && !pre_types.empty()) out.insert(out.end(), pre_types.begin(), pre_types.end());
+        if (n.op == OpVariable && n.len >= 4 && relocated_vars.count(in[n.at + 2])) {
+            if (auto dt = after_type_decls.find(n.at); dt != after_type_decls.end()) {
+                out.insert(out.end(), dt->second.begin(), dt->second.end());
+            }
+            continue;
+        }
         const size_t at = out.size();
         out.insert(out.end(), in.begin() + static_cast<std::ptrdiff_t>(n.at), in.begin() + static_cast<std::ptrdiff_t>(n.at + n.len));
         if (n.op == OpVariable && n.len >= 4) {

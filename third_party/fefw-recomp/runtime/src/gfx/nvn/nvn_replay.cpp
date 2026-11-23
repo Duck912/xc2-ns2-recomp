@@ -3456,7 +3456,23 @@ const int ff_mode = std::clamp(hot_int("front_face", ff_cfg), 0, 3);   // live: 
                           (mode == NVN_POLYGON_MODE_LINE && (off & NVN_POLYGON_OFFSET_ENABLE_LINE)) ||
                           (mode == NVN_POLYGON_MODE_POINT && (off & NVN_POLYGON_OFFSET_ENABLE_POINT));
         vkCmdSetDepthBiasEnable(cb, bias);
-        vkCmdSetDepthBias(cb, S.bias_units, device().features().depth_bias_clamp ? S.bias_clamp : 0.0f, S.bias_factor);
+        const float clamp = device().features().depth_bias_clamp ? S.bias_clamp : 0.0f;
+        // On D32_SFLOAT_S8_UINT targets, NVIDIA scales depthBiasConstantFactor by the floating-point exponent at each fragment's Z
+        // unless VK_DEPTH_BIAS_REPRESENTATION_LEAST_REPRESENTABLE_VALUE_FORCE_UNORM_EXT is requested, producing shadow-map self-shadowing
+        // stripes on RTX GPUs (#44). Fall back to vkCmdSetDepthBias when the driver or GPU does not support VK_EXT_depth_bias_control.
+        if (device().features().depth_bias_control_force_unorm && vkCmdSetDepthBias2EXT) {
+            VkDepthBiasRepresentationInfoEXT rep = {VK_STRUCTURE_TYPE_DEPTH_BIAS_REPRESENTATION_INFO_EXT};
+            rep.depthBiasRepresentation = VK_DEPTH_BIAS_REPRESENTATION_LEAST_REPRESENTABLE_VALUE_FORCE_UNORM_EXT;
+            rep.depthBiasExact = VK_FALSE;
+            VkDepthBiasInfoEXT info = {VK_STRUCTURE_TYPE_DEPTH_BIAS_INFO_EXT};
+            info.pNext = &rep;
+            info.depthBiasConstantFactor = S.bias_units;
+            info.depthBiasClamp = clamp;
+            info.depthBiasSlopeFactor = S.bias_factor;
+            vkCmdSetDepthBias2EXT(cb, &info);
+        } else {
+            vkCmdSetDepthBias(cb, S.bias_units, clamp, S.bias_factor);
+        }
     }
     if (dirty & kDynBlend) vkCmdSetBlendConstants(cb, S.blend_color);
 }
