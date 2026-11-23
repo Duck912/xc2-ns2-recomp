@@ -985,7 +985,6 @@ int update_hook(::Ctx*, uint64_t, void*) {
         for (size_t i = 0; i < got; ++i) handle_event(buf[i], now);
     }
     poll_pads(now);
-    nxrt::cheats::tick();
     const GamePlay* gp = game_play();
     if (gp && gp->frame_begin) gp->frame_begin();
     if (st.engine) st.engine->frame_tick();

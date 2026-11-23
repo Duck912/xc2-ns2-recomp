@@ -1,8 +1,6 @@
-# Mods (interface draft)
+# Mods
 
-Status: **draft, not implemented.** The launcher creates `mods\` and the setup engine writes its path into
-`nxrt.ini`, but nothing in the runtime reads it yet. This file is the contract we will build against; treat
-everything below as the design, not as behaviour you can rely on today.
+Conventions for installing, ordering, and configuring mods (RomFS, archives, ExeFS code patches, and DMNT cheats). M0–M4 are implemented across `tools/mods/`, the runtime (`fs_romfs.cpp`, `cheats.cpp`), and the launcher (**Mods** page).
 
 The conventions are deliberately the ones the Switch emulators and the closest port to this one already use
 ([TotK Recomp's mods guide](https://github.com/valentderah/totk-pc-recomp/blob/main/docs/mods.md)), so a mod made

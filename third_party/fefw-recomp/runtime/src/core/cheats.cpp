@@ -29,6 +29,10 @@ struct State {
     std::mutex mu;
     RuntimeConfig cfg{};
     std::vector<CheatProgram> programs;
+    std::string nso_bid;
+    uint64_t nso_text_end = 0;
+    uint64_t pending_main_base = 0;
+    bool pending_config_load = false;
     bool initialized = false;
     bool warned_unsafe = false;
 };
@@ -590,11 +594,22 @@ void load_from_mods_dir(
     }
 }
 
-void init_from_config(uint64_t main_base) {
+void register_main_nso(const std::string& build_id, uint64_t text_end) {
+    State& st = state();
+    std::lock_guard<std::mutex> lk(st.mu);
+    st.nso_bid = to_lower(build_id);
+    st.nso_text_end = text_end;
+}
+
+static void load_from_config_locked(uint64_t main_base) {
     const std::string mods_str = config_get_str("fs", "mods", "");
     if (mods_str.empty()) return;
     const std::string exefs_str = config_get_str("fs", "exefs", "");
     auto [bid, text_end] = exefs_str.empty() ? std::pair<std::string, uint64_t>{"", 0} : read_main_exefs_info(exefs_str);
+
+    State& st = state();
+    if (bid.empty()) bid = st.nso_bid;
+    if (text_end == 0) text_end = st.nso_text_end;
 
     RuntimeConfig cfg;
     cfg.main_base = main_base ? main_base : nxrt::mem::kMainBase;
@@ -604,7 +619,63 @@ void init_from_config(uint64_t main_base) {
 
     const auto disabled = split_csv(config_get_str("mods", "disabled", ""));
     const auto pending = split_csv(config_get_str("mods", "pending_rebuild", ""));
-    load_from_mods_dir(std::filesystem::path(mods_str), bid, cfg, disabled, pending);
+    st.cfg = cfg;
+    st.programs.clear();
+    st.initialized = true;
+    st.pending_config_load = false;
+
+    std::error_code ec;
+    const std::filesystem::path mods_dir(mods_str);
+    if (!std::filesystem::is_directory(mods_dir, ec)) return;
+    const auto enabled_map = read_cheats_enabled_tsv(mods_dir);
+    if (enabled_map.empty()) return;
+
+    for (const auto& [mod_name, titles] : enabled_map) {
+        if (list_has(disabled, mod_name)) continue;
+        if (list_has(pending, mod_name)) {
+            NXLOG_W(kTag, "cheats: %s held off until Set up rebuilds code patches", mod_name.c_str());
+            continue;
+        }
+        const std::filesystem::path mod_dir = mods_dir / mod_name;
+        if (!std::filesystem::is_directory(mod_dir, ec)) continue;
+        std::set<std::filesystem::path> seen;
+        for (const auto& root : cheat_roots_for_mod(mod_dir)) {
+            std::vector<std::filesystem::path> files;
+            for (const auto& e : std::filesystem::directory_iterator(root, ec)) {
+                if (e.is_regular_file(ec) && to_lower(e.path().extension().string()) == ".txt") {
+                    files.push_back(e.path());
+                }
+            }
+            std::sort(files.begin(), files.end());
+            for (const auto& fp : files) {
+                const std::string stem = fp.stem().string();
+                if (!cheat_bid_matches(stem, bid)) continue;
+                const auto canon = std::filesystem::weakly_canonical(fp, ec);
+                if (!seen.insert(canon).second) continue;
+                std::ifstream in(fp, std::ios::binary);
+                if (!in) continue;
+                const std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+                auto progs = parse_txt_filtered(mod_name, content, cfg.main_text_end, titles);
+                st.programs.insert(st.programs.end(), std::make_move_iterator(progs.begin()), std::make_move_iterator(progs.end()));
+            }
+        }
+    }
+    if (!st.programs.empty()) {
+        NXLOG_I(kTag, "loaded %zu active runtime cheat(s) from %s (text_end=0x%llx)",
+                st.programs.size(), mods_str.c_str(), static_cast<unsigned long long>(text_end));
+    }
+}
+
+void init_from_config(uint64_t main_base) {
+    State& st = state();
+    std::lock_guard<std::mutex> lk(st.mu);
+    st.pending_main_base = main_base;
+    st.pending_config_load = true;
+    st.initialized = false;
+    st.programs.clear();
+    if (!st.nso_bid.empty() && st.nso_text_end > 0) {
+        load_from_config_locked(main_base);
+    }
 }
 
 void tick_with_buttons(uint64_t held_buttons) {
@@ -616,6 +687,13 @@ void tick_with_buttons(uint64_t held_buttons) {
 }
 
 void tick() {
+    {
+        State& st = state();
+        std::lock_guard<std::mutex> lk(st.mu);
+        if (st.pending_config_load && !st.initialized) {
+            load_from_config_locked(st.pending_main_base);
+        }
+    }
     uint64_t held = 0;
     if (auto src = nxrt::hid::input_source()) {
         nxrt::hid::InputSnapshot snap{};

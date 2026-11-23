@@ -7,6 +7,7 @@
 #include <mutex>
 #include <vector>
 
+#include "nxrt/cheats.h"
 #include "nxrt/config.h"
 #include "nxrt/diag.h"
 #include "nxrt/extras.h"
@@ -133,6 +134,7 @@ void present_on_render_thread(Window* w, int index, bool again) {
     // A movie's pictures go to the player here as well as in its own calls: a player that waits on the output event is then woken by
     // the frame loop instead of depending on a signal only its previous call could have sent (the Switch 1 port's movie_tick).
     { NXFT("present.movie_tick"); media::movie_tick(); }
+    if (!again) { NXFT("present.cheats"); nxrt::cheats::tick(); }
     if (!rend || !pp) return;
     { NXFT("present.tex"); if (!tex_gpu(t)) return; }
     extras::pace_note_present();

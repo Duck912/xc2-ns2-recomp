@@ -44,6 +44,9 @@ void load_from_mods_dir(
 // Reads `[fs] mods`, `[fs] exefs`, `[mods] disabled`, `[mods] pending_rebuild` from nxrt config and loads cheats once.
 void init_from_config(uint64_t main_base = 0);
 
+// Records the mapped `main` NSO build_id and `.text` end offset directly from nso.cpp (used when `--exefs` is passed on CLI without `[fs] exefs`).
+void register_main_nso(const std::string& build_id, uint64_t text_end);
+
 // Executes all loaded cheat programs once using `held_buttons` (nn::hid::NpadButton bits) and active region bases.
 void tick_with_buttons(uint64_t held_buttons);
 
