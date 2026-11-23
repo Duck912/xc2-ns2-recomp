@@ -7,8 +7,9 @@ You need your own dump: the ExeFS of the 3.0.1 program and its romfs. No game da
 ## Requirements
 
 - Windows 10 or later, x86-64 with AVX2
-- a GPU with Vulkan 1.3 (`VK_EXT_external_memory_host`); tested on an AMD RDNA 2 card only (the development
-  machine has one), NVIDIA and Intel untested
+- a GPU with Vulkan 1.3 (`VK_EXT_external_memory_host`); primary development & verification is on **AMD RDNA 2**
+  (Radeon RX 6800 XT). NVIDIA and Intel GPUs have limited coverage and open issues (for example, `#32` boss freeze
+  on NVIDIA, `#39` 3D rendering, and `#25`/`#33` setup/startup reports) — check open issues before assuming parity
 - 16 GB of RAM; the 3.0.1 romfs alone is 25.6 GB, and the build needs roughly as much again for the generated
   C++ and objects, so keep about 60 GB free during the build
 - your own copy of the game and its 3.0.1 update
@@ -56,6 +57,12 @@ Ryzen 7 5800X + Radeon RX 6800 XT, Adrenalin 26.10.1, 1440p window:
   work in pull requests 19 and 27 captures per submission (verified on an RX 6800 XT, 2026-11-22).
 - **First run compiles pipelines**: about 22 seconds with no frame, then it never happens again.
 - **Slow frames on area transitions** (texture uploads and memory-pool imports), not in steady play.
-- **Two shader patches are not distributed** (they are derived from the game's own shaders), so a build made from
-  this repository alone keeps two fog/UV defects that the maintainer's build fixes. The fog-probe templates and the
-  generators written against them are the same kind of material and are kept out of the repository too.
+- **Shader cache & NVIDIA validation state**: stencil-plane sampler fixes (`VUID-vkCmdDrawIndexed-format-07753`) are
+  reproduced automatically on the player's own shader cache by
+  [`tools/shader/patch_ds_samplers.py`](../tools/shader/patch_ds_samplers.py). The earlier froxel volumetric-fog
+  workaround (`2649526f56d9b5b6`) was retired on 2026-11-17 because the underlying cause was resolved. Only one minor
+  per-shader NVIDIA validation-layer mismatch tweak (`87d073eae1cc6f14` location-1 output type) remains unautomated
+  and is documented in [`tools/shader/PATCHES.md`](../tools/shader/PATCHES.md).
+- **Lv. 130 Tyrannotitan Kurodil freeze on NVIDIA ([#32](https://github.com/weile10000/xc2-ns2-recomp/issues/32))**:
+  reproduces on NVIDIA GPUs around a high-concurrency draw (`fs be528292f3d04f1b`) and triggers a driver TDR; open for
+  investigation.

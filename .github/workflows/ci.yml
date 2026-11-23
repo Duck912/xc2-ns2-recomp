@@ -84,6 +84,11 @@ jobs:
           fi
           python3 tools/ci/check_invariants.py --hook
 
+      - name: Run Python tool unit tests
+        run: |
+          set -eu
+          python3 -m unittest discover -s tools/tests -p "test_*.py" -v
+
       - name: No loose ExeFS under xc2/game
         run: |
           set -eu

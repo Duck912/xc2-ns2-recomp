@@ -1,13 +1,13 @@
 # Modifications to fefw-recomp
 
-This directory is a **modified fork** of [Goldoire/fefw-recomp](https://github.com/Goldoire/fefw-recomp),
-vendored into the Xenoblade Chronicles 2 NS2E recomp project. Upstream base and provenance: [UPSTREAM.md](UPSTREAM.md).
+This directory is a **modified fork** of `Goldoire/fefw-recomp` (the original GitHub repository now returns **404 / removed**; this vendored copy is preserved and maintained self-contained inside the Xenoblade Chronicles 2 NS2E recomp project). Upstream base and provenance: [UPSTREAM.md](UPSTREAM.md).
 
 | | |
 |---|---|
-| upstream | https://github.com/Goldoire/fefw-recomp |
+| upstream | `Goldoire/fefw-recomp` *(GitHub repo removed / 404; vendored fork preserved here)* |
 | licence | GPL-3.0-or-later (see [LICENSE](LICENSE) and [LEGAL.md](LEGAL.md)) |
 | fork base commit in this repository | `6f1d964` (2026-11-12, baseline: 26 rounds of XC2 NS2 recomp) |
+| unused upstream directory | `third_party/fefw-recomp/launcher/` is kept strictly as an upstream reference snapshot and is **deprecated/unused** — the active XC2 launcher lives in the repository root `launcher/` |
 | files changed since the base | 125 |
 | generated from | `git diff --name-only 6f1d964..HEAD -- third_party/fefw-recomp` |
 
@@ -21,6 +21,9 @@ vendored into the Xenoblade Chronicles 2 NS2E recomp project. Upstream base and 
 
 | `file` | date | change |
 |---|---|---|
+| `runtime/src/services/fs_romfs.cpp` | 2026-11-23 | fix `RomfsImage::build()` (`ard_index` / `ard_at` / `ard_real_size` on rebuild), `ard_tail` appended archive reads, and multi-chunk `serve_ard()` locking |
+| `runtime/tests/test_svc_fs_romfs.cpp` | 2026-11-23 | add `romfs_mods_m2_and_m2b_archive_override` regression test for M2/M2b archive layering |
+| `UPSTREAM.md` / `README.md` / `MODIFICATIONS.md` | 2026-11-23 | note removed upstream GitHub repo (`Goldoire/fefw-recomp`, 404) and mark `third_party/fefw-recomp/launcher/` as unused upstream snapshot |
 | `runtime/include/nxrt/render_quality.h` | 2026-11-23 | new: `[upscale] render_quality` modes (`native`, `quality`, `balanced`, `performance`, `ultra_performance`, `console`) and their implied scale ratios (shared by runtime and F1 menu) |
 | `runtime/include/nxrt/symbols.h` | 2026-11-22 | guest names: symbols_load_guest_names[_text], symbols_guest_count, symbols_describe_guest (the map's f_<guest VA> entries named from the lift's dynsym) |
 | `runtime/src/diag/symbols.cpp` | 2026-11-22 | guest names: the map's f_<guest VA> entries take the lift's name; symbols_describe_guest matches the exact function start, not the nearest preceding export |
