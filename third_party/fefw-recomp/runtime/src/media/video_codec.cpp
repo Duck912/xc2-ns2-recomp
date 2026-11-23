@@ -70,6 +70,7 @@ namespace nxrt::media {
 void player_trace_new_film();   // movie_trace.cpp: reset this film's stall-dump budget and clock
 void player_trace_eos();        // movie_trace.cpp: the marker is out; re-arm the dump for what happens after it
 void movie_adec_film_end();     // movie_adec.cpp: this placeholder track ends with the picture, not on its own
+void movie_adec_video_advanced(); // movie_adec.cpp: wake any decoder waiting on the video-PTS gate
 }
 
 #if NXRT_HAVE_LIBVPX
@@ -513,7 +514,10 @@ std::atomic<int64_t> g_film_video_pts{0};
 void place(Pool& pool, uint32_t index, const Picture& p) {
     pool.w = p.w;
     pool.h = p.h;
-    if (p.pts > g_film_video_pts.load(std::memory_order_relaxed)) g_film_video_pts.store(p.pts, std::memory_order_relaxed);
+    if (p.pts > g_film_video_pts.load(std::memory_order_relaxed)) {
+        g_film_video_pts.store(p.pts, std::memory_order_relaxed);
+        movie_adec_video_advanced();
+    }
     const size_t pw = pool.w, ph = pool.h;
     std::vector<uint8_t>& image = pool.img(index);
     image.assign(pw * ph + pw * ph / 2, 0);

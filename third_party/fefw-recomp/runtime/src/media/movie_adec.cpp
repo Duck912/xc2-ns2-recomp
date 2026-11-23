@@ -107,6 +107,7 @@ struct AudioDecoder {
     bool eos_sent = false;
     bool eos_acquired = false;  // the client actually popped an AudioFrame carrying the end flag
     bool finalized = false;
+    bool gated = false;         // held back by the audio-ahead-of-picture gate; resume when video_pts advances
     uint64_t last_delivered = 0;   // the frame handed out last: the one that carries the flag when the film ends
     uint64_t last_acquired = 0;    // the frame handed to the client most recently
     bool warned_packet = false;
@@ -123,6 +124,7 @@ struct AudioDecoder {
 
 std::mutex g_reg_mu;
 std::vector<AudioDecoder*> g_reg;
+std::atomic<bool> g_any_gated{false};
 
 // One line a second while the film's audio is in use: the queues that decide whether the player still gets its rhythm.
 // Ungated on purpose - [media] video_decoder_log changes the timing this is meant to measure (2026-11-21).
@@ -439,9 +441,15 @@ void deliver_sound(AudioDecoder& d) {
     // It must not run ahead of the picture: while the loading screen starves the picture thread for seconds, an audio clock
     // that kept going made the player skip the picture forward to catch up with it - "stalls 3-5 s, then jumps into the
     // middle" (measured 2026-11-21).
+    d.gated = false;
     const int64_t video_pts = media_film_video_pts();
+    // Allow 1.0 s lead (above the ~0.55 s AudioOut startup pre-roll) so startup buffering never trips the gate
+    // on frame 0/1 while still preventing multi-second runaway jumps during loading stalls.
+    constexpr int64_t kAudioGateAheadNs = 1'000'000'000ll;
     while (!d.sound.empty() && !d.free_.empty()) {
-        if (d.sound.front().time > video_pts + 500'000'000ll) {       // more than half a second ahead of the picture
+        if (d.sound.front().time > video_pts + kAudioGateAheadNs) {
+            d.gated = true;
+            g_any_gated.store(true, std::memory_order_release);
             // Say it out loud when the gate bites: it is the one place where the film's clock is deliberately held back, and a
             // gate that stays closed stops the player from being handed sound at all - which stops it feeding the picture too
             // (2026-11-22).
@@ -750,6 +758,19 @@ void movie_adec_film_end() {
         }
     }
     for (AudioDecoder* d : to_signal) signal_output_ready(*d);
+}
+
+// Wakes any audio decoder whose delivery stopped at the video-PTS gate as soon as a new picture lands.
+void movie_adec_video_advanced() {
+    if (!g_any_gated.exchange(false, std::memory_order_acq_rel)) return;
+    std::lock_guard<std::mutex> g(g_reg_mu);
+    bool still_gated = false;
+    for (AudioDecoder* d : g_reg) {
+        std::lock_guard<std::mutex> lk(d->mu);
+        if (!d->finalized && d->gated) deliver_sound(*d);
+        still_gated = still_gated || (!d->finalized && d->gated);
+    }
+    if (still_gated) g_any_gated.store(true, std::memory_order_release);
 }
 
 }  // namespace nxrt::media
