@@ -28,7 +28,7 @@ HDR = 0x30
 
 
 def load_catalog(path):
-    """name (lower case) -> the smallest record: (offset, unc, comp, checksum)."""
+    """name (lower case) -> list of (offset, unc, comp, checksum) records."""
     out = {}
     with path.open(encoding="utf-8") as f:
         for row in csv.DictReader(f, delimiter="\t"):
@@ -39,16 +39,21 @@ def load_catalog(path):
                 rec = (int(row["offset"] or 0), int(row["unc"] or 0), int(row["comp"] or 0), int(row["checksum"] or 0))
             except ValueError:
                 continue
-            if name not in out or rec[2] < out[name][2]:
-                out[name] = rec
+            out.setdefault(name, []).append(rec)
     return out
 
 
 def build_header(orig48, unc, comp):
-    h = bytearray(orig48[:HDR])
+    h = bytearray(orig48[:HDR].ljust(HDR, b"\x00"))
     struct.pack_into("<I", h, 0x08, unc)
     struct.pack_into("<I", h, 0x0C, comp)
     return bytes(h)
+
+
+def build_xbc1_header(name, unc, comp, checksum):
+    """Build a 48-byte (0x30) xbc1 record header matching tools/shader/cache/ard_index.py."""
+    name_bytes = name.encode("utf-8")[:27]
+    return struct.pack("<4sIIII28s", b"xbc1", 1, unc, comp, checksum, name_bytes)
 
 
 def append_record(out_dir, header_payload, tail_off):
@@ -67,6 +72,16 @@ def patch_index(arh_bytes, orig_offset, new_offset, comp, unc):
     The entry carries offset at +0, comp at +8 and unc at +12 (measured: the font record's entry holds 0xef6fe090,
     96723 and 942194). The rest of the entry - flags and a serial - is left alone.
     """
+    if len(arh_bytes) >= 0x24 and arh_bytes[:4] == b"arh1":
+        ent_off, ent_count = struct.unpack_from("<II", arh_bytes, 0x1C)
+        end = min(len(arh_bytes) - 23, ent_off + ent_count * 24)
+        for pos in range(ent_off, end, 24):
+            o, c, u = struct.unpack_from("<QII", arh_bytes, pos)
+            if o == orig_offset and 0 < c <= u:
+                out = bytearray(arh_bytes)
+                struct.pack_into("<QII", out, pos, new_offset, comp, unc)
+                return bytes(out), pos
+        return None
     needle = struct.pack("<Q", orig_offset)
     at = -1
     start = 0
@@ -129,12 +144,17 @@ def main(argv=None):
     for p in sorted(x for x in root.rglob("*") if x.is_file()):
         rel = p.relative_to(root).as_posix()
         key = rel.lower()
-        rec = catalog.get(key)
-        if rec is None:
+        recs = catalog.get(key)
+        if not recs:
             missing += 1
             report.append({"file": rel, "status": "not-in-archive"})
             continue
-        offset, unc, comp, checksum = rec
+        uncs = {r[1] for r in recs}
+        if len(uncs) > 1:
+            too_big += 1
+            report.append({"file": rel, "status": "multi-part", "parts": len(recs), "sizes": sorted(uncs)})
+            continue
+        offset, unc, comp, checksum = min(recs, key=lambda r: r[2])
         data = p.read_bytes()
         if len(data) == unc:
             same += 1
@@ -154,24 +174,32 @@ def main(argv=None):
                 too_big += 1
                 report.append({"file": rel, "status": "comp-gt-unc", "zlib": len(z), "unc": len(data)})
                 continue
-            header = build_header(struct.pack("<4sIIIII", b"xbc1", 1, len(data), len(z), checksum, 0), len(data), len(z))
+            header = build_xbc1_header(rel, len(data), len(z), checksum)
             record = header + z
-            append_record(out_dir, record, tail_off)
-            append_pos += len(record)
-            patched = patch_index(arh, offset, new_off, len(z), len(data))
-            if patched is None:
+            entries = []
+            patched_arh = arh
+            for r_off, _, _, _ in recs:
+                patched = patch_index(patched_arh, r_off, new_off, len(z), len(data))
+                if patched is None:
+                    entries = []
+                    break
+                patched_arh = patched[0]
+                entries.append(patched[1])
+            if not entries:
                 too_big += 1
                 report.append({"file": rel, "status": "index-entry-not-found", "offset": offset})
                 continue
-            arh = patched[0]
+            append_record(out_dir, record, tail_off)
+            append_pos += len(record)
+            arh = patched_arh
             written += 1
-            report.append({"file": rel, "status": "appended", "zlib": len(z), "at": new_off, "entry": patched[1]})
+            report.append({"file": rel, "status": "appended", "zlib": len(z), "at": new_off, "entries": entries})
             continue
         if a.dry_run:
             written += 1
             report.append({"file": rel, "status": "dry-run-ok", "zlib": len(z), "room": comp})
             continue
-        header = build_header(struct.pack("<4sIIIII", b"xbc1", 1, unc, comp, checksum, 0), len(data), comp)
+        header = build_xbc1_header(rel, len(data), comp, checksum)
         payload = z + bytes(comp - len(z))
         out = out_dir / (key + ".rec")
         out.parent.mkdir(parents=True, exist_ok=True)

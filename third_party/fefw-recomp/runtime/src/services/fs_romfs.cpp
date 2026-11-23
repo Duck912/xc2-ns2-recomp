@@ -767,9 +767,13 @@ struct RomfsImage::Impl {
     // tools/mods/ard_pack.py compresses a mod file into the record the game expects (header + zlib padded to the
     // original comp), because the runtime has no zlib. Here we only slice it: the game asks for 0x30 bytes at a record
     // offset, then for the comp it read from that header, and both land in the same .rec at the same relative offsets.
+    struct ArdRec {
+        std::wstring path;
+        uint64_t size = 0;
+    };
     size_t ard_index = static_cast<size_t>(-1);          // the file index of bf2.ard, when the romfs holds one
     std::map<std::string, std::wstring> ard_recs;         // lower-case logical name -> <mod>/.ard/<name>.rec
-    mutable std::map<uint64_t, std::wstring> ard_at;      // record offset -> .rec, learned when its header is read
+    mutable std::map<uint64_t, ArdRec> ard_at;            // record offset -> .rec + byte size, learned when its header is read
     std::wstring ard_tail;                               // bytes past the real archive, served from a mod's append.bin
     uint64_t ard_tail_size = 0;
     uint64_t ard_real_size = 0;                          // the on-disk archive size, before growning for the tail
@@ -777,9 +781,17 @@ struct RomfsImage::Impl {
 
     static constexpr uint64_t kArdHeader = 0x30;
 
-    bool read_rec(const std::wstring& path, uint64_t at, uint8_t* dst, uint64_t len) const {
+    bool read_rec(const std::wstring& path, uint64_t at, uint8_t* dst, uint64_t len, uint64_t* file_size = nullptr) const {
         HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (h == INVALID_HANDLE_VALUE) return false;
+        if (file_size) {
+            LARGE_INTEGER sz{};
+            if (!GetFileSizeEx(h, &sz) || sz.QuadPart < 0) {
+                CloseHandle(h);
+                return false;
+            }
+            *file_size = static_cast<uint64_t>(sz.QuadPart);
+        }
         LARGE_INTEGER li;
         li.QuadPart = static_cast<LONGLONG>(at);
         bool ok = SetFilePointerEx(h, li, nullptr, FILE_BEGIN) != 0;
@@ -793,38 +805,40 @@ struct RomfsImage::Impl {
 
     bool serve_ard(uint64_t off, uint8_t* dst, uint64_t len) const {
         if (ard_index == static_cast<size_t>(-1) || ard_recs.empty()) return false;
-        // The payload read starts 0x30 bytes past a record whose header was already served.
-        if (off >= kArdHeader) {
-            std::lock_guard<std::mutex> lk(ard_mu);
-            auto it = ard_at.find(off - kArdHeader);
-            if (it != ard_at.end()) return read_rec(it->second, kArdHeader, dst, len);
-        }
-        std::wstring rec;
+        std::wstring hit_path;
+        uint64_t hit_rel = 0;
         {
             std::lock_guard<std::mutex> lk(ard_mu);
-            auto it = ard_at.find(off);
-            if (it != ard_at.end()) rec = it->second;
-        }
-        if (rec.empty()) {
-            uint8_t hdr[kArdHeader];
-            if (!read_host(static_cast<uint32_t>(ard_index), off, hdr, kArdHeader)) return false;
-            if (std::memcmp(hdr, "xbc1", 4) != 0) return false;
-            std::string name;
-            for (size_t i = 0x14; i < kArdHeader && hdr[i] != 0; ++i) name.push_back(static_cast<char>(hdr[i]));
-            std::string low = name;
-            for (char& c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            auto it = ard_recs.find(low);
-            if (it == ard_recs.end()) return false;
-            rec = it->second;
-            {
-                std::lock_guard<std::mutex> lk(ard_mu);
-                ard_at[off] = rec;
+            auto it = ard_at.upper_bound(off);
+            if (it != ard_at.begin()) {
+                --it;
+                const uint64_t rel = off - it->first;
+                if (rel < it->second.size && rel + len <= it->second.size) {
+                    hit_path = it->second.path;
+                    hit_rel = rel;
+                }
             }
-            static std::atomic<uint32_t> logged{0};
-            if (logged.fetch_add(1, std::memory_order_relaxed) < 200)
-                NXLOG_I("mods", "mods: ard: %s served from a mod record", name.c_str());
         }
-        return read_rec(rec, 0, dst, len);
+        if (!hit_path.empty()) return read_rec(hit_path, hit_rel, dst, len);
+        uint8_t hdr[kArdHeader];
+        if (!read_host(static_cast<uint32_t>(ard_index), off, hdr, kArdHeader)) return false;
+        if (std::memcmp(hdr, "xbc1", 4) != 0) return false;
+        std::string name;
+        for (size_t i = 0x14; i < kArdHeader && hdr[i] != 0; ++i) name.push_back(static_cast<char>(hdr[i]));
+        std::string low = name;
+        for (char& c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        auto it = ard_recs.find(low);
+        if (it == ard_recs.end()) return false;
+        ArdRec hit{it->second, 0};
+        if (!read_rec(hit.path, 0, dst, len, &hit.size)) return false;
+        {
+            std::lock_guard<std::mutex> lk(ard_mu);
+            ard_at[off] = hit;
+        }
+        static std::atomic<uint32_t> logged{0};
+        if (logged.fetch_add(1, std::memory_order_relaxed) < 200)
+            NXLOG_I("mods", "mods: ard: %s served from a mod record", name.c_str());
+        return true;
     }
 };
 
@@ -841,15 +855,19 @@ bool RomfsImage::build(const std::string& host_dir, std::string* err) {
     p_->ard_recs = std::move(p_->l.ard_recs);
     p_->ard_tail = std::move(p_->l.ard_tail);
     p_->ard_tail_size = p_->l.ard_tail_size;
-    p_->ard_real_size = 0;
-    if (ok && p_->ard_index != static_cast<size_t>(-1)) {
-        // The real size is the grown size minus the tail; the on-disk file stops there.
-        p_->ard_real_size = p_->l.files[p_->ard_index].size - p_->ard_tail_size;
-    }
     p_->ard_index = static_cast<size_t>(-1);
+    p_->ard_real_size = 0;
+    {
+        std::lock_guard<std::mutex> ard_lk(p_->ard_mu);
+        p_->ard_at.clear();
+    }
     if (ok) {
         auto it = p_->l.by_path.find("/bf2.ard");
-        if (it != p_->l.by_path.end()) p_->ard_index = it->second;
+        if (it != p_->l.by_path.end()) {
+            p_->ard_index = it->second;
+            // The real size is the grown size minus the tail; the on-disk file stops there.
+            p_->ard_real_size = p_->l.files[p_->ard_index].size - p_->ard_tail_size;
+        }
     }
     return ok;
 }
@@ -884,30 +902,38 @@ bool RomfsImage::read(uint64_t offset, void* dst, uint64_t len) const {
     while (len > 0) {
         const Segment& g = L.segs[i];
         const uint64_t within = offset - g.off;
-        const uint64_t n = std::min(len, g.len - within);
+        uint64_t n = std::min(len, g.len - within);
+        bool advance = true;
         switch (g.kind) {
             case Segment::Kind::kHeader: std::memcpy(out, L.header.data() + g.src + within, n); break;
             case Segment::Kind::kTables: std::memcpy(out, L.tables.data() + g.src + within, n); break;
             case Segment::Kind::kZero: std::memset(out, 0, n); break;
             case Segment::Kind::kFile:
                 p_->note_read(g.file);
-                if (g.file == p_->ard_index && !p_->ard_recs.empty() && p_->serve_ard(g.src + within, out, n)) break;
-                if (g.file == p_->ard_index && p_->ard_tail_size > 0 && g.src + within >= p_->ard_real_size) {
-                    const uint64_t at = g.src + within - p_->ard_real_size;
-                    if (at + n > p_->ard_tail_size || !p_->read_rec(p_->ard_tail, at, out, n)) return false;
-                    static std::atomic<uint32_t> tail_logged{0};
-                    if (tail_logged.fetch_add(1, std::memory_order_relaxed) < 8)
-                        NXLOG_I("mods", "mods: ard: tail read at +0x%llx, %llu byte(s)", static_cast<unsigned long long>(at),
-                                static_cast<unsigned long long>(n));
-                    break;
+                if (g.file == p_->ard_index && p_->ard_tail_size > 0) {
+                    const uint64_t file_off = g.src + within;
+                    if (file_off >= p_->ard_real_size) {
+                        const uint64_t at = file_off - p_->ard_real_size;
+                        if (at + n > p_->ard_tail_size || !p_->read_rec(p_->ard_tail, at, out, n)) return false;
+                        static std::atomic<uint32_t> tail_logged{0};
+                        if (tail_logged.fetch_add(1, std::memory_order_relaxed) < 8)
+                            NXLOG_I("mods", "mods: ard: tail read at +0x%llx, %llu byte(s)", static_cast<unsigned long long>(at),
+                                    static_cast<unsigned long long>(n));
+                        break;
+                    }
+                    if (file_off + n > p_->ard_real_size) {
+                        n = p_->ard_real_size - file_off;
+                        advance = false;
+                    }
                 }
+                if (g.file == p_->ard_index && !p_->ard_recs.empty() && p_->serve_ard(g.src + within, out, n)) break;
                 if (!p_->read_host(g.file, g.src + within, out, n)) return false;
                 break;
         }
         out += n;
         offset += n;
         len -= n;
-        i++;
+        if (advance) i++;
     }
     return true;
 }

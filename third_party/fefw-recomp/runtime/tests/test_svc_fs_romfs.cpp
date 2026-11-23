@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "../src/services/fs_romfs.h"
+#include "nxrt/config.h"
 #include "test_framework.h"
 
 NXTEST_GROUP(svc_fs_romfs)
@@ -777,4 +778,83 @@ NXTEST(romfs_from_nup_package) {
         REQUIRE(o.load());
         o.check_layout(2, 2);
     }
+}
+
+namespace {
+std::vector<uint8_t> make_xbc1(const char* name, uint32_t unc, uint32_t comp, const std::vector<uint8_t>& payload) {
+    std::vector<uint8_t> out(0x30 + payload.size(), 0);
+    auto put32 = [&](size_t o, uint32_t v) { for (int i = 0; i < 4; i++) out[o + i] = static_cast<uint8_t>(v >> (8 * i)); };
+    std::memcpy(out.data(), "xbc1", 4);
+    put32(0x04, 1);
+    put32(0x08, unc);
+    put32(0x0C, comp);
+    put32(0x10, 0x12345678u);
+    const size_t n = std::min<size_t>(std::strlen(name), 27);
+    std::memcpy(out.data() + 0x14, name, n);
+    std::memcpy(out.data() + 0x30, payload.data(), payload.size());
+    return out;
+}
+}  // namespace
+
+NXTEST(romfs_mods_m2_and_m2b_archive_override) {
+    TempTree t;
+    const auto rom = t.root / "romfs";
+    const auto mods = t.root / "mods";
+    const auto m2mod = mods / "M2Test";
+    std::error_code ec;
+    std::filesystem::create_directories(rom, ec);
+    std::filesystem::create_directories(m2mod / "romfs", ec);
+    std::filesystem::create_directories(m2mod / ".ard", ec);
+
+    // Host bf2.ard: record 0 ("font_binary2.txt", 48+64 bytes) followed by record 1 ("other.dat", 48+64 bytes).
+    std::vector<uint8_t> rec0_van = make_xbc1("font_binary2.txt", 200, 64, pattern(64, 10));
+    std::vector<uint8_t> rec1_van = make_xbc1("other.dat", 120, 64, pattern(64, 20));
+    std::vector<uint8_t> ard_van = rec0_van;
+    ard_van.insert(ard_van.end(), rec1_van.begin(), rec1_van.end());
+    { std::ofstream(long_path(rom / "bf2.ard"), std::ios::binary).write(reinterpret_cast<const char*>(ard_van.data()), ard_van.size()); }
+
+    // M2 override (.rec) + M2b tail (append.bin).
+    std::vector<uint8_t> rec0_mod = make_xbc1("font_binary2.txt", 300, 64, pattern(64, 99));
+    std::vector<uint8_t> tail_mod = make_xbc1("big_tex.dds", 500, 80, pattern(80, 77));
+    { std::ofstream(long_path(m2mod / ".ard" / "font_binary2.txt.rec"), std::ios::binary).write(reinterpret_cast<const char*>(rec0_mod.data()), rec0_mod.size()); }
+    { std::ofstream(long_path(m2mod / ".ard" / "append.bin"), std::ios::binary).write(reinterpret_cast<const char*>(tail_mod.data()), tail_mod.size()); }
+
+    struct ConfigGuard {
+        ~ConfigGuard() { nxrt::config_clear(); }
+    } cg;
+    nxrt::config_set("fs", "romfs", utf8(rom).c_str());
+    nxrt::config_set("fs", "mods", utf8(mods).c_str());
+
+    RomfsImage img;
+    REQUIRE(build_from(rom, img));
+
+    uint64_t ard_off = 0, ard_sz = 0;
+    REQUIRE(img.file_extent("/bf2.ard", &ard_off, &ard_sz));
+    CHECK_EQ(ard_sz, ard_van.size() + tail_mod.size());
+
+    // Vanilla record 1 (< ard_real_size) must still be readable when append.bin is present.
+    std::vector<uint8_t> got_rec1(rec1_van.size());
+    REQUIRE(img.read(ard_off + rec0_van.size(), got_rec1.data(), got_rec1.size()));
+    CHECK(got_rec1 == rec1_van);
+
+    // M2 .rec: header read + split multi-chunk payload reads must all come from the .rec file.
+    std::vector<uint8_t> got_hdr(0x30), got_p1(32), got_p2(32);
+    REQUIRE(img.read(ard_off, got_hdr.data(), 0x30));
+    REQUIRE(img.read(ard_off + 0x30, got_p1.data(), 32));
+    REQUIRE(img.read(ard_off + 0x30 + 32, got_p2.data(), 32));
+    std::vector<uint8_t> got_rec0 = got_hdr;
+    got_rec0.insert(got_rec0.end(), got_p1.begin(), got_p1.end());
+    got_rec0.insert(got_rec0.end(), got_p2.begin(), got_p2.end());
+    CHECK(got_rec0 == rec0_mod);
+
+    // M2b append.bin: direct tail read + read spanning the real/tail boundary.
+    std::vector<uint8_t> got_tail(tail_mod.size());
+    REQUIRE(img.read(ard_off + ard_van.size(), got_tail.data(), got_tail.size()));
+    CHECK(got_tail == tail_mod);
+
+    std::vector<uint8_t> got_span(rec1_van.size() + tail_mod.size());
+    REQUIRE(img.read(ard_off + rec0_van.size(), got_span.data(), got_span.size()));
+    std::vector<uint8_t> want_span = rec1_van;
+    want_span.insert(want_span.end(), tail_mod.begin(), tail_mod.end());
+    CHECK(got_span == want_span);
 }
