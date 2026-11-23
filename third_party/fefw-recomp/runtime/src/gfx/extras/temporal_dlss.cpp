@@ -112,9 +112,7 @@ sl::float4x4 mat(const float* cm) {   // column-major column-vector matrix -> St
     return m;
 }
 
-// [dlss] preset = default (the driver's per-mode choice) | J | K | L | M: the DLSS model (A-D are gone from the SDK, E-I and N-O
-// deprecated or reverting to default); J and K for every mode, L and M for Performance / Ultra Performance only (options()). Live:
-// set_dlss_preset_live (the F1 page) applies it on the next evaluation.
+// [dlss] preset: default | J | K (any mode) | L | M (Performance / Ultra Performance only). Switchable live.
 std::atomic<int> g_dlss_preset{-1};          // -1: not read yet; else a sl::DLSSPreset value
 std::atomic<uint32_t> g_dlss_preset_epoch{0};
 int parse_dlss_preset(std::string v) {

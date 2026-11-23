@@ -763,9 +763,7 @@ static void arm_frame_rate(uint64_t main_base) {
     }).detach();
 }
 
-// The dynamic-resolution lock (the ladder held at its top rung, 1280x720): a 3D render quality other than the console's
-// ([upscale] render_quality, nxrt/render_quality.h) scales the game's targets from that fixed size, so it implies the lock; without one
-// (or with the console mode) the launcher's [upscale] lock_render_size decides, as before.
+// The dynamic-resolution lock: any render quality but the console's implies it; otherwise [upscale] lock_render_size decides.
 static bool xc2_lock_render_size() {
     static const bool on = [] {
         const nxrt::RenderQualityMode* m = nxrt::render_quality_mode(nxrt::config_get_str("upscale", "render_quality", "").c_str());

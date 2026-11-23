@@ -1,9 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! The DLSS files from NVIDIA. The runtime runs DLSS (and DLSS frame generation, Reflex) through NVIDIA Streamline, whose DLLs are not
-//! part of the release package: this downloads NVIDIA's own Streamline SDK release from GitHub - the version the runtime's headers are
-//! (runtime/third_party/nvidia_streamline/README.txt) - checks its size and SHA-256, and puts the DLLs the game loads, with NVIDIA's
-//! licence texts, into upscalers/streamline next to the game, where the runtime and the file check (main.rs upscaler_files) look.
-//! Only the files below are kept; the rest of the SDK (headers, samples, debug builds) and the zip are removed afterwards.
+//! Downloads NVIDIA's Streamline SDK release, verifies it, and keeps only the DLLs and licences the game needs in upscalers/streamline.
 
 use serde::Serialize;
 use std::fs;

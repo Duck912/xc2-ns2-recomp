@@ -788,8 +788,7 @@ void xfb_end_in_pass() {
     g_xfb_slot_written[g_xfb_cur] = true;
 }
 
-// Feedback copies (feedback_prepare): bumped whenever a render pass ends and at every game barrier. A copy made in one epoch serves the
-// later draws of that epoch that sample the same attachment.
+// Bumped when a render pass ends and at every game barrier: a feedback copy is reused only within its epoch.
 uint64_t g_fb_epoch = 1;
 
 // GPU pass profiler: closes the interval since the previous stamp under this label (no-op unless [prof] gpu_passes).
@@ -1382,10 +1381,8 @@ struct FbClone {
     uint64_t epoch = 0;                                    // g_fb_epoch when the copy was made (0: none current)
     uint64_t serial = 0;                                   // and in which submission
 };
-// [nvn] fb_copy_reuse (default on): draws that sample their own colour attachment share one copy until the render pass after it ends or
-// the game issues a barrier, instead of a copy (and a pass restart) per draw. On the console a draw sees what earlier draws wrote into
-// the texture it samples only after a texture barrier, so between two barriers the copy holds what a well-defined read can see.
-// Uraya's water and effects made hundreds of copies a frame at 4K (~7 ms of GPU time). 0: a copy per draw, as before.
+// [nvn] fb_copy_reuse: self-sampling draws share one copy until the pass ends or a game barrier (the console needs a barrier to see
+// earlier writes anyway). 0: a copy per draw.
 bool fb_copy_reuse() {
     static const bool on = nxrt::config_get_bool("nvn", "fb_copy_reuse", true);
     return on;

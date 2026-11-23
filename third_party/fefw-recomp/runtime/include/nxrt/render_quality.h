@@ -1,10 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// [upscale] render_quality: the 3D render quality the F1 page and the launcher store as intent. The runtime derives the scales from it
-// at start-up (the scene set's [gfx] render_scale, the output side's [gfx] output_scale, the dynamic-resolution lock), so nothing that
-// depends on the output resolution ([am] resolution) is stored and can go stale when another tool changes that resolution.
-//
-// XC2 NS2 renders its 3D scene into a 1280x720 set and upscales into a 1920x1080 set: the output side scales to the output height
-// (out_h / 1080), the scene to that height times the mode's share (out_h * share / 720), and the upscaler picks its mode from the ratio.
+// [upscale] render_quality: stored as intent; the scene and output scales are derived from it and the output height at start-up.
 #pragma once
 
 #include <cstring>

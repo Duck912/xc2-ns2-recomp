@@ -228,18 +228,14 @@ struct FpsSettings {
 };
 
 // ---- 3D game resolution & upscaler (synced with nxrt.ini: [am], [xc2], [dlss], [upscale]) ----
-// The 3D render quality (Game3dSettings::res_preset): the upscaler's input as a share of the output height (play.cpp). The last entry,
-// share 0, is the console's own dynamic resolution (no scaling, no lock).
-// The table is the runtime's (nxrt/render_quality.h): the runtime derives the scales from the same [upscale] render_quality.
+// The 3D render quality table (nxrt/render_quality.h); the last entry is the console's own dynamic resolution.
 using RenderQuality = nxrt::RenderQualityMode;
 inline constexpr const RenderQuality* kRenderQuality = nxrt::kRenderQualityModes;
 inline constexpr int kRenderQualityCount = nxrt::kRenderQualityModeCount;
 int render_output_height();   // [am] resolution's height (the output the share is of), else 1080
 
 struct Game3dSettings {
-    // The 3D render quality: the upscaler's input as a share of the output (play.cpp kRenderQuality), the output being the window's
-    // height ([am] resolution). Written as [upscale] render_quality + the [gfx] render_scale / output_scale it implies; restart.
-    // 0 native (DLAA / 100%), 1 Quality (67%), 2 Balanced (58%), 3 Performance (50%), 4 Ultra Performance (33%), 5 console default.
+    // Index into kRenderQuality: 0 native (DLAA) .. 4 Ultra Performance, 5 console. Saved as [upscale] render_quality; restart.
     int res_preset = 5;
     std::string upscaler = "fsr3";      // "dlss" | "fsr3" | "taau" | "bilinear"
     std::string fsr_version = "3.1";    // "3.1" | "4.1" | "2.3"

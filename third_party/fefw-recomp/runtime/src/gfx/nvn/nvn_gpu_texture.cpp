@@ -711,9 +711,7 @@ TexGpu* tex_or_null(Texture* t, float want_scale = 1.0f) {
 // The resolution scale: the game's play settings ([display] render_scale, turned into a factor by the game module and handed over in
 // gfx::tuning) or, for tests, [gfx] render_scale (a number, NXRT_GFX_RENDER_SCALE), which wins. Fixed once known: images keep their size.
 // Stays 1 (not fixed) until one of them is there.
-// [upscale] render_quality (nxrt/render_quality.h), when set, decides both scales from [am] resolution's height (the output): the stored
-// intent, so a resolution changed elsewhere (the launcher) cannot leave the scales of another output behind. [gfx] render_scale /
-// output_scale are for an ini without it.
+// [upscale] render_quality, when set, decides both scales from [am] resolution's height.
 struct QualityScales { bool set = false; float scene = 1.0f, out = 1.0f; const char* key = ""; int out_h = 0; };
 const QualityScales& quality_scales() {
     static const QualityScales q = [] {
@@ -761,11 +759,8 @@ float render_scale_now() {
     return sc;
 }
 
-// [gfx] output_scale (default: render_scale): the scale of the render targets at least [gfx] output_min_width (default 1920) wide - the
-// game's output side (in XC2 NS2 the 1920x1080 set the upscaler writes and the post chain reads) - while the narrower targets (the
-// 1280x720 scene set) keep render_scale. With both, the upscaler's input and output sizes are set apart: a 4K window takes output_scale
-// 2 and render_scale 3 / 2 / 1.74 / 1.5 / 1 for DLAA / Quality / Balanced / Performance / Ultra Performance (the upscaler picks its mode
-// from the ratio). Fixed once read, like render_scale.
+// [gfx] output_scale (default: render_scale): scale of targets at least output_min_width wide (the output side); narrower ones keep
+// render_scale, so the upscaler's input and output sizes can differ. Fixed once read.
 float output_scale_now() {
     static const float out = [] {
         if (quality_scales().set) {   // [upscale] render_quality decides it (the console mode: 1)
@@ -794,12 +789,7 @@ float attachment_scale(const Texture& t) {
     if (scene == 1.0f && out == 1.0f) return 1.0f;
     static const int out_min = static_cast<int>(nxrt::config_get_int("gfx", "output_min_width", 1920));
     float sc = t.b.width >= out_min ? out : scene;
-    // The output scale takes the 1080-line output set to the output's height (output scale x 1080 lines); a taller target on that side
-    // is drawn at the output's height. XC2 NS2 makes its final image in a 3840x2160 set of its own: at a 4K output a plain x2 drew it
-    // at 7680x4320 (~2 GB more video memory, and the 8K passes) only for the window to shrink it back to 4K, and at a 1440p or 1080p
-    // output the set at its own 4K was shrunk the same way. With [upscale] render_quality the output height is known ([am] resolution)
-    // and the set gets exactly that (smaller than its own size below a 4K output); with only [gfx] output_scale it is never enlarged
-    // past output scale x 1080 lines nor made smaller than its own size.
+    // Output-side targets taller than 1080 lines (XC2's own 4K set) are drawn at the output height, not scaled past it.
     if (t.b.width >= out_min && t.b.height > 1080) {
         const float h = static_cast<float>(t.b.height);
         if (quality_scales().set)

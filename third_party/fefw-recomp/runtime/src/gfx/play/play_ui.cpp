@@ -139,9 +139,7 @@ constexpr const char* kGame3dUpEn[] = {
 };
 constexpr int kGame3dUpCount = static_cast<int>(sizeof kGame3dUpZh / sizeof kGame3dUpZh[0]);
 
-// [dlss] preset: the DLSS model (temporal_dlss.cpp). K is the transformer default for DLAA / Quality / Balanced, J is K with less
-// ghosting and more flicker. L and M (the Performance / Ultra Performance models, which Default already picks there) stay ini-only:
-// offered here they read as quality modes, and on DLAA they drew black lines across the picture.
+// DLSS models offered in F1. L / M stay ini-only (Default picks them where they apply; on DLAA they drew black lines).
 constexpr const char* kDlssPresetKeys[] = {"default", "K", "J"};
 constexpr const char* kDlssPresetZh[] = {"默认 (由驱动按模式选择)", "模型 K (Transformer，推荐)", "模型 J (Transformer，拖影更少)"};
 constexpr const char* kDlssPresetEn[] = {"Default (driver picks per mode)", "Model K (transformer, recommended)", "Model J (transformer, less ghosting)"};
@@ -909,9 +907,7 @@ void tab_graphics(const LiveStatus& live, Page& p, float bottom_h) {
             }
             ImGui::TextDisabled("%s", line);
         }
-        // A hint, not a gate: the 100% step at a 4K output renders the scene at 3840x2160, and the mirror capture's copies (up to ~3.5 GiB
-        // when it is on) come on top of it. Measured on a 4060 Laptop (8 GB): the capture asked for 1989 of the 3584 MiB it wanted, so this
-        // is the combination that runs out of video memory first, and the DLC scenes are the ones that get there. The player can still pick it.
+        // A hint, not a gate: native 4K plus the capture's copies is what runs out of video memory first on small cards.
         if (g3d.res_preset == 0 && render_output_height() >= 2160 && nvn::mirror_device_vram() < (10ull << 30)) {
             ImGui::PushStyleColor(ImGuiCol_Text, kGold);
             ImGui::TextWrapped("%s", tr("注意：这台显卡的显存不到 10 GB，4K 会与 mirror capture 的拷贝（约 3.5 GiB）叠加，"
@@ -1509,9 +1505,7 @@ void draw_settings_menu(UiHost& host, gfx::Overlay& ov) {
         const float quit_w = px(104.0f);
         const float right_x = ImGui::GetWindowContentRegionMax().x;
         ImGui::SameLine(std::max(px(260.0f), right_x - close_w - lang_w - quit_w - px(18.0f)));
-        // Quit game: play mode's own exit (exit_process: pending settings saved, the pipeline cache written, the log flushed), after a
-        // confirmation - a stray click must not end a session. On a thread of its own: this runs inside the menu's frame on the render
-        // thread, and exit_process takes the settings lock the menu may hold.
+        // Quit game (confirmed): play mode's own exit, on its own thread since exit_process takes locks the menu may hold.
         if (ImGui::Button(tr("退出游戏", "Quit game"), ImVec2(quit_w, 0.0f))) ImGui::OpenPopup("##quit_confirm");
         if (ImGui::BeginPopupModal("##quit_confirm", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar)) {
             ImGui::TextUnformatted(tr("退出游戏？上次存档之后的进度将会丢失。", "Quit the game? Progress since your last save is lost."));

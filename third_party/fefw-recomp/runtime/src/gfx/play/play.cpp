@@ -344,13 +344,7 @@ void publish_live_pad_config(const PadSettings& p) {
     st.pad_cfg_rumble_scale.store(static_cast<float>(std::clamp(p.rumble_scale, 0.0, 1.0)), std::memory_order_relaxed);
 }
 
-// The 3D render quality of the F1 page (Game3dSettings::res_preset): the upscaler's input as a share of its output. XC2 NS2 renders its
-// scene into a 1280x720 set and upscales into a 1920x1080 set; with the dynamic resolution locked ([upscale] lock_render_size) the
-// runtime scales the two sets apart ([gfx] render_scale for the scene, [gfx] output_scale for the output, nvn_gpu_texture.cpp), so the
-// output lands at the window's height and the input at that times the share - and DLSS / FSR pick their mode from the ratio. Measured
-// against [xc2] native_res (2026-11-22, RTX 5090, 4K): that path held its 3840x2160 target only on the first frame (1080p..1440p after,
-// Performance mode, oversized depth-of-field bokeh); this one renders the chosen size every frame. native_res stays for the ini.
-// The table (kRenderQuality) is in play_types.h: the F1 page names the modes and shows the size each one renders.
+// The F1 render quality: the upscaler's input as a share of the output height (table in nxrt/render_quality.h).
 }  // namespace
 
 // The output height the quality is a share of: [am] resolution (the console mode the game renders for, the window's size), else 1080.

@@ -315,10 +315,7 @@ NVNwindowAcquireTextureResult acquire_texture(be::Window* w, NVNsync* sync, int*
     // immediately after nvnWindowAcquireTexture returns and only wait on the acquire sync right before
     // submitting; returning early lets the CPU overwrite live GPU UBOs/VBs in flight.
     // Release w->lock first because present_on_render_thread() acquires w->lock while completing the slot.
-    // [nvn] acquire_wait = auto (default) | on | off. auto skips the wait while [nvn] mirror_capture is on: every submission then reads
-    // the CPU's bytes as they were at its submit call, so overwriting the rings early cannot reach work in flight, and the wait only took
-    // the game's frame lead ([nvn] present_ahead) away - in XC2 NS2's Torigoth 55 fps instead of 60, the game threads blocked here while
-    // the GPU had headroom.
+    // [nvn] acquire_wait = auto | on | off. auto skips the wait while mirror_capture is on (submissions own their bytes; the wait only cost fps).
     static const bool wait_on = [] {
         const std::string v = nxrt::config_get_str("nvn", "acquire_wait", "auto");
         const bool on = v == "auto" ? !be::gpu::mirror_capture_on() : nxrt::config_get_bool("nvn", "acquire_wait", true);
