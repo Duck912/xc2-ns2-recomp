@@ -6653,6 +6653,10 @@ void trace_dump_targets() {
     // The snapshot copies were recorded into the submission that just ended: read their buffers back only after the GPU has run it.
     // Without this the mapped memory still holds zeroes or an older frame - what looked like "t50 changes after a draw that does not
     // write it" (HANDOVER 33.6).
+    if (!g_trace_snaps.empty() || !g_trace_targets.empty()) {
+        std::error_code ec;
+        std::filesystem::create_directories("work/trace", ec);
+    }
     if (!g_trace_snaps.empty()) finish();
     for (const TraceSnap& sn : g_trace_snaps) {
         std::string stats;
