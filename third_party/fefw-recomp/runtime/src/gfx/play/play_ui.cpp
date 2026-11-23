@@ -393,9 +393,24 @@ struct PaneState {
     float bottom_reserve = 0.0f;
     bool held = false;
     bool focus_first = false;
+    bool rows_focused = false;
+    ImGuiID rows_step_owner = 0;
 };
 
 PaneState g_pane;
+
+constexpr ImGuiKey kCardStepKeys[] = {
+    ImGuiKey_LeftArrow, ImGuiKey_RightArrow,
+    ImGuiKey_GamepadDpadLeft, ImGuiKey_GamepadDpadRight,
+    ImGuiKey_GamepadLStickLeft, ImGuiKey_GamepadLStickRight,
+};
+
+void lock_rows_step_keys(ImGuiID owner_id) {
+    if (owner_id == 0) return;
+    for (ImGuiKey k : kCardStepKeys) {
+        ImGui::SetKeyOwner(k, owner_id, ImGuiInputFlags_LockThisFrame);
+    }
+}
 
 void record_desc(const char* title, const char* body, bool restart, bool live, bool hov, bool foc) {
     DescInfo d;
@@ -414,9 +429,11 @@ void pane_begin(const char* id, float bottom_reserve) {
     g_pane.hover.valid = false;
     g_pane.focus.valid = false;
     g_pane.first.valid = false;
+    g_pane.rows_focused = false;
     ImVec2 avail = ImGui::GetContentRegionAvail();
     avail.y = std::max(px(120.0f), avail.y - bottom_reserve);
     ImGui::PushID(id);
+    g_pane.rows_step_owner = ImGui::GetID("##rows_step_owner");
     ImGui::BeginChild("##rows_pane", ImVec2(avail.x * 0.59f, avail.y), ImGuiChildFlags_NavFlattened);
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, px(7.0f)));
 }
@@ -573,18 +590,23 @@ int draw_card_raw(const char* id, const char* label, const char* value, const ch
 
     int step = (clicked && !disabled) ? 2 : 0;
     g_pane.held = false;
-    if (foc && !disabled) {
-        static const ImGuiKey kStepKeys[] = {ImGuiKey_LeftArrow, ImGuiKey_RightArrow, ImGuiKey_GamepadDpadLeft, ImGuiKey_GamepadDpadRight};
-        for (ImGuiKey k : kStepKeys) {
-            ImGui::SetKeyOwner(k, item_id, ImGuiInputFlags_LockThisFrame);
-            if (ImGui::GetKeyData(k)->DownDuration > 0.7f) g_pane.held = true;
+    if (foc) {
+        g_pane.rows_focused = true;
+        const ImGuiID owner_id = g_pane.rows_step_owner ? g_pane.rows_step_owner : item_id;
+        lock_rows_step_keys(owner_id);
+        if (!disabled) {
+            for (ImGuiKey k : kCardStepKeys) {
+                if (ImGui::GetKeyData(k)->DownDuration > 0.7f) g_pane.held = true;
+            }
+            if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, ImGuiInputFlags_Repeat, owner_id) ||
+                ImGui::IsKeyPressed(ImGuiKey_GamepadDpadLeft, ImGuiInputFlags_Repeat, owner_id) ||
+                ImGui::IsKeyPressed(ImGuiKey_GamepadLStickLeft, ImGuiInputFlags_Repeat, owner_id))
+                step = -1;
+            if (ImGui::IsKeyPressed(ImGuiKey_RightArrow, ImGuiInputFlags_Repeat, owner_id) ||
+                ImGui::IsKeyPressed(ImGuiKey_GamepadDpadRight, ImGuiInputFlags_Repeat, owner_id) ||
+                ImGui::IsKeyPressed(ImGuiKey_GamepadLStickRight, ImGuiInputFlags_Repeat, owner_id))
+                step = 1;
         }
-        if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, ImGuiInputFlags_Repeat, item_id) ||
-            ImGui::IsKeyPressed(ImGuiKey_GamepadDpadLeft, ImGuiInputFlags_Repeat, item_id))
-            step = -1;
-        if (ImGui::IsKeyPressed(ImGuiKey_RightArrow, ImGuiInputFlags_Repeat, item_id) ||
-            ImGui::IsKeyPressed(ImGuiKey_GamepadDpadRight, ImGuiInputFlags_Repeat, item_id))
-            step = 1;
     }
 
     record_desc(label, desc, restart, live, hov, foc);
@@ -1517,6 +1539,18 @@ void draw_settings_menu(UiHost& host, gfx::Overlay& ov) {
     const int frame = ImGui::GetFrameCount();
     const bool opened = frame != last_frame + 1;
     last_frame = frame;
+    if (opened) {
+        g_pane.rows_focused = false;
+    } else if (g_pane.rows_focused) {
+        // Keep Left/Right/Stick-X adjusting left-pane option cards instead of leaking focus across the NavFlattened border.
+        lock_rows_step_keys(g_pane.rows_step_owner);
+        if (ImGuiContext* ctx = ImGui::GetCurrentContext()) {
+            if (ctx->NavMoveDir == ImGuiDir_Left || ctx->NavMoveDir == ImGuiDir_Right) {
+                ctx->NavMoveDir = ImGuiDir_None;
+                ctx->NavMoveClipDir = ImGuiDir_None;
+            }
+        }
+    }
     if (!opened && !host.capturing() && !ImGui::IsAnyItemActive() && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopup) &&
         (ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false))) {
         ov.request_hide();
