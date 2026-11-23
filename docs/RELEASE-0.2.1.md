@@ -1,6 +1,6 @@
 # XC2 NS2 Recomp v0.2.1 — Quality Presets, Official DLSS/FSR Downloaders & 8 GB VRAM Support
 
-This maintenance & community-PR update integrates **PR #30** (@UrsineBear) and **PR #36** (@nikolaybutnik) together with targeted startup, VRAM, and UI fixes. Unzip over your existing `0.2.0` install; saves, settings, and your shader cache are preserved.
+This maintenance & community-PR update integrates **PR #30** (@UrsineBear) and **PR #36** (@nikolaybutnik) together with targeted startup, audio (#37), VRAM, and UI fixes. See **Upgrading to v0.2.1** below for the recommended clean migration steps.
 
 ## Which file do I download?
 
@@ -35,9 +35,10 @@ This maintenance & community-PR update integrates **PR #30** (@UrsineBear) and *
 - **Startup & DLC path fixes**: `mem::alias_base()` probes a free 128 GiB host region when `0x2000000000` is occupied (`VammManager` `0xD401`, [#33](https://github.com/weile10000/xc2-ns2-recomp/issues/33)); `aoc_indices()` uses UTF-8 paths for non-ASCII DLC folders on Windows ([#25](https://github.com/weile10000/xc2-ns2-recomp/issues/25)).
 - **CI hygiene**: removed a hardcoded user path from `tools/run/route.ps1` and scoped PR personal-path checks to changed files.
 
-## Upgrading from v0.2.0
+## Upgrading to v0.2.1
 
-Unzip over your existing folder — saves, `nxrt.ini`, `controls.ini`, and `shader_cache/` are preserved without re-running Set up. Make sure `xc2-launcher.exe` and `runtime/xc2_rt.dll` come from the same package.
+- **Recommended (Clean directory + migrate saves & shader cache)**: extract `v0.2.1` into a **fresh folder**, copy `save/`, `shader_cache/` (and `upscalers/` if you already downloaded DLSS/FSR) from your previous install, and run Set up once in the new launcher. Existing shaders are kept (no ~12,000-shader recompile), while `nxrt.ini`, `controls.ini`, `launch.env`, and `xc2_rt.dll` start completely clean with `v0.2.1` defaults (including Auto 1440p-capped window sizing and intent-based `render_quality`).
+- **In-place upgrade (from `v0.2.0` only)**: if you extract directly over a `v0.2.0` folder, you **must launch the game from the new `xc2-launcher.exe`** (do not launch `xc2_boot.exe` directly beforehand, so the launcher copies the updated `runtime/xc2_rt.dll` next to the executable), and open **F1** once to re-save **Window size** and **Render quality / Upscaler mode** (otherwise old `controls.ini` `720p` window settings and legacy `nxrt.ini` scaling keys remain active). If any setting behaves unexpectedly, back up `save/` and `shader_cache/` and remove `nxrt.ini` and `controls.ini`. For `v0.1.x` installs, always use a fresh directory.
 
 ## Known issues
 
@@ -55,7 +56,7 @@ Upstream: **fefw-recomp**, **nxrecomp**, **nxnative**, AMD **FidelityFX**, NVIDI
 
 # XC2 NS2 重编译 v0.2.1 —— 渲染质量预设、官方 DLSS/FSR 下载器与 8 GB 显存适配
 
-本次更新整合了社区 **PR #30**（@UrsineBear）与 **PR #36**（@nikolaybutnik），并合入启动 `0xD401` 规避、非 ASCII DLC 路径修复、8 GB 显存适配以及 F1 交互优化。**从 v0.2.0 覆盖解压即可**，存档、配置与着色器缓存全部保留。
+本次更新整合了社区 **PR #30**（@UrsineBear）与 **PR #36**（@nikolaybutnik），并合入启动 `0xD401` 规避、非 ASCII DLC 路径修复、**#37 音频爆音修复**、8 GB 显存适配以及 F1 交互优化。升级方法请见下文「升级到 v0.2.1」建议。
 
 ## 我该下哪个文件？
 
@@ -90,9 +91,14 @@ Upstream: **fefw-recomp**, **nxrecomp**, **nxnative**, AMD **FidelityFX**, NVIDI
 - **启动与 DLC 路径**：`mem::alias_base()` 在默认 `0x2000000000` 被占用时自动探测空闲 128 GiB 窗口（[#33](https://github.com/weile10000/xc2-ns2-recomp/issues/33)）；`aoc_indices()` 改用 UTF-8 路径，修复中文等非 ASCII DLC 目录崩溃（[#25](https://github.com/weile10000/xc2-ns2-recomp/issues/25)）。
 - **CI 检查**：清理 `tools/run/route.ps1` 硬编码本机路径，并将 PR 个人路径检查限定在改动文件范围内。
 
-## 从 v0.2.0 升级
+## 升级到 v0.2.1（推荐方案与注意事项）
 
-直接覆盖解压到原目录即可；存档、`nxrt.ini`、`controls.ini` 与着色器缓存均会保留，**无需重新 Set up**。请保持 `xc2-launcher.exe` 与 `runtime/xc2_rt.dll` 来自同一发布包。
+- **最稳妥推荐（全新目录 + 迁移存档与缓存，零旧配置残留冲突）**：
+  1. 将 `v0.2.1` 解压到一个**全新的干净目录**；
+  2. 把旧目录下的 `save\` 与 `shader_cache\`（以及如有下载过的 `upscalers\`）复制到新目录中；
+  3. 打开新目录的 `xc2-launcher.exe` 重新跑一遍 Set up（已有缓存会直接复用，无需重新耗时编译 12,137 个着色器）。这样既保留全部进度与缓存，又能确保 `nxrt.ini`、`controls.ini`、`launch.env` 与 `xc2_rt.dll` 均为纯净 `0.2.1` 状态，自动启用新版默认 **Auto（上限 1440p）窗口尺寸**与 `render_quality` 逻辑。
+- **原地覆盖升级（仅限刚装过 `v0.2.0` 的安装）**：
+  - 如直接覆盖解压进原 `v0.2.0` 同级根目录，务必做到两件事：**① 必须先从新版 `xc2-launcher.exe` 点 Play 启动**（不要先直接双击 `xc2_boot.exe`，让启动器自动把 `runtime\xc2_rt.dll` 刷新到根目录）；**② 进游戏按 F1 重新选一次窗口大小与渲染质量并点「应用并保存」**（否则旧 `controls.ini` 里的 `1280x720` 与旧 `nxrt.ini` 缩放键值会继续盖住新默认值）。如出现异常，保留 `save\` 与 `shader_cache\` 后删除 `nxrt.ini` / `controls.ini` 再启动即可。`v0.1.x` 老用户请务必使用全新目录升级。
 
 ## 已知问题
 
