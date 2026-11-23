@@ -11,7 +11,9 @@
 #include <system_error>
 #include <vector>
 
+#include "nxrt/gfx_tuning.h"
 #include "nxrt/input_source.h"
+#include "nxrt/render_quality.h"
 #include "play/play_types.h"
 #include "test_framework.h"
 NXTEST_GROUP(play_config)
@@ -1709,4 +1711,28 @@ NXTEST(ball_sensitivity_range) {
         CHECK(!parse_settings(std::string("[mouse]\nmorph_pitch = ") + bad + "\n", &s, &err));
     }
     for (const char* ok : {"0.1", "2", "20"}) REQUIRE_MSG(parse_settings(std::string("[mouse]\nball_sensitivity = ") + ok + "\n", &s, &err), err);
+}
+
+NXTEST(render_quality_tuning_contract) {
+    const nxrt::RenderQualityMode* nat = nxrt::render_quality_mode("native");
+    REQUIRE(nat != nullptr);
+    double scene = 0.0, out = 0.0;
+    REQUIRE(nxrt::render_quality_scales(*nat, 2160, &scene, &out));
+    CHECK(std::fabs(scene - 3.0) < 1e-9);
+    CHECK(std::fabs(out - 2.0) < 1e-9);
+    const nxrt::RenderQualityMode* qual = nxrt::render_quality_mode("quality");
+    REQUIRE(qual != nullptr);
+    REQUIRE(nxrt::render_quality_scales(*qual, 2160, &scene, &out));
+    CHECK(std::fabs(scene - 2.0) < 1e-9);
+    CHECK(std::fabs(out - 2.0) < 1e-9);
+    const nxrt::RenderQualityMode* con = nxrt::render_quality_mode("console");
+    REQUIRE(con != nullptr);
+    CHECK(!nxrt::render_quality_scales(*con, 2160, &scene, &out));
+
+    // Regression guard for issue #39: game modules handling render_quality in-engine signal NVN to stay 1.0x.
+    auto& t = nxrt::gfx::tuning();
+    const bool prev = t.game_handles_render_quality.load();
+    t.game_handles_render_quality.store(true);
+    CHECK(t.game_handles_render_quality.load());
+    t.game_handles_render_quality.store(prev);
 }

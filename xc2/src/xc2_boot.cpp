@@ -38,6 +38,7 @@
 #include "nxrt/runtime.h"
 #include "nxrt/svc.h"
 #include "nxrt/gfx.h"
+#include "nxrt/gfx_tuning.h"
 #include "nxrt/nvn.h"
 #include "nxrt/nvn_backend.h"
 #include "nxrt/platform.h"
@@ -788,9 +789,73 @@ static void arm_frame_rate(uint64_t main_base) {
     }).detach();
 }
 
-// The dynamic-resolution lock: any render quality but the console's implies it; otherwise [upscale] lock_render_size decides.
+struct Xc2RenderIntent {
+    int64_t mode = 0;
+    int64_t rcls = 0;
+    int32_t w = 2560;
+    int32_t h = 1440;
+    bool from_quality = false;
+    const char* quality_key = "";
+};
+
+// Resolve effective XC2 render mode & target dimensions:
+// 1. Explicit [xc2] native_res > 0 takes precedence with [xc2] native_w/native_h / [xc2] res_class.
+// 2. Otherwise [upscale] render_quality (native..ultra_performance) maps onto XC2's own rtmgr/DLSS native_res=2 path
+//    unless manual [gfx] render_scale / output_scale overrides are set.
+static Xc2RenderIntent resolve_xc2_render_intent() {
+    static const Xc2RenderIntent resolved = [] {
+        Xc2RenderIntent r;
+        int32_t am_w = 1920, am_h = 1080;
+        const bool have_am_res = [&] {
+            const std::string am_res = nxrt::config_get_str("am", "resolution", "");
+            const size_t xpos = am_res.find_first_of("xX");
+            if (xpos == std::string::npos) return false;
+            const int32_t pw = std::atoi(am_res.c_str());
+            const int32_t ph = std::atoi(am_res.c_str() + xpos + 1);
+            if (pw >= 1280 && ph >= 720 && pw <= 7680 && ph <= 4320) {
+                am_w = pw;
+                am_h = ph;
+                return true;
+            }
+            return false;
+        }();
+        const int64_t explicit_mode = nxrt::config_get_int("xc2", "native_res", 0);
+        const int64_t explicit_rcls = nxrt::config_get_int("xc2", "res_class", 0);
+        const std::string q_key = nxrt::config_get_str("upscale", "render_quality", "");
+        const nxrt::RenderQualityMode* rq = nxrt::render_quality_mode(q_key.c_str());
+        const bool manual_nvn_scale = nxrt::config_has("gfx", "render_scale") || nxrt::config_has("gfx", "output_scale");
+        if (explicit_mode > 0) {
+            r.mode = explicit_mode;
+            r.rcls = explicit_rcls;
+            const int32_t def_w = have_am_res ? am_w : 2560;
+            const int32_t def_h = have_am_res ? am_h : 1440;
+            const int64_t cw = nxrt::config_get_int("xc2", "native_w", 0);
+            const int64_t ch = nxrt::config_get_int("xc2", "native_h", 0);
+            r.w = cw > 0 ? static_cast<int32_t>(cw) : def_w;
+            r.h = ch > 0 ? static_cast<int32_t>(ch) : def_h;
+        } else if (rq && rq->share > 0.0 && !manual_nvn_scale) {
+            // Translate F1 / launcher [upscale] render_quality into XC2's own rtmgr/DLSS native_res=2 scaling instead of NVN
+            // attachment scaling so 640x360/1280x720 storage-image passes never split across 1x/Nx scales (issue #39).
+            r.mode = 2;
+            r.from_quality = true;
+            r.quality_key = rq->key;
+            r.rcls = explicit_rcls > 0 ? explicit_rcls : (am_h > 1440 ? 1 : am_h > 1080 ? 2 : 3);
+            r.w = std::clamp<int32_t>(static_cast<int32_t>(std::llround(static_cast<double>(am_w) * rq->share * 0.5) * 2), 640, am_w);
+            r.h = std::clamp<int32_t>(static_cast<int32_t>(std::llround(static_cast<double>(am_h) * rq->share * 0.5) * 2), 360, am_h);
+        } else {
+            r.rcls = explicit_rcls;
+            r.w = am_w;
+            r.h = am_h;
+        }
+        return r;
+    }();
+    return resolved;
+}
+
+// The dynamic-resolution lock: when native_res is off, any render quality but the console's implies it; otherwise [upscale] lock_render_size decides.
 static bool xc2_lock_render_size() {
     static const bool on = [] {
+        if (resolve_xc2_render_intent().mode > 0) return false;
         const nxrt::RenderQualityMode* m = nxrt::render_quality_mode(nxrt::config_get_str("upscale", "render_quality", "").c_str());
         if (m && m->share > 0.0) return true;
         return nxrt::config_get_bool("upscale", "lock_render_size", false);
@@ -803,29 +868,17 @@ static bool xc2_lock_render_size() {
 // [xc2] native_w / native_h: target 3D render size for native_res=2 (defaults to [am] resolution, fallback 2560x1440)
 // [xc2] res_class  = 0 (auto) | 2 (force mode 5: 2560x1440) | 1 (force mode 1: 3840x2160)
 static void arm_native_res(uint64_t main_base) {
+    const Xc2RenderIntent ri = resolve_xc2_render_intent();
     static int64_t g_nat_mode = 0;
     static int64_t g_rcls = 0;
-    g_nat_mode = nxrt::config_get_int("xc2", "native_res", 0);
+    g_nat_mode = ri.mode;
     const int64_t mode = g_nat_mode;
-    g_rcls = nxrt::config_get_int("xc2", "res_class", 0);
+    g_rcls = ri.rcls;
     const int64_t rcls = g_rcls;
-    int32_t def_w = 2560, def_h = 1440;
-    {
-        const std::string am_res = nxrt::config_get_str("am", "resolution", "");
-        const size_t xpos = am_res.find_first_of("xX");
-        if (xpos != std::string::npos) {
-            const int32_t pw = std::atoi(am_res.c_str());
-            const int32_t ph = std::atoi(am_res.c_str() + xpos + 1);
-            if (pw >= 1280 && ph >= 720 && pw <= 7680 && ph <= 4320) {
-                def_w = pw;
-                def_h = ph;
-            }
-        }
-    }
     static int32_t g_nat_w = 2560;
     static int32_t g_nat_h = 1440;
-    g_nat_w = static_cast<int32_t>(nxrt::config_get_int("xc2", "native_w", def_w));
-    g_nat_h = static_cast<int32_t>(nxrt::config_get_int("xc2", "native_h", def_h));
+    g_nat_w = ri.w;
+    g_nat_h = ri.h;
     // Always attach lightweight RT rebuild logger (logs first 8 calls or size changes) so logs confirm actual 3D resolution.
     nxrt::hook_add_entry(main_base + 0x844120, [](::Ctx* c, uint64_t, void*) -> int {
         static int last_rw = -1, last_rh = -1, last_bw = -1, last_bh = -1, count = 0;
@@ -881,11 +934,14 @@ static void arm_native_res(uint64_t main_base) {
         return 0;
     });
     if (rcls > 0) {
-        // XC2 3.0.1 docked mode table (c_00a6.cpp): res_class=1 -> mode 4 (3840x2160), res_class=2 -> mode 5 (2560x1440).
-        // For res_class=3 (Native 1080p with full docked graphics quality), select docked mode 5 and patch its
-        // rodata dimensions at main+0xc346cc/0xc346d0 from 2560x1440 to 1920x1080.
+        // XC2 3.0.1 docked mode table (c_00a6.cpp:5208-5223): 0x8d9ce0 returning 0 selects mode 1 (3840x2160),
+        // returning 1 selects mode 4 (3072x1728), and returning 2 selects mode 5 (2560x1440).
+        // For res_class=1 we return 0 (mode 1: 3840x2160); for res_class=3 (Native 1080p with full docked quality)
+        // we select mode 5 (return 2) and patch its rodata dimensions at main+0xc346cc from 2560x1440 to 1920x1080.
         int64_t effective_rcls = rcls;
-        if (rcls == 3) {
+        if (rcls == 1) {
+            effective_rcls = 0;
+        } else if (rcls == 3) {
             effective_rcls = 2;
             const uint64_t dim_addr = main_base + 0xc346ccULL;
             if (nxrt::mem::is_mapped(dim_addr, 8)) {
@@ -1069,11 +1125,26 @@ static void arm_native_res(uint64_t main_base) {
             return 1;
         });
         nxrt::hook_add_inline(main_base + 0x7cfc2c, [](::Ctx* c, uint64_t, void*) {
-            // s0 was 0.5f; override to native_w / 3840 (e.g. 2560/3840 = 0.6667f)
-            c->v[0].f[0] = (std::min)(1.0f, static_cast<float>(g_nat_w) / 3840.0f);
+            // s0 was 0.5f; override to native_w / base_w (e.g. 2560/3840 = 0.6667f, or 1.0f at 1:1 native).
+            float denom = 3840.0f;
+            if (c->x[19] && nxrt::mem::is_mapped(c->x[19] + 1504, 8)) {
+                uint64_t view = 0;
+                std::memcpy(&view, reinterpret_cast<const void*>(c->x[19] + 1504), 8);
+                if (view && nxrt::mem::is_mapped(view + 40, 4)) {
+                    int32_t bw = 0;
+                    std::memcpy(&bw, reinterpret_cast<const void*>(view + 40), 4);
+                    if (bw > 0) denom = static_cast<float>(bw);
+                }
+            }
+            c->v[0].f[0] = (std::min)(1.0f, static_cast<float>(g_nat_w) / denom);
         });
     }
-    NXLOG_I("xc2", "native_res: armed mode %lld (target %dx%d)", static_cast<long long>(mode), g_nat_w, g_nat_h);
+    if (ri.from_quality) {
+        NXLOG_I("xc2", "native_res: armed mode %lld from [upscale] render_quality=%s (target %dx%d, res_class %lld)",
+                static_cast<long long>(mode), ri.quality_key, g_nat_w, g_nat_h, static_cast<long long>(rcls));
+    } else {
+        NXLOG_I("xc2", "native_res: armed mode %lld (target %dx%d)", static_cast<long long>(mode), g_nat_w, g_nat_h);
+    }
 }
 
 // ---- delta scan (diagnostic, HANDOVER 57) -----------------------------------------------------------------------------------
@@ -2137,6 +2208,14 @@ int main(int argc, char **argv) {
         // arm_frame_rate all observe the same presented frames.
         nxrt::FrameLimiter *frame_limiter = nxrt::play::limiter();
         g_frame_limiter = frame_limiter;
+        const Xc2RenderIntent ri = resolve_xc2_render_intent();
+        if (ri.mode > 0 && !nxrt::config_has("gfx", "render_scale") && !nxrt::config_has("gfx", "output_scale")) {
+            nxrt::gfx::tuning().game_handles_render_quality.store(true, std::memory_order_relaxed);
+        }
+        // Guard manual NVN scaling ([gfx] render_scale with native_res=0) against split 1x/Nx storage-image passes on XC2 NS2.
+        if (!nxrt::config_has("gfx", "render_scale_min_width")) {
+            nxrt::config_set("gfx", "render_scale_min_width", "1920");
+        }
         nxrt::nvn::BackendDesc bd;
         bd.device = gfx_device.get();
         bd.renderer = gfx_renderer.get();

@@ -741,6 +741,10 @@ struct QualityScales { bool set = false; float scene = 1.0f, out = 1.0f; const c
 const QualityScales& quality_scales() {
     static const QualityScales q = [] {
         QualityScales r;
+        if (nxrt::gfx::tuning().game_handles_render_quality.load(std::memory_order_relaxed)) {
+            NXLOG_I(kTag, "[upscale] render_quality handled in-engine by game module (NVN attachment scale 1.000)");
+            return r;
+        }
         const std::string key = nxrt::config_get_str("upscale", "render_quality", "");
         const nxrt::RenderQualityMode* m = nxrt::render_quality_mode(key.c_str());
         if (!m) return r;
