@@ -48,6 +48,19 @@ class ShaderAndCiToolsTests(unittest.TestCase):
         self.assertTrue(check_invariants.check_top_level(["README.md", "docs/COMPATIBILITY.md", "tools/tests/a.py"])[0])
         self.assertFalse(check_invariants.check_top_level(["stray_file.txt"])[0])
 
+    def test_private_path_leak_guard(self):
+        scan = check_invariants.find_private_path_leaks
+        self.assertTrue(scan("README.md", "C:\\Users\\alice\\Desktop\\note.txt"))
+        self.assertTrue(scan("AGENTS.md", "E:\\XC2\\dev\\work"))
+        self.assertTrue(scan("AGENTS.md", "E:\\XC2-onboarding.md"))
+        self.assertTrue(scan("tools/build/x.ps1", "E:\\Tools\\dev\\zig"))
+        self.assertTrue(scan("AGENTS.md", "run sync-to-nas-quiet.cmd"))
+        self.assertTrue(scan("tools/shader/PATCHES.md", "see docs/internal/handover/47-foo.md"))
+        self.assertEqual(scan("tools/setup/README.md", "install D:\\XC2 --nup D:\\dumps\\xc2.nup"), [])
+        self.assertEqual(scan("launcher/src-tauri/src/update.rs", r"C:\Windows\System32"), [])
+        self.assertEqual(scan("tools/analysis/vk_entry_map.py", r"C:\VulkanSDK\1.4.363.0"), [])
+        self.assertEqual(scan("AGENTS.md", "grep inside docs/internal/handover/ when needed"), [])
+
 
 if __name__ == "__main__":
     unittest.main()

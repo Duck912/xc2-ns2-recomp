@@ -53,7 +53,7 @@ foreach ($m in 'subsdk1', 'subsdk2', 'subsdk3') { $p = Join-Path $libdir ($m + '
 # needs the library even though nothing in this exe mentions vpx - without it the link stops at nine vpx_codec_* symbols.
 # A runtime configured without libvpx (NXRT_HAVE_LIBVPX=0, see runtime/cmake/media_deps.cmake) references none of them,
 # which is why a missing library is a warning and not an error. Same search order as tools/build/build-release.ps1.
-$vpxRoots = @($env:VCPKG_ROOT, 'E:\Tools\dev\vcpkg', 'C:\vcpkg') | Where-Object { $_ }
+$vpxRoots = @($env:VCPKG_ROOT, 'C:\vcpkg') | Where-Object { $_ }
 $vpxLibs = @()
 foreach ($vpxRoot in $vpxRoots) {
     $cand = Join-Path $vpxRoot 'installed\x64-windows-static\lib\vpx.lib'

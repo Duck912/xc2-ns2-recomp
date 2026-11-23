@@ -2,14 +2,14 @@
 # Assembles the portable tree: the launcher, the runtime as a DLL, and the two tools that compile the lifted code, so
 # a player unpacks it and needs nothing installed - no MSVC, no Windows SDK, no Python, no .NET, no Zig.
 #
-#   pwsh tools\build\make-package.ps1 -Out E:\XC2-package
+#   pwsh tools\build\make-package.ps1 -Out D:\dist\xc2-package
 #
 # What it does NOT contain: any game file. The exe is built on the player's PC from their own dump (that is the whole
 # point of the recompilation), and the shader cache is translated from their own shaders.
 param(
     [string]$Out = '',
     [string]$Launcher = '',   # default: <checkout>\launcher
-    [string]$Zig = 'E:\Tools\dev\zig',
+    [string]$Zig = '',        # default: $env:XC2_ZIG, zig.exe on PATH, or sibling Tools\dev\zig
     [switch]$SkipHarness,
     [switch]$SkipPython,
     [switch]$AllowNoFFmpeg    # build a package whose 4K openings fall back to the CPU decoders, on purpose
@@ -17,6 +17,16 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)   # the checkout
 if (-not $Out) { $Out = Join-Path (Split-Path -Parent $root) 'XC2-package' }
+if (-not $Zig) {
+    if ($env:XC2_ZIG) {
+        $Zig = if ((Test-Path $env:XC2_ZIG -PathType Leaf)) { Split-Path -Parent $env:XC2_ZIG } else { $env:XC2_ZIG }
+    } elseif ($zigCmd = Get-Command zig.exe -ErrorAction SilentlyContinue) {
+        $Zig = Split-Path -Parent $zigCmd.Source
+    } else {
+        $driveRoot = Split-Path -Parent (Split-Path -Parent $root)
+        if ($driveRoot) { $Zig = Join-Path $driveRoot 'Tools\dev\zig' }
+    }
+}
 
 function Say($text) { Write-Host ("  " + $text) }
 function Need($path, $what) { if (-not (Test-Path $path)) { throw "missing $what : $path" } }
@@ -89,7 +99,8 @@ Say ("runtime       {0:N1} MB  (xc2_rt.dll + the import library)" -f (((Get-Item
 # its own directory, so they go in runtime and the setup copies every runtime*.dll next to xc2_boot.exe. A package without
 # them still runs - every 4K opening falls back to the CPU decoders (8-17 fps against 30).
 $ffmpeg = ''
-foreach ($cand in @($env:NXRT_FFMPEG_DIR, 'E:\XC2\lan\ffmpeg\ffmpeg-master-latest-win64-gpl-shared')) {
+$wsFFmpeg = Join-Path (Split-Path -Parent $root) 'lan\ffmpeg\ffmpeg-master-latest-win64-gpl-shared'
+foreach ($cand in @($env:NXRT_FFMPEG_DIR, $wsFFmpeg)) {
     if ($cand -and (Test-Path (Join-Path $cand 'bin\avcodec-63.dll'))) { $ffmpeg = $cand; break }
 }
 if ($ffmpeg) {

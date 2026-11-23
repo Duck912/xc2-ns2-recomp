@@ -1,20 +1,41 @@
 ﻿# agent-brief.ps1 -- print everything a fresh session needs, or verify closeout state.
 #
-#   pwsh -File E:\XC2\repo\tools\agent-brief.ps1
-#   pwsh -File E:\XC2\repo\tools\agent-brief.ps1 -VerifyCloseout [-FixHardlink]
+#   pwsh -File tools/agent-brief.ps1
+#   pwsh -File tools/agent-brief.ps1 -VerifyCloseout [-FixHardlink]
+#   pwsh -File tools/agent-brief.ps1 [-CardPath ...] [-MaintCardPath ...]
 #
 # Harness-agnostic entry point for any AI session (no memory across sessions):
 # prints current state, settled decisions, recent commits, guardrails, and runs closeout verification.
 param(
     [switch]$VerifyCloseout,
-    [switch]$FixHardlink
+    [switch]$FixHardlink,
+    [string]$CardPath = '',
+    [string]$MaintCardPath = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
+$workspaceRoot = Split-Path -Parent $root
+$driveRoot = Split-Path -Parent $workspaceRoot
 $internal = Join-Path $root 'docs\internal'
-$card = 'E:\XC2-开新会话先读这个.md'
-$cardMaint = 'E:\XC2\maintenance\XC2-开新会话先读这个.md'
+$maintDir = if ($env:XC2_MAINT_DIR) { $env:XC2_MAINT_DIR } else { Join-Path $workspaceRoot 'maintenance' }
+$cardName = 'XC2-开新会话先读这个.md'
+$card = if ($CardPath) {
+    $CardPath
+} elseif ($env:XC2_ONBOARDING_CARD) {
+    $env:XC2_ONBOARDING_CARD
+} else {
+    $candParent = if ($driveRoot) { Join-Path $driveRoot $cardName } else { '' }
+    $candWs = Join-Path $workspaceRoot $cardName
+    if ($candParent -and (Test-Path -LiteralPath $candParent)) { $candParent } else { $candWs }
+}
+$cardMaint = if ($MaintCardPath) {
+    $MaintCardPath
+} elseif ($env:XC2_MAINT_CARD) {
+    $env:XC2_MAINT_CARD
+} else {
+    Join-Path $maintDir $cardName
+}
 
 function Section([string]$title) {
     Write-Host ''
@@ -65,7 +86,7 @@ try {
     Write-Host ('HEAD       : ' + $headLine)
     Write-Host ('Working    : ' + $(if ($dirty -eq 0) { 'clean' } else { "$dirty changed file(s)" }))
 
-    Section 'ONBOARDING CARD  (E:\XC2-开新会话先读这个.md)'
+    Section "ONBOARDING CARD  ($card)"
     if (Test-Path -LiteralPath $card) {
         $docCommit = Get-CardCommit $card
         $cardHead = Get-Content -LiteralPath $card -TotalCount 12 -Encoding UTF8
@@ -84,7 +105,7 @@ try {
         }
         if ($next) { Write-Host ('  ' + $next.Trim()) }
     } else {
-        Write-Host '  MISSING: E:\XC2-开新会话先读这个.md' -ForegroundColor Yellow
+        Write-Host ("  MISSING: $card (optional; pass -CardPath or set XC2_ONBOARDING_CARD)") -ForegroundColor Yellow
     }
 
     Section 'CURRENT STATE  (docs/internal/STATE.md)'
@@ -120,9 +141,9 @@ try {
         '1. Overwrite docs/internal/STATE.md (single screen: working / broken / in-flight / next).',
         '2. Append settled findings with § numbers to docs/internal/DECISIONS.md.',
         '3. Write docs/internal/handover/NN-<date>-<topic>.md and update handover/_index.json.',
-        '4. Update top lines of E:\XC2-开新会话先读这个.md (keep hardlink to maintenance copy).',
-        '5. Verify everything: pwsh -File E:\XC2\repo\tools\agent-brief.ps1 -VerifyCloseout',
-        '6. Commit by path, then run: cmd /c "E:\XC2\maintenance\sync-to-nas-quiet.cmd" (confirm ok=true in last-sync.json).'
+        '4. Update top lines of any external onboarding card (keep hardlink to maintenance copy if used).',
+        '5. Verify everything: pwsh -File tools/agent-brief.ps1 -VerifyCloseout',
+        '6. Commit by path, then run your external maintenance sync script if configured.'
     ) | ForEach-Object { '  ' + $_ }
 
     if ($VerifyCloseout) {
