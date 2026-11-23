@@ -91,10 +91,7 @@ and serves the mod's bytes there. Cache entries that the archive keeps compresse
 the mod's file as-is; a mod that ships an archive-internal file uncompressed where the game expects compression is
 not.
 
-**Size table.** A file that a mod makes larger must have its size entry raised, or the game fails when it first
-loads it, long after the start. The size table for this game has not been mapped yet; until it is, a mod that grows
-a file may need the entry patched as well. If the table turns out to work like TotK's, the runtime will merge it at
-start the same way.
+**Size table.** Checked empirically against the full catalog (`work/mods/assets.tsv`, 145,502 entries across `romfs`, `bf2.ard`, and all 7 DLCs): Xenoblade Chronicles 2 3.0.1 has **no** separate global `ResourceSizeTable` file. Archive asset sizes live directly inside each 24-byte `bf2.arh` entry (`comp` / `unc`, updated by M2b in-memory delta composition), loose file sizes come from the synthesized RomFS tables (`fs_romfs.cpp`), and fixed internal memory budgets (`MenuResource`, `AssetMain`) are exposed via `XC2_NS2_SIZE` in `xc2_boot.cpp`. No extra size-table merge is needed.
 
 ## Code patches
 
@@ -211,4 +208,4 @@ committed.
 | M1.5 | the emulator layouts, filtered by application id | **built** (`mod_romfs_root()`) |
 | M2 | files inside `bf2.ard`: a mod file becomes a pre-built record (`tools/mods/ard_pack.py`), served at read time; oversized/uncompressed entries go to M2b multi-mod `append.bin` + composed `bf2.arh` | **built** |
 | M3 | `.pchtxt` / `.ips` applied onto an ExeFS copy at Set up (`tools/mods/exefs_patch.py`) | **built** |
-| M4 | the size table, cheats, `mod.json` options | not started |
+| M4 | Launcher **Mods** UI, `mod.json` declarative option sub-layers (`.mod_layers.tsv`), M3 rebuild hold-off (`[mods] pending_rebuild`), conflict detection, and Atmosphère `cheats/<build_id>.txt` dual-path engine (C++ DMNT VM `cheats.cpp` + M3 `.text` integration) | **built** |

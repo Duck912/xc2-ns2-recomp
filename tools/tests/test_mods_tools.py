@@ -374,6 +374,38 @@ class ExefsPatchM3Tests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 exefs_patch.patch_nso_bytes((van / "main").read_bytes(), [(0x90000, b"\x00")])
 
+    def test_m4c_static_text_cheat_patches_main_and_skips_heap(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            van = tmp / "exefs"
+            mods = tmp / "mods"
+            out = tmp / "out"
+            van.mkdir()
+            bid_main = "aa" * 20
+            nso_main = self._make_nso(bid_main, b"\x00" * 64, b"\x11" * 16, b"\x22" * 16)
+            (van / "main").write_bytes(nso_main)
+
+            cheat_dir = mods / "CheatPack" / "cheats"
+            cheat_dir.mkdir(parents=True)
+            # 16-hex short prefix match + both a static .text cheat and a runtime Heap cheat
+            (cheat_dir / f"{bid_main[:16].upper()}.txt").write_text(
+                "[60 FPS Text]\n"
+                "04000000 00000010 14000001\n\n"
+                "[Heap Gold]\n"
+                "04100000 00000020 05F5E0FF\n",
+                encoding="utf-8",
+            )
+            (mods / ".cheats_enabled.tsv").write_text(
+                "CheatPack\t60 FPS Text\nCheatPack\tHeap Gold\n", encoding="utf-8"
+            )
+
+            st = exefs_patch.apply_exefs_patches(van, out, mods)
+            self.assertTrue(st["active"])
+            self.assertEqual(len(st["applied"]), 1)
+            self.assertEqual(st["applied"][0]["source"], f"CheatPack:{bid_main[:16].upper()}.txt#60 FPS Text")
+            patched = (out / "main").read_bytes()
+            self.assertEqual(patched[0x110:0x114], bytes.fromhex("01000014"))
+
 
 class ModCheckAndIndexTests(unittest.TestCase):
     def test_norm_and_mod_root(self):

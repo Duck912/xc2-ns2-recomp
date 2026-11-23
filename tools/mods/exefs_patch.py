@@ -88,13 +88,19 @@ def lz4_decompress(src: bytes, usize: int) -> bytes:
         return _lz4_block_pure(src, usize)
 
 
-def read_nso_build_id(nso_path: Path) -> str:
-    """Return lowercase 64-char hex build_id from an NSO0 header (offset 0x40..0x60), else ''."""
+def read_nso_info(nso_path: Path) -> tuple[str, int]:
+    """Return (lowercase 64-char hex build_id, text_mem_end) from an NSO0 header, else ('', 0)."""
     with nso_path.open("rb") as f:
         hdr = f.read(0x60)
     if len(hdr) < 0x60 or hdr[:4] != NSO_MAGIC:
-        return ""
-    return hdr[0x40:0x60].hex()
+        return "", 0
+    text_mem_off, text_size = struct.unpack_from("<II", hdr, 0x14)
+    return hdr[0x40:0x60].hex(), text_mem_off + text_size
+
+
+def read_nso_build_id(nso_path: Path) -> str:
+    """Return lowercase 64-char hex build_id from an NSO0 header (offset 0x40..0x60), else ''."""
+    return read_nso_info(nso_path)[0]
 
 
 def build_id_matches(patch_bid: str, mod_bid: str) -> bool:
@@ -266,16 +272,131 @@ def _mod_patch_roots(mod_dir: Path, app_id: str) -> list[Path]:
     return roots
 
 
+def read_cheats_enabled_tsv(mods_dir: Path) -> dict[str, set[str]]:
+    """Read mods/.cheats_enabled.tsv (<mod>\\t<cheat_title> lines) written by launcher M4."""
+    tsv = mods_dir / ".cheats_enabled.tsv"
+    if not tsv.is_file():
+        return {}
+    out: dict[str, set[str]] = {}
+    for raw in tsv.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw.rstrip("\r")
+        if not line or line.startswith("#") or "\t" not in line:
+            continue
+        mod_name, title = line.split("\t", 1)
+        m, t = mod_name.strip(), title.strip()
+        if m and t:
+            out.setdefault(m, set()).add(t)
+    return out
+
+
+def _mod_cheat_roots(mod_dir: Path, app_id: str) -> list[Path]:
+    roots: list[Path] = []
+    for cand in (
+        mod_dir / "cheats",
+        mod_dir / "atmosphere" / "contents" / app_id / "cheats",
+        mod_dir / "contents" / app_id / "cheats",
+        mod_dir / app_id / "cheats",
+    ):
+        if cand.is_dir():
+            roots.append(cand)
+    return roots
+
+
+def _extract_pure_text_records(words: list[int], main_text_end: int) -> list[tuple[int, bytes]]:
+    if not words or main_text_end <= 0:
+        return []
+    i = 0
+    recs: list[tuple[int, bytes]] = []
+    while i < len(words):
+        w0 = words[i]
+        op = (w0 >> 28) & 0xF
+        if op != 0:
+            return []
+        width = (w0 >> 24) & 0xF
+        region = (w0 >> 20) & 0xF
+        need = 4 if width == 8 else 3
+        if width not in (1, 2, 4, 8) or i + need > len(words):
+            return []
+        addr = ((w0 & 0xFF) << 32) | words[i + 1]
+        if region != 0 or addr >= main_text_end:
+            return []
+        if width == 1:
+            payload = bytes([words[i + 2] & 0xFF])
+        elif width == 2:
+            payload = struct.pack("<H", words[i + 2] & 0xFFFF)
+        elif width == 4:
+            payload = struct.pack("<I", words[i + 2] & 0xFFFFFFFF)
+        else:
+            payload = struct.pack("<Q", ((words[i + 2] & 0xFFFFFFFF) << 32) | (words[i + 3] & 0xFFFFFFFF))
+        recs.append((NSO_HDR_SIZE + addr, payload))
+        i += need
+    return recs
+
+
+def parse_cheat_code_sections(
+    text: str,
+    mod_name: str,
+    file_name: str,
+    main_bid: str,
+    main_text_end: int,
+    enabled_titles: set[str],
+) -> list[dict]:
+    """Return M3 patch dicts for enabled sections in one <bid>.txt that write purely to Main .text."""
+    if not enabled_titles or not main_bid or main_text_end <= 0:
+        return []
+    out: list[dict] = []
+    cur_title = ""
+    cur_words: list[int] = []
+
+    def flush():
+        nonlocal cur_title, cur_words
+        if cur_title and cur_title in enabled_titles and cur_words:
+            recs = _extract_pure_text_records(cur_words, main_text_end)
+            if recs:
+                canon = "".join(f"{off:x}:{pl.hex()}\n" for off, pl in recs).encode("utf-8")
+                out.append({
+                    "build_id": main_bid,
+                    "records": recs,
+                    "source": f"{mod_name}:{file_name}#{cur_title}",
+                    "mod": mod_name,
+                    "sha256": hashlib.sha256(canon).hexdigest(),
+                })
+        cur_title = ""
+        cur_words = []
+
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or line.startswith("//"):
+            continue
+        if line.startswith("[") and line.endswith("]") and len(line) >= 2:
+            flush()
+            cur_title = line[1:-1].strip()
+            continue
+        if not cur_title:
+            continue
+        code_part = line.split("#", 1)[0].split("//", 1)[0]
+        for tok in code_part.split():
+            if len(tok) == 8 and _HEX_RE.match(tok):
+                cur_words.append(int(tok, 16))
+    flush()
+    return out
+
+
 def discover_mod_patches(
-    mods_dir: Path, ini_path: Path | None = None, app_id: str = APP_ID_DEFAULT
+    mods_dir: Path,
+    ini_path: Path | None = None,
+    app_id: str = APP_ID_DEFAULT,
+    main_bid: str = "",
+    main_text_end: int = 0,
 ) -> list[dict]:
     """Return parsed patches ordered lowest -> highest priority so last writer wins."""
     if not mods_dir.is_dir():
         return []
-    present = sorted(p.name for p in mods_dir.iterdir() if p.is_dir())
+    present = sorted(p.name for p in mods_dir.iterdir() if p.is_dir() and not p.name.startswith("."))
     if not present:
         return []
     order, disabled = read_mods_ini(ini_path)
+    cheats_enabled = read_cheats_enabled_tsv(mods_dir)
     seq: list[str] = [n for n in order if n in present]
     seq.extend(n for n in present if n not in seq)
     seq.reverse()  # lowest priority first
@@ -304,6 +425,30 @@ def discover_mod_patches(
                 parsed["sha256"] = hashlib.sha256(p.read_bytes()).hexdigest()
                 if parsed["records"]:
                     patches.append(parsed)
+
+        enabled_titles = cheats_enabled.get(mod_name)
+        if enabled_titles and main_bid and main_text_end > 0:
+            seen_cheats: set[Path] = set()
+            mb_low = main_bid.lower()
+            for root in _mod_cheat_roots(mod_dir, app_id):
+                for p in sorted(x for x in root.iterdir() if x.is_file() and x.suffix.lower() == ".txt"):
+                    stem = p.stem.strip().lower()
+                    if len(stem) < 16 or not _HEX_RE.match(stem) or not mb_low.startswith(stem):
+                        continue
+                    rp = p.resolve()
+                    if rp in seen_cheats:
+                        continue
+                    seen_cheats.add(rp)
+                    patches.extend(
+                        parse_cheat_code_sections(
+                            p.read_text(encoding="utf-8", errors="replace"),
+                            mod_name=mod_name,
+                            file_name=p.name,
+                            main_bid=mb_low,
+                            main_text_end=main_text_end,
+                            enabled_titles=enabled_titles,
+                        )
+                    )
     return patches
 
 
@@ -377,12 +522,23 @@ def apply_exefs_patches(
     If zero patches match any module in `vanilla_exefs`, cleans `out_exefs` (when not dry_run) so callers fall back
     to `vanilla_exefs` without lifting or loading duplicate files. Returns a JSON-serializable state dict.
     """
-    patches = discover_mod_patches(mods_dir, ini_path=ini_path, app_id=app_id)
     mod_bids: dict[str, str] = {}
+    main_text_end = 0
     for m in MODULES:
         mp = vanilla_exefs / m
         if mp.is_file():
-            mod_bids[m] = read_nso_build_id(mp)
+            bid, text_end = read_nso_info(mp)
+            mod_bids[m] = bid
+            if m == "main":
+                main_text_end = text_end
+
+    patches = discover_mod_patches(
+        mods_dir,
+        ini_path=ini_path,
+        app_id=app_id,
+        main_bid=mod_bids.get("main", ""),
+        main_text_end=main_text_end,
+    )
 
     by_mod: dict[str, list[dict]] = {m: [] for m in mod_bids}
     unmatched: list[dict] = []

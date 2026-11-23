@@ -22,6 +22,10 @@ This directory is a **modified fork** of `Goldoire/fefw-recomp` (the original Gi
 | `file` | date | change |
 |---|---|---|
 | `runtime/src/services/fs_romfs.cpp` | 2026-11-23 | fix `RomfsImage::build()` (`ard_index` / `ard_at` / `ard_real_size`), multi-mod `append.bin` (`TailSlice` + `read_tail`), in-memory `bf2.arh` delta relocation/composition (`compose_arh_layers`) + `serve_ard()` locking, plus M4 `.mod_layers.tsv` option sub-layers, `.` dotfile skip, and `[mods] pending_rebuild` hold-off |
+| `runtime/include/nxrt/cheats.h` | 2026-11-23 | new (M4c): Atmosphère DMNT cheat VM interface (`parse_txt_filtered`, `load_from_mods_dir`, `init_from_config`, `tick`) |
+| `runtime/src/core/cheats.cpp` | 2026-11-23 | new (M4c): DMNT cheat VM (Opcodes `0`–`9`, `VirtualQuery`/`mem::is_mapped` safe bounds, skips M3 `.text` static cheats & respects `[mods] pending_rebuild`) |
+| `runtime/src/gfx/play/play.cpp` | 2026-11-23 | F11 fullscreen toggle, live `[upscale] render_quality` / `[am] resolution` / `[dlss] preset` / `[nvn] mirror_capture` sync to `nxrt.ini`, external pad bridge, bilingual HUD hint, `UiHost::request_exit()`, and M4c `nxrt::cheats::init_from_config/tick/clear` hook |
+| `runtime/tests/test_cheats.cpp` | 2026-11-23 | new (M4c): unit tests for DMNT opcodes, pointer chains, keypress conditionals, bounds safety, and `.cheats_enabled.tsv` filtering |
 | `runtime/tests/gfx/test_play_config.cpp` | 2026-11-23 | add `render_quality_tuning_contract` regression test covering `[upscale] render_quality` ratios and `game_handles_render_quality` |
 | `runtime/tests/test_svc_fs_romfs.cpp` | 2026-11-23 | add `romfs_mods_m2_and_m2b_archive_override`, `romfs_mods_m2b_multi_mod_tails_and_arh_compose`, and `romfs_mods_m4_option_layers_and_pending_rebuild` regression tests |
 | `UPSTREAM.md` / `README.md` / `MODIFICATIONS.md` | 2026-11-23 | note removed upstream GitHub repo (`Goldoire/fefw-recomp`, 404) and mark `third_party/fefw-recomp/launcher/` as unused upstream snapshot |
@@ -81,7 +85,6 @@ This directory is a **modified fork** of `Goldoire/fefw-recomp` (the original Gi
 | `runtime/include/nxrt/play.h` | 2026-11-21 | expose `overlay_blocks_game()`, `live_pad_config()`, and `note_external_pad()` |
 | `runtime/src/gfx/play/play_types.h` | 2026-11-23 | default FPS counter hotkey F10, persistent `menu_lang`, `DisplaySettings::width/height = 0` (`auto`), `Game3dSettings` (`render_quality`, `dlss`, `dlss_preset`, `out_height`, `capture`), `render_output_height()` |
 | `runtime/src/gfx/play/play_config.cpp` | 2026-11-21 | parse and persist `[fps] menu_lang` in `controls.ini` |
-| `runtime/src/gfx/play/play.cpp` | 2026-11-23 | F11 fullscreen toggle, live `[upscale] render_quality` / `[am] resolution` / `[dlss] preset` / `[nvn] mirror_capture` sync to `nxrt.ini`, external pad bridge, bilingual HUD hint, `UiHost::request_exit()` |
 | `runtime/src/gfx/play/play_ui.h` | 2026-11-20 | add draw_settings_menu() wrapper replacing Diagnostics overlay |
 | `runtime/src/gfx/overlay.cpp` | 2026-11-23 | XC2 Aegis theme + CJK font, `ImGuiCol_ModalWindowDimBg`, 4-level FPS counter with Detailed Performance HUD (AMD ADL2 / NVIDIA NVML / Vulkan VRAM / CPU / RAM / 120-frame graph / pipeline timings / resolution & scaling) |
 | `runtime/src/gfx/play/play_ui.cpp` | 2026-11-23 | bilingual two-pane F1 menu with Display output resolution + Auto windowed size (up to 1440p), Graphics upscaler (DLSS/FSR/TAAU/Off), per-upscaler render quality mode, DLSS model (`default`/`K`/`J`), Experimental `[nvn] mirror_capture`, D-pad focus & top-right confirmed Quit Game (`host.request_exit()`), 4-level performance HUD selector |

@@ -33,6 +33,7 @@
 #include <vector>
 
 #include "nxrt/audio_sink.h"
+#include "nxrt/cheats.h"
 #include "nxrt/ftrace.h"
 #include "nxrt/game.h"
 #include "play_display.h"
@@ -984,6 +985,7 @@ int update_hook(::Ctx*, uint64_t, void*) {
         for (size_t i = 0; i < got; ++i) handle_event(buf[i], now);
     }
     poll_pads(now);
+    nxrt::cheats::tick();
     const GamePlay* gp = game_play();
     if (gp && gp->frame_begin) gp->frame_begin();
     if (st.engine) st.engine->frame_tick();
@@ -1576,6 +1578,7 @@ bool start(const StartOptions& opt) {
     if (gp && gp->frame_update) st.hook_update = hook_add_entry(st.base + gp->frame_update, &update_hook);
     else NXLOG_W(kTag, "the game (%s) names no frame update: play mode is not pumped", game::info().id);
     if (gp && gp->install) gp->install(st.base, &g_game_host, st.settings);
+    nxrt::cheats::init_from_config(st.base);
     st.started = true;
     NXLOG_I(kTag, "play mode started (%s, overlay %s, base 0x%llx, game %s, frame hook %u)", st.window ? "window" : "no window", st.overlay ? "on" : "off",
             static_cast<unsigned long long>(st.base), game::info().id, st.hook_update);
@@ -1585,6 +1588,7 @@ bool start(const StartOptions& opt) {
 void stop() {
     G& st = g();
     if (!st.started) return;
+    nxrt::cheats::clear();
     vpad_shutdown();      // a virtual pad from a test script does not outlive play mode
     if (const GamePlay* gp = game_play(); gp && gp->remove) gp->remove();
     kernel::set_blocked_hook(0, nullptr);

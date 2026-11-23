@@ -8,6 +8,8 @@ Everything the mod work needs lives here, so a future round finds it in one plac
 | `asset_index.py` | **M0**: one table of every file the game can read — romfs, `bf2.ard`, add-on content | works |
 | `mod_check.py` | **M0.5**: for each file of a mod — `same` / `differs` / `only-archive` / `absent`, and where the game reads it from | works |
 | `ard_pack.py` | **M2**: turns a mod file into the archive record the game expects (`<mod>/.ard/<name>.rec`) | works |
+| `arh_index.py` | **M2b**: decodes full untruncated `bf2.arh` paths (`arh1` trie) for `ard_pack.py` & append deltas | works |
+| `exefs_patch.py` | **M3 / M4c**: applies `.pchtxt`, `.ips`, and enabled `.text` DMNT cheats onto `build/exefs-patched` | works |
 | `mod_pack.py` | validates and packs a mod folder (manifest, path escapes, no game data) | not started |
 
 ## What it reads

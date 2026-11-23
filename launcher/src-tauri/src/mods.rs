@@ -708,7 +708,7 @@ fn classify_dmnt_words(words: &[u32], main_text_end: u64) -> (bool, Vec<(u64, Ve
             9 => {
                 has_runtime_op = true;
                 let width = (w0 >> 24) & 0xF;
-                let has_imm = ((w0 >> 12) & 0xF) != 0;
+                let has_imm = ((w0 >> 8) & 0xF) != 0;
                 i += if !has_imm {
                     1
                 } else if width == 8 {
