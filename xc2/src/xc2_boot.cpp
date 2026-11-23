@@ -2034,12 +2034,14 @@ int main(int argc, char **argv) {
     std::unique_ptr<nxrt::gfx::Device> gfx_device;
     std::unique_ptr<nxrt::gfx::Renderer> gfx_renderer;
     nxrt::nvn::install();
+    bool start_borderless = false;
+    bool start_exclusive = false;
     if (!headless) {
         nxrt::platform::init();
         nxrt::platform::WindowDesc wd;
         wd.title = nxrt::game::info().title;
-        const bool start_borderless = (play_disp.window_mode == "borderless");
-        const bool start_exclusive = (play_disp.window_mode == "exclusive");
+        start_borderless = (play_disp.window_mode == "borderless");
+        start_exclusive = (play_disp.window_mode == "exclusive");
         const bool start_fullscreen = start_borderless || start_exclusive;
         int win_w = static_cast<int>(nxrt::config_get_int("gfx", "window_width", 0));
         int win_h = static_cast<int>(nxrt::config_get_int("gfx", "window_height", 0));
@@ -2113,16 +2115,6 @@ int main(int argc, char **argv) {
                 ::ReleaseDC(hwnd, hdc);
             }
         }
-        if (start_borderless) nxrt::platform::set_fullscreen(nxrt::platform::FullscreenMode::Borderless);
-        else if (start_exclusive) nxrt::platform::set_fullscreen(nxrt::platform::FullscreenMode::Exclusive);
-        if (HWND hwnd = static_cast<HWND>(nxrt::platform::native_hwnd())) {
-            if (HDC hdc = ::GetDC(hwnd)) {
-                RECT rc{};
-                ::GetClientRect(hwnd, &rc);
-                ::FillRect(hdc, &rc, static_cast<HBRUSH>(::GetStockObject(BLACK_BRUSH)));
-                ::ReleaseDC(hwnd, hdc);
-            }
-        }
     }
     {
         std::string err;
@@ -2134,6 +2126,12 @@ int main(int argc, char **argv) {
         rd.headless_width = 1280; rd.headless_height = 720;
         gfx_renderer = nxrt::gfx::Renderer::create(*gfx_device, rd, &err);
         if (!gfx_renderer) die("renderer: %s", err.c_str());
+        // Enter borderless/exclusive fullscreen only after the Vulkan device and initial swapchain exist so Windows
+        // display/driver hooks cannot deadlock on an un-pumped borderless HWND before Vulkan enumeration (issue #18).
+        if (!headless) {
+            if (start_borderless) nxrt::platform::set_fullscreen(nxrt::platform::FullscreenMode::Borderless);
+            else if (start_exclusive) nxrt::platform::set_fullscreen(nxrt::platform::FullscreenMode::Exclusive);
+        }
         g_renderer = gfx_renderer.get();   // the F12 hotkey writes the next presented frame through it
         // Use play mode's shared FrameLimiter so the F1 overlay, corner FPS counter, present-mode switches and
         // arm_frame_rate all observe the same presented frames.

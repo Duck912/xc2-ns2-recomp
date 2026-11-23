@@ -32,6 +32,8 @@ This maintenance & community-PR update integrates **PR #30** (@UrsineBear) and *
 
 - **Audio crackling / static fix since v0.1.2 ([#37](https://github.com/weile10000/xc2-ns2-recomp/issues/37))**: fixed `xc2/src/x2_audio301.cpp` creating `nn::audio::OutputStream`'s release `SystemEvent` as `ManualClear` (`0`) instead of `EventClearMode_AutoClear` (`1`), and synced `watch_loop`'s queued water mark on writes — stopping the `guest-132` audio thread from busy-spinning on `GetOutputStreamFreeFrameCount` / `XAudio2Sink::GetState()` and eliminating audio lock contention / static crackling.
 - Added `VK_AMD_shader_early_and_late_fragment_tests` (`early_fragment_tests = auto`), zero-copy colour feedback via `VK_EXT_attachment_feedback_loop_layout` (`[nvn] fb_reuse`), fixed a use-after-free in `nvn_pipeline.cpp`, tuned `nvn-texprep` priority, and auto-hid idle cursor in fullscreen/borderless modes.
+- **FSR & fullscreen start-up hardening ([#18](https://github.com/weile10000/xc2-ns2-recomp/issues/18))**: prioritized standalone `amd_fidelityfx_upscaler_vk.dll` ahead of `amd_fidelityfx_vk.dll` when the FidelityFX loader is absent (preventing a first-dispatch `amdxc64.dll` crash when both sit in `upscalers/fsr3/`), and moved initial `Borderless` / `Exclusive` `set_fullscreen()` calls until after `Device::create()` / `Renderer::create()` so display/driver hooks cannot deadlock before Vulkan enumeration.
+- **Faster first-time Set up (~34% shorter)**: parallelized `extract_embedded.py` zlib extraction, skipped redundant per-shader `spirv-val.exe` subprocesses (`--no-val`) and ~36,000 duplicate file copies in `build_cache.py`, lifted modules in one Python process at `bucket = 0x40000` with per-module PCH headers and `-Wl,--strip-debug` (no unused 469 MB PDB write/delete), and added activity-based early settle to headless shader prefill (~12s vs fixed 40s).
 - **Startup & DLC path fixes**: `mem::alias_base()` probes a free 128 GiB host region when `0x2000000000` is occupied (`VammManager` `0xD401`, [#33](https://github.com/weile10000/xc2-ns2-recomp/issues/33)); `aoc_indices()` uses UTF-8 paths for non-ASCII DLC folders on Windows ([#25](https://github.com/weile10000/xc2-ns2-recomp/issues/25)).
 - **CI hygiene**: removed a hardcoded user path from `tools/run/route.ps1` and scoped PR personal-path checks to changed files.
 
@@ -42,6 +44,7 @@ This maintenance & community-PR update integrates **PR #30** (@UrsineBear) and *
 
 ## Known issues
 
+- **Lv. 130 Tyrannotitan Kurodil freeze on NVIDIA ([#32](https://github.com/weile10000/xc2-ns2-recomp/issues/32))**: reproduces on both v0.1.4 and v0.2.0 even at 1080p with frame generation off (`nvoglv64.dll` wait / GPU TDR timeout around `fs be528292f3d04f1b`). Tracked for targeted shader/sync investigation in a future release.
 - **Blinking / dialogue flicker** ([#15](https://github.com/weile10000/xc2-ns2-recomp/issues/15)): remains open. Opt-in `[nvn] view_reinterpret = 1` was tested and confirmed not to fix it (kept `0` by default).
 - **Add-on scenes & first-run pipeline compile**: Torna / add-on scenes remain heavier than base game areas; first launch compiles Vulkan pipelines (~20 s pause).
 - **Red edge** on the cloud sea silhouette in the opening battle background (cosmetic, single scene).
@@ -88,6 +91,8 @@ Upstream: **fefw-recomp**, **nxrecomp**, **nxnative**, AMD **FidelityFX**, NVIDI
 
 - **修复 v0.1.2 以来的音频带电爆音问题（[#37](https://github.com/weile10000/xc2-ns2-recomp/issues/37)）**：修正了 `xc2/src/x2_audio301.cpp` 将 `nn::audio::OutputStream` 释放事件误创建为 `ManualClear`（`0`）而非 `EventClearMode_AutoClear`（`1`）的问题，并在写入时同步唤醒线程的队列水位，彻底消除音频线程 100% 空转抢占 XAudio2 引擎锁引起的电流爆音与降速。
 - 新增 `VK_AMD_shader_early_and_late_fragment_tests`（`early_fragment_tests = auto`）、`VK_EXT_attachment_feedback_loop_layout` 零拷贝色彩反馈（`[nvn] fb_reuse`）、修复 `nvn_pipeline.cpp` UAF、优化 `nvn-texprep` 线程优先级，以及全屏/无边框空闲鼠标自动隐藏。
+- **FSR 加载优先级与无边框启动卡死修复（[#18](https://github.com/weile10000/xc2-ns2-recomp/issues/18)）**：缺失 loader 时优先选用可独立工作的 v2.4 `amd_fidelityfx_upscaler_vk.dll`（避免误选同目录 `amd_fidelityfx_vk.dll` 导致首帧崩溃）；同时将启动期的无边框/全屏切换延后到 Vulkan 设备与初始 Swapchain 建立之后，避免驱动/DWM 互锁黑屏。
+- **大幅缩短首次 Set up 安装耗时（约提速 34%）**：`extract_embedded.py` 改为多线程并行 zlib 解压、`build_cache.py` 消除数万次冗余文件复制并支持发布包 `--no-val`、`xc2_setup.py` 合入单进程 lift + `bucket=0x40000` + 模块级 PCH 预编译头与免 PDB 链接，并改用自适应静止早停加速无头预热（实测同机从 ~11.7 分钟降至 ~7.6 分钟）。
 - **启动与 DLC 路径**：`mem::alias_base()` 在默认 `0x2000000000` 被占用时自动探测空闲 128 GiB 窗口（[#33](https://github.com/weile10000/xc2-ns2-recomp/issues/33)）；`aoc_indices()` 改用 UTF-8 路径，修复中文等非 ASCII DLC 目录崩溃（[#25](https://github.com/weile10000/xc2-ns2-recomp/issues/25)）。
 - **CI 检查**：清理 `tools/run/route.ps1` 硬编码本机路径，并将 PR 个人路径检查限定在改动文件范围内。
 
@@ -102,6 +107,7 @@ Upstream: **fefw-recomp**, **nxrecomp**, **nxnative**, AMD **FidelityFX**, NVIDI
 
 ## 已知问题
 
+- **130 级暴虐巨神兽库洛戴伊尔战斗画面冻结（[#32](https://github.com/weile10000/xc2-ns2-recomp/issues/32)）**：N 卡下即使 1080p 且关闭帧生成仍可能在特定高并发绘制处触发 `nvoglv64.dll` TDR 挂起（0.1.4 与 0.2.0 均存在），已列入后续版本专项待修复清单。
 - **眨眼 / 对白眼嘴闪烁**（[#15](https://github.com/weile10000/xc2-ns2-recomp/issues/15)）：继续挂起排查（已实机验证 `[nvn] view_reinterpret = 1` 并非根因，默认保持关闭）。
 - **附加内容重场景负载较高**，以及首次运行约 20 秒管线编译提示。
 - 开场战斗背景云海红边（单场景纯视觉）。
