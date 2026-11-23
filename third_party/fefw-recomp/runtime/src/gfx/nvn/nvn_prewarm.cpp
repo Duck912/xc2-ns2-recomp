@@ -109,9 +109,9 @@ uint64_t digest_of(const uint64_t h[3], const uint8_t* rest) {
     return d;
 }
 
-// The record of a key; false when it cannot be recorded (tessellation, a stage the cache has no hash for).
+// The record of a key; false when it cannot be recorded (tessellation, runtime-patched uint samplers, or no shader hash).
 bool rec_of(const GraphicsKey& key, Rec* r) {
-    if (key.tess[0] || key.tess[1]) return false;
+    if (key.tess[0] || key.tess[1] || key.uint_samplers) return false;
     std::memset(r, 0, sizeof *r);
     for (int i = 0; i < 3; ++i) r->h[i] = key.stage[i] ? parse_hash(key.stage[i]->hash) : 0;
     if (!r->h[0]) return false;
