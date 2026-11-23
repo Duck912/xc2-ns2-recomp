@@ -313,23 +313,23 @@ void LiveInput::live(nxrt::hid::InputSnapshot &out) {
             g_renderer->request_screenshot(path);
             if (--f12_left == 0) NXLOG_I("input", "F12: %u screenshots written", shots);
         }
-        // Ctrl+F11: trace the next presented frame (plain F11 is fullscreen toggle in play mode).
-        const bool f11 = down(VK_CONTROL) && (down(VK_F11) || tapped(VK_F11));
-        if (f11 && !f11_was_down) {
+        // F9 or Ctrl+F11: trace the next presented frame (plain F11 is fullscreen toggle in play mode).
+        const bool trace_key = (down(VK_F9) || tapped(VK_F9)) || (down(VK_CONTROL) && (down(VK_F11) || tapped(VK_F11)));
+        if (trace_key && !f11_was_down) {
             static const int trace_span = [] {
                 const char* s = std::getenv("NXRT_TRACE_SPAN");
                 return s ? std::atoi(s) : 0;
             }();
             if (trace_span > 0) {
                 nxrt::nvn::backend_trace_frames(trace_span);
-                NXLOG_I("input", "Ctrl+F11: tracing the next %d frames", trace_span);
+                NXLOG_I("input", "F9/Ctrl+F11: tracing the next %d frames", trace_span);
             } else {
                 nxrt::nvn::backend_trace_next_frame();
-                NXLOG_I("input", "Ctrl+F11: tracing the next frame (render targets -> trace_t<id>_<fmt>.png here)");
+                NXLOG_I("input", "F9/Ctrl+F11: tracing the next frame (render targets -> trace_t<id>_<fmt>.png here)");
             }
         }
-        f11_was_down = f11;
-    } else if (down(VK_F12)) {
+        f11_was_down = trace_key;
+    } else if (down(VK_F12) || down(VK_F9)) {
         // a hotkey is held but the window does not have the focus: say so once, so a session log can tell it apart from
         // "the hotkey is broken"
         static bool said = false;

@@ -732,7 +732,7 @@ void handle_event(const input::Event& e, uint64_t now) {
             if (st.quit_on_close) quit_now("window closed");
             break;
         case EventType::KeyDown:
-            if (e.u.key.scancode == SDL_SCANCODE_F11 ||
+            if ((e.u.key.scancode == SDL_SCANCODE_F11 && !(e.mods & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_SHIFT))) ||
                 ((e.u.key.scancode == SDL_SCANCODE_RETURN || e.u.key.scancode == SDL_SCANCODE_KP_ENTER) && (e.mods & SDL_KMOD_ALT))) {
                 if (!(e.flags & input::kFlagRepeat)) toggle_fullscreen();
                 return;
