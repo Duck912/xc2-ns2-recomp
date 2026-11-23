@@ -34,7 +34,7 @@ An ahead-of-time ("static") recompilation of the **Nintendo Switch 2 program of 
 
 ### Screenshots (AMD RX 6800 XT · Vulkan 1.4 · Retail 3.0.1)
 
-| Title Screen (`2560×1440`, 60 Hz · with `TitleLogoSwap` test mod) | Gormott Field (Clear Save · Retail `3.0.1`) |
+| Title Screen (`1920×1080` preview from `2560×1440` 60 Hz log · `TitleLogoSwap` test mod · no OSD overlay) | Gormott Field (`1280×720` preview · Clear Save · Retail `3.0.1` · no OSD overlay) |
 |---|---|
 | ![Title Screen](docs/images/title-301-1440p.jpg) | ![Gormott Field](docs/images/gormott-field-301.jpg) |
 
@@ -182,7 +182,7 @@ Requirements: **Windows 10/11 x64**, **Vulkan 1.3 GPU**, **16 GB+ RAM**, **~60 G
 
 ### 实机运行截图（AMD RX 6800 XT · Vulkan 1.4 · 零售版 3.0.1）
 
-| 标题画面（`2560×1440`，60 Hz · 含 `TitleLogoSwap` 归档 MOD 验证） | 古拉原野实机画面（通关存档 · 零售版 `3.0.1`） |
+| 标题画面（`1920×1080` 预览图，源自 `2560×1440` 60 Hz 运行日志 · 含 `TitleLogoSwap` 归档 MOD · 无屏显帧率） | 古拉原野实机画面（`1280×720` 预览图 · 通关存档 · 零售版 `3.0.1` · 无屏显帧率） |
 |---|---|
 | ![标题画面](docs/images/title-301-1440p.jpg) | ![古拉原野实机画面](docs/images/gormott-field-301.jpg) |
 

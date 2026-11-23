@@ -38,6 +38,8 @@ Sanitized excerpt from `work/logs/play-20261123-152002.log`:
 
 ## Captured Visual Verification
 
-| Title Screen (`2560×1440`, 60 Hz · `TitleLogoSwap` mod active) | Gormott Field (Clear Save · Retail `3.0.1`) |
+*(Note: checked-in `.jpg` assets below are compressed preview captures without an in-frame F10 OSD overlay; exact swapchain resolution and `60.0 fps` pacing are confirmed in the telemetry excerpt above.)*
+
+| Title Screen (`1920×1080` preview · `TitleLogoSwap` mod active) | Gormott Field (`1280×720` preview · Clear Save · Retail `3.0.1`) |
 |---|---|
 | ![Title Screen](../images/title-301-1440p.jpg) | ![Gormott Field](../images/gormott-field-301.jpg) |

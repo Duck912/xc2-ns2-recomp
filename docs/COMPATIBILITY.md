@@ -7,12 +7,18 @@ You need your own dump: the ExeFS of the 3.0.1 program and its romfs. No game da
 ## Requirements
 
 - Windows 10 or later, x86-64 with AVX2
-- a GPU with Vulkan 1.3 (`VK_EXT_external_memory_host`); primary development & verification is on **AMD RDNA 2**
-  (Radeon RX 6800 XT). NVIDIA and Intel GPUs have limited coverage and open issues (for example, `#32` boss freeze
-  on NVIDIA, `#39` 3D rendering, and `#25`/`#33` setup/startup reports) — check open issues before assuming parity
+- a GPU with Vulkan 1.3 (`VK_EXT_external_memory_host`)
 - 16 GB of RAM; the 3.0.1 romfs alone is 25.6 GB, and the build needs roughly as much again for the generated
   C++ and objects, so keep about 60 GB free during the build
 - your own copy of the game and its 3.0.1 update
+
+### GPU & Platform Matrix
+
+| Hardware / Environment | Coverage | Current Notes & Open Issues |
+|---|---|---|
+| **AMD RDNA 2** (RX 6800 XT) | Primary dev & benchmark | 59–60 fps typical, 43–52 fps open plains (`1440p` HDR10); mirror-capture fixes cloud-sea rim & motion shimmer |
+| **NVIDIA** (RTX series) | Community & partial repro | `#32` Tyrannotitan Kurodil freeze (TDR), `#15` blinking/flicker (`view_reinterpret` opt-in); `#39` 4K/quality 3D dot-grid fixed on integration branch after `v0.2.1`; see [`tools/shader/PATCHES.md`](../tools/shader/PATCHES.md) for NVIDIA validation state |
+| **Intel GPU / Wine-Proton** | Limited reports | `#25` / `#33` startup & setup reports, `#35` Wine/Proton movie handling |
 
 ## Measured frame rate
 
@@ -45,7 +51,6 @@ Ryzen 7 5800X + Radeon RX 6800 XT, Adrenalin 26.10.1, 1440p window:
 | | why |
 |---|---|
 | **add-on content shipped inside the game** | the retail 3.0.1 program links no `nn::aoc` symbols of its own; add-ons are served by the runtime's `aoc:u` from the directory in `NXRT_AOC_DIR` (the 3.0.1 launcher points it at `game/dlc-301`), and the DLC files themselves are not distributed |
-| **internal rendering above 1440p** | the game's own chain tops out at 2560×1440 in docked mode |
 
 ## Known issues
 
@@ -59,10 +64,9 @@ Ryzen 7 5800X + Radeon RX 6800 XT, Adrenalin 26.10.1, 1440p window:
 - **Slow frames on area transitions** (texture uploads and memory-pool imports), not in steady play.
 - **Shader cache & NVIDIA validation state**: stencil-plane sampler fixes (`VUID-vkCmdDrawIndexed-format-07753`) are
   reproduced automatically on the player's own shader cache by
-  [`tools/shader/patch_ds_samplers.py`](../tools/shader/patch_ds_samplers.py). The earlier froxel volumetric-fog
-  workaround (`2649526f56d9b5b6`) was retired on 2026-11-17 because the underlying cause was resolved. Only one minor
-  per-shader NVIDIA validation-layer mismatch tweak (`87d073eae1cc6f14` location-1 output type) remains unautomated
-  and is documented in [`tools/shader/PATCHES.md`](../tools/shader/PATCHES.md).
+  [`tools/shader/patch_ds_samplers.py`](../tools/shader/patch_ds_samplers.py), and the retired `2649526f56d9b5b6`
+  volumetric-fog workaround was removed on 2026-11-17. [`tools/shader/PATCHES.md`](../tools/shader/PATCHES.md) is the
+  single source of truth for the remaining unautomated/per-shader items.
 - **Lv. 130 Tyrannotitan Kurodil freeze on NVIDIA ([#32](https://github.com/weile10000/xc2-ns2-recomp/issues/32))**:
   reproduces on NVIDIA GPUs around a high-concurrency draw (`fs be528292f3d04f1b`) and triggers a driver TDR; open for
   investigation.
