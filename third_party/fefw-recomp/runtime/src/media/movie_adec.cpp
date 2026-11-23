@@ -42,7 +42,9 @@ namespace {
 
 constexpr const char* kTag = "movie";
 constexpr uint64_t kMarker = 0x4e58524341444331ull;
-constexpr uint32_t kResultNoFrame = 0x7b;
+// movie::Status_ErrorNoFrame is 12 (0x0c), not 0x7b: verified in main (0x710071b1dc, cmp w8, #12) and
+// subsdk0 (0x760001ad88). Returning 0x7b caused the player to fall through with frame == nullptr and crash.
+constexpr uint32_t kResultNoFrame = 0x0c;
 constexpr uint64_t kBufData = 0x00, kBufSize = 0x08, kBufFilled = 0x10, kBufTime = 0x18, kBufFlags = 0x20;
 constexpr uint64_t kAfBuffer = 0x00, kAfChannels = 0x14;   // AudioFrame: buffer, then the channel count
 
@@ -612,21 +614,18 @@ void adec_acquire(::Ctx* c) {
     if (A(2)) wr32(A(2), 0xffffffffu);
     if (!d) { RET(kResultNoFrame); return; }
     uint64_t f = 0;
-    bool more_ready = false;
     {
         std::lock_guard<std::mutex> lk(d->mu);
         g_adec_acquire.fetch_add(1, std::memory_order_relaxed);
         adec_state_tick(d);
         if (d->ready.empty()) deliver_sound(*d);   // a frame may have come back since; the backlog goes into it
         if (d->ready.empty()) {
-            g_adec_miss.fetch_add(1, std::memory_order_relaxed);
-            if (g_log) {
-                static std::atomic<uint64_t> n{0};
-                const uint64_t k = n.fetch_add(1);
-                if (k < 20 || k % 200 == 0)
-                    NXLOG_I(kTag, "AudioDecoder: AcquireAudioFrame found nothing (call %llu): frames %zu, free %zu, packets %llu",
-                            static_cast<unsigned long long>(k), d->frames.size(), d->free_.size(), static_cast<unsigned long long>(d->packets));
-            }
+            const uint64_t m = g_adec_miss.fetch_add(1, std::memory_order_relaxed);
+            d->out_ready.clear();
+            if (m < 5 || (g_log && (m < 20 || m % 200 == 0)))
+                NXLOG_W(kTag, "AudioDecoder: AcquireAudioFrame found nothing (miss %llu): packets %llu decoded %llu sound %zu free %zu frames %zu",
+                        static_cast<unsigned long long>(m), static_cast<unsigned long long>(d->packets),
+                        static_cast<unsigned long long>(d->decoded), d->sound.size(), d->free_.size(), d->frames.size());
             RET(kResultNoFrame);
             return;
         }
@@ -634,12 +633,11 @@ void adec_acquire(::Ctx* c) {
         d->ready.pop_front();
         d->last_acquired = f;
         if (rd8(f + 0x10) != 0) d->eos_acquired = true;
-        more_ready = !d->ready.empty();
+        // out_ev is AutoClear (binary), while AudioHandler counts one wakeup per AcquireAudioFrame call:
+        // burst deliveries coalesce signals, so leaving >0 frames in d->ready without re-signaling strands
+        // trailing frames (including the EOS-marked frame if audio ended before video).
+        if (!d->ready.empty()) signal_output_ready(*d);
     }
-    // out_ev is AutoClear (binary), while AudioHandler counts one wakeup per AcquireAudioFrame call:
-    // burst deliveries coalesce signals, so leaving >0 frames in d->ready without re-signaling strands
-    // trailing frames (including the EOS-marked frame if audio ended before video).
-    if (more_ready) signal_output_ready(*d);
     if (A(1)) wr64(A(1), f);
     RET(0);
 }
