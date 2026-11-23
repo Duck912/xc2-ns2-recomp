@@ -1256,4 +1256,220 @@ bool spirv_add_early_fragment_tests(const std::vector<uint32_t>& in, std::vector
     return true;
 }
 
+bool spirv_uint_samplers(const std::vector<uint32_t>& in, const std::vector<SpvSamplerSlot>& slots, std::vector<uint32_t>& out) {
+    if (slots.empty() || in.size() < 5) return false;
+    enum : uint32_t {
+        OpTypeImageOp = 25, OpTypeSampledImageOp = 27, OpCopyObjectOp = 83, OpSampledImageOp = 86, OpImageOp = 100,
+        OpLoadOp = 61, OpStoreOp = 62, OpCopyMemoryOp = 63, OpCopyMemorySizedOp = 64, OpImageWriteOp = 99,
+        OpBitcastOp = 124, DecorationBindingOp = 33, DecorationDescriptorSetOp = 34, StorageUniformConstant = 0,
+    };
+    auto is_sample_op = [](uint32_t op) { return (op >= 87 && op <= 98) || (op >= 305 && op <= 314); };
+    std::vector<Inst> insts;
+    for (size_t i = 5; i < in.size();) {
+        const uint32_t len = in[i] >> 16;
+        if (!len || i + len > in.size()) return false;
+        insts.push_back({i, in[i] & 0xffff, len});
+        i += len;
+    }
+
+    uint32_t bound = in[3];
+    size_t first_function = 0, first_img_at = 0;
+    std::map<uint32_t, uint32_t> sets, bindings;
+    std::map<uint32_t, size_t> img_at;
+    std::map<uint32_t, uint32_t> simg_to_img;
+    std::map<uint32_t, std::pair<uint32_t, uint32_t>> ptrs;
+    std::map<uint32_t, std::pair<uint32_t, uint32_t>> vecs;
+    std::map<uint32_t, uint32_t> var_ptr;
+    uint32_t f32 = 0, u32 = 0, v4u = 0;
+    for (const Inst& n : insts) {
+        const uint32_t* w = &in[n.at];
+        if (!first_function && n.op == OpFunction) first_function = n.at;
+        else if (n.op == OpDecorate && n.len >= 4) {
+            if (w[2] == DecorationDescriptorSetOp) sets[w[1]] = w[3];
+            else if (w[2] == DecorationBindingOp) bindings[w[1]] = w[3];
+        } else if (n.op == OpTypeFloat && n.len >= 3 && w[2] == 32) f32 = w[1];
+        else if (n.op == OpTypeInt && n.len == 4 && w[2] == 32 && w[3] == 0) u32 = w[1];
+        else if (n.op == OpTypeVector && n.len == 4) vecs[w[1]] = {w[2], w[3]};
+        else if (n.op == OpTypeImageOp && n.len >= 9) {
+            img_at[w[1]] = n.at;
+            if (!first_img_at) first_img_at = n.at;
+        } else if (n.op == OpTypeSampledImageOp && n.len == 3) simg_to_img[w[1]] = w[2];
+        else if (n.op == OpTypePointer && n.len == 4) ptrs[w[1]] = {w[2], w[3]};
+        else if (n.op == OpVariable && n.len >= 4 && w[3] == StorageUniformConstant && !first_function) var_ptr[w[2]] = w[1];
+    }
+    if (!first_function || !first_img_at || !f32) return false;
+    if (u32) {
+        for (const auto& kv : vecs)
+            if (kv.second.first == u32 && kv.second.second == 4) { v4u = kv.first; break; }
+    }
+
+    auto wanted_slot = [&](uint32_t vid) {
+        auto bs = bindings.find(vid);
+        if (bs == bindings.end()) return false;
+        const uint32_t s = sets.count(vid) ? sets[vid] : 0;
+        for (const SpvSamplerSlot& sl : slots)
+            if (sl.set == s && sl.binding == bs->second) return true;
+        return false;
+    };
+
+    std::vector<uint32_t> pre_types;
+    if (!u32) {
+        u32 = bound++;
+        pre_types.insert(pre_types.end(), {(4u << 16) | OpTypeInt, u32, 32u, 0u});
+    }
+    if (!v4u) {
+        v4u = bound++;
+        pre_types.insert(pre_types.end(), {(4u << 16) | OpTypeVector, v4u, u32, 4u});
+        vecs[v4u] = {u32, 4u};
+    }
+
+    std::map<std::vector<uint32_t>, uint32_t> created_images;
+    std::map<uint32_t, uint32_t> created_simgs;
+    std::map<std::pair<uint32_t, uint32_t>, uint32_t> created_ptrs;
+    std::map<size_t, std::vector<uint32_t>> after_type_decls;
+    std::map<uint32_t, uint32_t> var_new_ptr, var_load_ty, var_img_ty;
+
+    for (const auto& kv : var_ptr) {
+        const uint32_t vid = kv.first;
+        if (!wanted_slot(vid)) continue;
+        auto pit = ptrs.find(kv.second);
+        if (pit == ptrs.end()) continue;
+        const uint32_t storage = pit->second.first, pointee = pit->second.second;
+        bool sampled = false;
+        uint32_t old_img = 0;
+        if (simg_to_img.count(pointee)) { sampled = true; old_img = simg_to_img[pointee]; }
+        else if (img_at.count(pointee)) { old_img = pointee; }
+        else continue;
+        const size_t iat = img_at[old_img];
+        const uint32_t ilen = in[iat] >> 16;
+        if (in[iat + 2] != f32) continue;   // already integer or non-float
+
+        const std::vector<uint32_t> tail(in.begin() + static_cast<std::ptrdiff_t>(iat + 3),
+                                         in.begin() + static_cast<std::ptrdiff_t>(iat + ilen));
+        uint32_t new_img = 0;
+        if (auto ci = created_images.find(tail); ci != created_images.end()) new_img = ci->second;
+        else {
+            for (const auto& ex : img_at) {
+                const uint32_t ex_len = in[ex.second] >> 16;
+                if (in[ex.second + 2] == u32 && ex_len == ilen &&
+                    std::equal(in.begin() + static_cast<std::ptrdiff_t>(ex.second + 3),
+                               in.begin() + static_cast<std::ptrdiff_t>(ex.second + ex_len), tail.begin())) {
+                    new_img = ex.first;
+                    break;
+                }
+            }
+            if (!new_img) {
+                new_img = bound++;
+                auto& ins = after_type_decls[iat];
+                ins.push_back((ilen << 16) | OpTypeImageOp);
+                ins.push_back(new_img);
+                ins.push_back(u32);
+                ins.insert(ins.end(), tail.begin(), tail.end());
+                created_images[tail] = new_img;
+            }
+        }
+
+        uint32_t new_pointee = new_img;
+        if (sampled) {
+            uint32_t new_simg = 0;
+            if (auto cs = created_simgs.find(new_img); cs != created_simgs.end()) new_simg = cs->second;
+            else {
+                for (const auto& ex : simg_to_img) if (ex.second == new_img) { new_simg = ex.first; break; }
+                if (!new_simg) {
+                    new_simg = bound++;
+                    auto& ins = after_type_decls[iat];
+                    ins.insert(ins.end(), {(3u << 16) | OpTypeSampledImageOp, new_simg, new_img});
+                    created_simgs[new_img] = new_simg;
+                }
+            }
+            new_pointee = new_simg;
+        }
+
+        uint32_t new_ptr = 0;
+        const std::pair<uint32_t, uint32_t> pk = {storage, new_pointee};
+        if (auto cp = created_ptrs.find(pk); cp != created_ptrs.end()) new_ptr = cp->second;
+        else {
+            for (const auto& ex : ptrs) if (ex.second == pk) { new_ptr = ex.first; break; }
+            if (!new_ptr) {
+                new_ptr = bound++;
+                auto& ins = after_type_decls[iat];
+                ins.insert(ins.end(), {(4u << 16) | OpTypePointer, new_ptr, storage, new_pointee});
+                created_ptrs[pk] = new_ptr;
+            }
+        }
+        var_new_ptr[vid] = new_ptr;
+        var_load_ty[vid] = new_pointee;
+        var_img_ty[vid] = new_img;
+    }
+    if (var_new_ptr.empty()) return false;
+
+    std::map<uint32_t, uint32_t> target_ssa;   // SSA value id -> variable id
+    std::map<size_t, uint32_t> op_retype;      // inst.at -> new result type id
+    struct BitcastAfter { uint32_t back_type, old_res, new_res; };
+    std::map<size_t, BitcastAfter> bc_after;
+    std::map<uint32_t, uint32_t> remap;
+
+    for (const Inst& n : insts) {
+        if (n.at < first_function || n.len < 4) continue;
+        const uint32_t* w = &in[n.at];
+        if (n.op == OpLoadOp && var_load_ty.count(w[3])) {
+            target_ssa[w[2]] = w[3];
+            op_retype[n.at] = var_load_ty[w[3]];
+        } else if (n.op == OpCopyObjectOp && target_ssa.count(w[3])) {
+            const uint32_t vid = target_ssa[w[3]];
+            target_ssa[w[2]] = vid;
+            op_retype[n.at] = var_load_ty[vid];
+        } else if (n.op == OpSampledImageOp && target_ssa.count(w[3])) {
+            const uint32_t vid = target_ssa[w[3]];
+            target_ssa[w[2]] = vid;
+            op_retype[n.at] = var_load_ty[vid];
+        } else if (n.op == OpImageOp && target_ssa.count(w[3])) {
+            const uint32_t vid = target_ssa[w[3]];
+            target_ssa[w[2]] = vid;
+            op_retype[n.at] = var_img_ty[vid];
+        } else if (is_sample_op(n.op) && target_ssa.count(w[3])) {
+            const uint32_t res_ty = w[1];
+            uint32_t u_res_ty = 0;
+            if (res_ty == f32) u_res_ty = u32;
+            else if (auto vit = vecs.find(res_ty); vit != vecs.end() && vit->second.first == f32 && vit->second.second == 4) u_res_ty = v4u;
+            if (!u_res_ty) continue;
+            op_retype[n.at] = u_res_ty;
+            const uint32_t bc_id = bound++;
+            bc_after[n.at] = {res_ty, w[2], bc_id};
+            remap[w[2]] = bc_id;
+        }
+    }
+    if (bc_after.empty()) return false;
+
+    out.clear();
+    out.reserve(in.size() + pre_types.size() + bc_after.size() * 4 + 32);
+    out.insert(out.end(), in.begin(), in.begin() + 5);
+    out[3] = bound;
+
+    for (const Inst& n : insts) {
+        if (n.at == first_img_at && !pre_types.empty()) out.insert(out.end(), pre_types.begin(), pre_types.end());
+        const size_t at = out.size();
+        out.insert(out.end(), in.begin() + static_cast<std::ptrdiff_t>(n.at), in.begin() + static_cast<std::ptrdiff_t>(n.at + n.len));
+        if (n.op == OpVariable && n.len >= 4) {
+            if (auto vt = var_new_ptr.find(in[n.at + 2]); vt != var_new_ptr.end()) out[at + 1] = vt->second;
+        }
+        if (auto rt = op_retype.find(n.at); rt != op_retype.end()) out[at + 1] = rt->second;
+        if (n.at >= first_function && !remap.empty()) {
+            const bool no_res = (n.op == OpStoreOp || n.op == OpCopyMemoryOp || n.op == OpCopyMemorySizedOp ||
+                                 n.op == OpImageWriteOp || (n.op >= 218 && n.op <= 225) || (n.op >= 246 && n.op <= 255) || n.op == 4416);
+            const uint32_t first_op = no_res ? 1u : 3u;
+            for (uint32_t k = first_op; k < n.len; ++k) {
+                if (auto r = remap.find(out[at + k]); r != remap.end()) out[at + k] = r->second;
+            }
+        }
+        if (auto dt = after_type_decls.find(n.at); dt != after_type_decls.end()) {
+            out.insert(out.end(), dt->second.begin(), dt->second.end());
+        }
+        if (auto ba = bc_after.find(n.at); ba != bc_after.end()) {
+            out.insert(out.end(), {(4u << 16) | OpBitcastOp, ba->second.back_type, ba->second.new_res, ba->second.old_res});
+        }
+    }
+    return true;
+}
+
 }  // namespace nxrt::nvn::be::gpu

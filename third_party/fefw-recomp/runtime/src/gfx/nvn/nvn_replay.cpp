@@ -225,6 +225,7 @@ bool g_earlyz_scratch = false;      // build_set binds the scratch storage image
 VkPipeline g_earlyz_pipe = VK_NULL_HANDLE;
 GraphicsKey g_pipe_key;             // the key the bound pipeline was made from (the pre-pass uses it with the colour writes masked off)
 bool g_pipe_key_valid = false;
+uint64_t g_draw_uint_samplers = 0;  // fragment refl.bindings bitmask bound to colour integer textures in this draw
 uint64_t g_earlyz_draws = 0;        // draws emulated this session (trace summary)
 
 // [nvn] earlyz_mask (default 1, HANDOVER 45.2): derive the registration mask from the list after every light-list draw. The OR
@@ -1671,6 +1672,8 @@ void prepare_textures(const ProgLayout& pl) {
     g_storage_bound.clear();
     g_storage_unscale.clear();
     bool written_gfx = false;   // a draw (not a dispatch) writes a storage image, which stays unscaled
+    uint64_t uint_samplers = 0;
+    static const bool uint_tex_patch = nxrt::config_get_bool("nvn", "uint_tex_patch", true);
     for (const BindingDesc& d : pl.bindings) {
         TexResolved tmp;
         if (d.type == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE) {
@@ -1704,11 +1707,23 @@ void prepare_textures(const ProgLayout& pl) {
         if (!tex_gpu(r.tex)) continue;
         // owned by the pass; a compute dispatch runs outside every pass, so the graphics attachments do not own what it samples
         if (shares_image(r.tex, S.depth_tex.get()) || (d.nvn_stage != kCompute && is_color_feedback(r.tex))) continue;
+        if (uint_tex_patch && d.nvn_stage == kFragment && d.index >= 0 && d.index < 64 &&
+            b.image.component == ScalarType::Float && !tex_is_depth(r.tex)) {
+            const VkFormat tf = tex_vk_format(r.tex);
+            if (vk_format_is_integer(tf) && !vk_format_is_signed_int(tf)) {
+                uint_samplers |= 1ull << d.index;
+                if (first_time_key("uint-tex-patch " + d.shader->hash + " " + std::to_string(b.set) + " " + std::to_string(b.binding))) {
+                    NXLOG_I(kTag, "uint_tex_patch: fs %s s%ub%u (%s) samples integer texture %u (%s) as usampler",
+                            d.shader->hash.c_str(), b.set, b.binding, b.name.c_str(), r.tex->id, r.tex->fmt ? r.tex->fmt->name : "?");
+                }
+            }
+        }
         if (r.tex->cpu_dirty.load() || tex_layout(r.tex) != tex_sampled_layout(r.tex)) {
             need.push_back(r.tex);
             if (r.tex->cpu_dirty.load() && ft::on()) ft::mark(b.nvn.source == NvnSource::SamplerBinding ? "tx.dirty_bind" : "tx.dirty_uniform", r.tex->id);
         }
     }
+    g_draw_uint_samplers = uint_samplers;
     if (pl.has_set[kPoolSet]) {
         // a shader indexing the pools may sample any registered texture: those not ready, except what the pass renders to (their pool
         // elements hold the dummy meanwhile, nvn_pipeline.cpp)
@@ -2557,6 +2572,9 @@ VkDescriptorSet build_set(const ProgLayout& pl, uint32_t set) {
             const bool feedback = !hw_fb_loop && r.tex && d.nvn_stage != kCompute && is_color_feedback(r.tex);
             if (r.tex && tex_gpu(r.tex) && !feedback) {
                 ViewRequest vr = make_request(b, r);
+                if (d.nvn_stage == kFragment && d.index >= 0 && d.index < 64 && ((g_draw_uint_samplers >> d.index) & 1ull)) {
+                    vr.component = 3;   // shader variable was rewritten to usampler by uint_tex_patch
+                }
                 // [nvn] ds_depth_shaders = "hash16,hash16": fragment shaders that read a depth-stencil texture as a
                 // FLOAT value (luma weights, depth effects) instead of as the raw stencil byte. The game's
                 // depth_stencil_mode says which plane it means, but a shader that does arithmetic on the value wants
@@ -2626,6 +2644,11 @@ VkDescriptorSet build_set(const ProgLayout& pl, uint32_t set) {
                                                 ? "supported" : "NOT SUPPORTED by this driver");
                                 }
                             }
+                        }
+                        const VkFormat ivf = tex_vk_format(r.tex);
+                        if (!tex_is_depth(r.tex) && vk_format_is_integer(ivf)) {
+                            s.min_filter = NVN_MIN_FILTER_NEAREST;
+                            s.mag_filter = NVN_MAG_FILTER_NEAREST;
                         }
                         static const bool depth_nearest = nxrt::config_get_bool("nvn", "depth_sampler_nearest", false);
                         if (depth_nearest) {
@@ -3129,6 +3152,7 @@ bool build_key(GraphicsKey& key, VkPrimitiveTopology topo) {
         TRACE("    logic: fs %s state %d -> key enable %d op %d (mask0 %x, blend0 %d)", S.stage[kFragment]->hash.c_str(), S.color.logic_op, key.logic_op_enable,
               key.logic_op, key.write_mask[0], key.blend_enable[0]);
     if (S.color.alpha_test != 0 && S.color.alpha_test != NVN_ALPHA_FUNC_ALWAYS) log_once("alpha-test", "alpha test is enabled by the game: not implemented (needs a shader variant)");
+    key.uint_samplers = g_draw_uint_samplers;
     return true;
 }
 
@@ -4106,6 +4130,7 @@ bool begin_draw(int mode, bool indexed, int index_type, VkPrimitiveTopology* top
     if (g_prog_writes || g_xfb_active) g_pass_unsafe = true;
     rs_mark(kRsPass);
     const VkPrimitiveTopology topo = vk_topology(mode);
+    if (g_draw_uint_samplers != (g_pipe_key_valid ? g_pipe_key.uint_samplers : 0ull)) g_dirty |= kPipe;
     if (g_dirty & kPipe) ++g_rs.draws_pipe;
     if ((g_dirty & kPipe) || topo != g_pipe_topo || !g_pipe) {
         ++g_rs.keys;
@@ -4513,7 +4538,11 @@ void trace_snap_after_draw() {
         const int idx = snapshot_record(t, *F);
         if (idx < 0) return;
         char buf[96];
-        g_trace_snaps.push_back({idx, g_trace_n, std::string("work/trace/snap_d") + std::to_string(g_trace_n) + "_t" + std::to_string(t->id) + "_" + (t->fmt ? t->fmt->name : "x") + ".png", tex_desc(t, buf, sizeof buf)});
+        static const bool span_env = std::getenv("NXRT_TRACE_SPAN") && std::atoi(std::getenv("NXRT_TRACE_SPAN")) > 1;
+        const std::string fpre = (span_env || g_trace_span.load(std::memory_order_relaxed) > 0)
+                                     ? ("f" + std::to_string(counters().presents.load()) + "_")
+                                     : std::string();
+        g_trace_snaps.push_back({idx, g_trace_n, std::string("work/trace/snap_") + fpre + "d" + std::to_string(g_trace_n) + "_t" + std::to_string(t->id) + "_" + (t->fmt ? t->fmt->name : "x") + ".png", tex_desc(t, buf, sizeof buf)});
     };
     for (uint32_t i = 0; i < S.ncolor; ++i) take(S.color_tex[i].get());
     take(S.depth_tex.get());

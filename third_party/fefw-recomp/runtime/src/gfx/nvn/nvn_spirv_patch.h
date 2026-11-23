@@ -103,6 +103,15 @@ bool spirv_outputs_to_uint(const std::vector<uint32_t>& in, std::vector<uint32_t
 // Why the last call refused, or "" (diagnostic only, thread local).
 const char* spirv_outputs_to_uint_reason();
 
+// A fragment sampler binding that the shader declared as float (sampler2D) but the draw feeds with an unsigned integer
+// texture (R8_UINT / R16_UINT / R32_UINT). Rewrites those (set, binding) variables to usampler and bitcasts the sampled/fetched
+// uint bits back to the shader's float type so floatBitsToInt(...) reads the console's raw bits legally in Vulkan.
+struct SpvSamplerSlot {
+    uint32_t set = 0;
+    uint32_t binding = 0;
+};
+bool spirv_uint_samplers(const std::vector<uint32_t>& in, const std::vector<SpvSamplerSlot>& slots, std::vector<uint32_t>& out);
+
 struct SpvXfbOutput {
     uint32_t location, components, offset;   // offset in bytes inside a captured vertex
 };

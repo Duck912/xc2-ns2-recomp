@@ -707,6 +707,33 @@ std::vector<SpvIntSlot> key_int_slots(const GraphicsKey& key) {
     return int_slots;
 }
 
+static VkShaderModule fs_uint_sampler_module(const GraphicsKey& key, VkShaderModule fallback) {
+    const ShaderInfo* fs = key.stage[1];
+    if (!fs || !key.uint_samplers) return fallback;
+    std::vector<SpvSamplerSlot> slots;
+    std::vector<uint32_t> id;
+    const uint32_t flags = (key.no_out ? 1u : 0u) | ((key.logic_op_enable && key_int_colour(key)) ? 2u : 0u) | (key.dual_src ? 4u : 0u);
+    if (flags) id.push_back(0x30000000u | flags);
+    for (uint32_t i = 0; i < 64 && i < fs->refl.bindings.size(); ++i) {
+        if (!((key.uint_samplers >> i) & 1ull)) continue;
+        const DescriptorBinding& b = fs->refl.bindings[i];
+        slots.push_back({b.set, b.binding});
+        id.push_back(0x20000000u | ((b.set & 0xffu) << 16) | (b.binding & 0xffffu));
+    }
+    if (slots.empty()) return fallback;
+    std::lock_guard<std::recursive_mutex> lk(g_module_mu);
+    if (auto it = g_variants.find({fs, id}); it != g_variants.end()) return it->second;
+    std::vector<uint32_t> patched;
+    VkShaderModule m = spirv_uint_samplers(fs->spirv, slots, patched) ? create_module(patched, fs->hash.c_str()) : VK_NULL_HANDLE;
+    if (m) {
+        NXLOG_I(kTag, "%s: usampler variant for %zu R8/uint binding(s) (%zu words)", fs->hash.c_str(), slots.size(), patched.size());
+    } else {
+        m = fallback;
+    }
+    g_variants[{fs, id}] = m;
+    return m;
+}
+
 bool resolve_stage_modules(const GraphicsKey& key, StageModules* out) {
     *out = StageModules{};
     // the stage that feeds the fragment shader gets outputs for the varyings the fragment shader reads and it does not write
@@ -730,6 +757,7 @@ bool resolve_stage_modules(const GraphicsKey& key, StageModules* out) {
                            : (i == 1 && key.dual_src)    ? dual_source_module(key.stage[i])
                            : (i == 1)                    ? hdr_fragment_module(key.stage[i])
                                                          : shader_module(key.stage[i]);
+        if (i == 1 && key.uint_samplers && m) m = fs_uint_sampler_module(key, m);
         if (!m) return false;
         out->m[i] = m;
     }

@@ -91,6 +91,9 @@ struct GraphicsKey {
     // Tessellation control and evaluation stages (null: none). Last, so that the prewarm key file keeps its record layout (it records the bytes
     // before these and never a tessellated key). A key with them has topology PATCH_LIST and patch_control_points = the NVN patch size.
     const ShaderInfo* tess[2] = {};
+    // Fragment refl.bindings bitmask (indices < 64) declared Float but fed with unsigned integer colour textures (R8_UINT/R16_UINT/R32_UINT).
+    // Kept after tess[] so nvn_prewarm's kRestBytes record layout stays unchanged.
+    uint64_t uint_samplers = 0;
     bool operator==(const GraphicsKey& o) const;
     uint64_t hash() const;
 };
