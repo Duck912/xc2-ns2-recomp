@@ -81,10 +81,10 @@ bool spirv_gs_input_topology(const std::vector<uint32_t>& in, uint32_t vk_topolo
 // Moves the fragment output at Location 1 to Location 0, Index 1. False (out untouched) when the module has no such output.
 bool spirv_dual_source_output(const std::vector<uint32_t>& in, std::vector<uint32_t>& out);
 
-// A fragment shader of a pass without colour attachments: every Location output becomes a private variable (the decorations go, and
-// the entry point's interface loses them before SPIR-V 1.4). False (out untouched) when no Location output exists or a built-in output
-// (FragDepth, SampleMask) does.
-bool spirv_outputs_to_private(const std::vector<uint32_t>& in, std::vector<uint32_t>& out);
+// A fragment shader of a pass without colour attachments (keep_mask == 0), or with fewer bound colour attachments than declared:
+// every Location output whose bit is not in `keep_mask` becomes a private variable (the Location/Index/Component decorations go, and
+// the entry point's interface loses it before SPIR-V 1.4). Built-in outputs (FragDepth, SampleMask) are preserved.
+bool spirv_outputs_to_private(const std::vector<uint32_t>& in, std::vector<uint32_t>& out, uint32_t keep_mask = 0);
 
 // spirv_add_early_fragment_tests: a fragment shader that writes a storage image gets EarlyFragmentTests, so the depth / stencil test
 // runs before it - the console's order. Without it a driver may run the shader for fragments the test rejects, and their image writes
