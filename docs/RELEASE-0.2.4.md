@@ -43,6 +43,13 @@ This release ships all fixes verified after `v0.2.3`, including **#53 AMD FSR 3 
 - **Upscaler download confirmation & option cleanup (`streamline.rs`, `fsr.rs`, `play.rs`, `settings.js`)**: added a confirmation prompt before downloading official NVIDIA / AMD upscaler packages, removed non-functional **Intel XeSS** options, removed the unviable native **120 Hz** option, and synced 30/60 Hz selection cleanly across Launcher & F1 Settings.
 - **All-GPU Frame Generation notice & visual correctness hint**: updated UI copy so users on **NVIDIA, AMD, and Intel** GPUs know Frame Generation is available via **DLSS Frame Generation** or **AMD FSR 3 Frame Generation**, paired with an explicit warning that enabling Frame Generation can degrade **image correctness** (such as subtle mouth/eye/dialogue flicker in cutscenes, which disappears immediately when Frame Generation is disabled).
 
+### 5. Optional Hotfix (`XC2-hotfix-v0.2.4-tdr-rt.zip`, `010fc5e`) — NVIDIA TDR Mitigation & Diagnostics
+
+Added alongside the `v0.2.4` release assets specifically for users encountering NVIDIA GPU freezes / TDR (`#32`, `#41`, `#59`) — **the main `XC2-package-dist-0.2.4.zip` is unchanged, and Launcher auto-update (`About → Updates`) is unaffected**:
+- **Shared `device_lost` guard & `VK_EXT_device_fault` watchdog reporting (`vk_device`, `vk_renderer`, `nvn_gpu`)**: stops `UINT64_MAX` (`-4`) timeline poison from prematurely destroying live GPU objects, breaks infinite fence/acquire/semaphore waits once lost, and records hardware fault details directly into `xc2_boot_freeze.txt`.
+- **Descriptor `pool_set()` same-submission & deadlock fix (`nvn_pipeline`)**: prevents overwriting descriptor sets already bound in an open recording and eliminates an infinite spin waiting on unsubmitted `f.serial`.
+- **Integer blit filter & UBO bounds fixes (`nvn_gpu_texture`, `nvn_replay`)**: enforces `VK_FILTER_NEAREST` for integer/depth blits (`VUID-vkCmdBlitImage-filter-02001`) and clamps unaligned UBO copies to `br.avail`.
+
 ## Upgrading to v0.2.4
 
 - **From `v0.2.3` / `v0.2.2`**:
@@ -50,6 +57,11 @@ This release ships all fixes verified after `v0.2.3`, including **#53 AMD FSR 3 
   2. *(Only if updating from `v0.2.2` or older and you skipped `v0.2.3`)*: delete `shader_cache\spirv\` inside your install folder and run **Set up** once to re-translate shaders for `#15`.
 - **New installs**:
   - Extract `XC2-package-dist-0.2.4.zip` into a clean folder, launch `xc2-launcher.exe`, select your own 3.0.1 dump, and click **Set up**.
+- **Applying the optional TDR hotfix (`XC2-hotfix-v0.2.4-tdr-rt.zip`, for `v0.2.4` users hitting `#32`/`#41`/`#59`)**:
+  1. Close the game and `xc2-launcher.exe`.
+  2. Extract `XC2-hotfix-v0.2.4-tdr-rt.zip` directly into your existing **`v0.2.4` install folder** (the folder containing `xc2-launcher.exe`), choosing **Overwrite / Replace files** when prompted (this updates both `xc2_rt.dll` and `runtime\xc2_rt.dll`).
+  3. *(Custom `game_dir` users only)*: also copy the extracted `xc2_rt.dll` over the copy next to `xc2_boot.exe` inside your `game_dir`.
+  4. Launch the game normally — no rebuild or **Set up** is needed, and your `nxrt.ini`, saves, and `shader_cache` remain untouched. If a freeze still occurs on NVIDIA, please attach the newly generated `xc2_boot_freeze.txt` + `nxrt.log` on the issue tracker.
 
 ## Known issues
 
@@ -106,6 +118,13 @@ This release ships all fixes verified after `v0.2.3`, including **#53 AMD FSR 3 
 - **超分下载确认弹窗与无效选项清理（`streamline.rs`、`fsr.rs`、`play.rs`、`settings.js`）**：下载 NVIDIA / AMD 官方超分运行库前新增确认弹窗；移除暂不可用的 **Intel XeSS** 选项与不成立的 **原生 120 Hz** 选项，并保持启动器与 F1 菜单的 30/60 Hz 同步。
 - **完善全显卡帧生成说明与画面正确性提示**：在设置文案中明确 **NVIDIA / AMD / Intel 显卡均可通过 DLSS 帧生成或 AMD FSR 3 帧生成使用插帧**（不再局限于 RTX 40 系列），并明确提醒：**开启帧生成依赖运动矢量插帧，可能会影响部分画面正确性（例如人物对白/过场中嘴唇或眼部的轻微闪动，关闭帧生成即可恢复）。**
 
+### 5. 可选热修复补丁（`XC2-hotfix-v0.2.4-tdr-rt.zip`，基于 `010fc5e`）—— NVIDIA TDR 缓解与故障诊断
+
+针对遭遇 NVIDIA 显卡冻屏 / `VK_ERROR_DEVICE_LOST` TDR（`#32`、`#41`、`#59`）的玩家在 `v0.2.4` 资源旁额外提供（**不改动 `XC2-package-dist-0.2.4.zip` 主包，也不影响启动器「关于 → 检查更新」**）：
+- **全局 `device_lost` 断链保护与 `VK_EXT_device_fault` 冻结采集（`vk_device`、`vk_renderer`、`nvn_gpu`）**：阻止 `UINT64_MAX`（`-4`）信号量污染 `g->completed` 误销毁活资源，在丢设备后中断无限 fence/acquire 等待，并在 `xc2_boot_freeze.txt` 中直接输出硬件故障描述与地址。
+- **修复 `pool_set()` 同提交描述符覆写与自死锁（`nvn_pipeline`）**：禁止在未提交录制内篡改已绑定描述符集，消除全部副本处于开放提交 `f.serial` 时的永久自旋死锁。
+- **修复整数格式线性 Blit 与 UBO 边界（`nvn_gpu_texture`、`nvn_replay`）**：强制整数与深度图像 Blit 使用 `VK_FILTER_NEAREST`（清零 `VUID-vkCmdBlitImage-filter-02001`），并对非对齐 UBO 拷贝补齐 `br.avail` 上界钳位。
+
 ## 如何升级到 v0.2.4
 
 - **当前已在 `v0.2.3` / `v0.2.2`**：
@@ -113,6 +132,11 @@ This release ships all fixes verified after `v0.2.3`, including **#53 AMD FSR 3 
   2. *(仅当从 `v0.2.2` 或更早版本跳过 `v0.2.3` 直接升级时)*：删一次安装目录下的 `shader_cache\spirv\`，并在启动器点一次 **Set up** 重译着色器以生效 `#15` 修复。
 - **全新安装**：
   - 解压 `XC2-package-dist-0.2.4.zip` 至干净文件夹，打开 `xc2-launcher.exe`，指定你自己的 3.0.1 游戏副本并点击 **Set up**。
+- **如何安装可选 TDR 热修复补丁（`XC2-hotfix-v0.2.4-tdr-rt.zip`，供 `v0.2.4` 上复现 `#32`/`#41`/`#59` 的用户覆盖）**：
+  1. 先完全关闭游戏和 `xc2-launcher.exe`。
+  2. 将 `XC2-hotfix-v0.2.4-tdr-rt.zip` **直接解压到你现有的 `v0.2.4` 安装根目录**（即 `xc2-launcher.exe` 所在目录），提示文件冲突时选择 **覆盖 / 替换**（会自动同步更新根目录 `xc2_rt.dll` 与 `runtime\xc2_rt.dll`）。
+  3. *(仅当在启动器使用了自定义 `game_dir` 时)*：请再手动把解压出的 `xc2_rt.dll` 覆盖复制到你的自定义 `game_dir` 内 `xc2_boot.exe` 同级目录。
+  4. 直接打开启动器运行游戏即可——**无需重新编译、无需重新点击 Set up**，原有的 `nxrt.ini`、存档与 `shader_cache` 均保留不变；若在 N 卡上仍遇冻屏，请附上打补丁后新生成的 `xc2_boot_freeze.txt` 与 `nxrt.log`。
 
 ## 已知问题
 
