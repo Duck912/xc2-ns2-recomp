@@ -16,6 +16,7 @@
 #include "nxrt/movie_vdec.h"
 #include "extras/output_pass.h"
 #include "extras/framegen.h"
+#include "extras/hdr_pattern.h"
 #include "nvn_framegen.h"
 #include "nvn_hdr_ui.h"
 #include "nvn_hudless.h"
@@ -226,6 +227,7 @@ void present_on_render_thread(Window* w, int index, bool again) {
             prm.scene = from == src ? hdr_ui.scene : VK_NULL_HANDLE;
             prm.ui_scale = hdr_ui.ui_scale;
             prm.deband = decoded && extras::settings().hdr.deband;
+            prm.pattern = extras::hdr_pattern();
             prm.fsr1 = extras::upscale_mode() == extras::UpscaleMode::Fsr1;
             prm.nis = extras::upscale_mode() == extras::UpscaleMode::Nis;
             prm.sharpness = extras::upscale_sharpness();

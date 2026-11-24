@@ -4,6 +4,7 @@
 // with decode_hdr_capture; against the exact bytes for the SDR copy; against a CPU bilinear upscale for FSR 1. The group also requires zero
 // validation errors and no leaked allocations.
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -12,12 +13,14 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "test_framework.h"
 
 #include "extras/hdr_capture.h"
 #include "extras/hdr_math.h"
+#include "extras/hdr_pattern.h"
 #include "extras/output_pass.h"
 #include "nxrt/gfx.h"
 
@@ -1060,4 +1063,174 @@ NXTEST(hdr10_deband) {
             const size_t i = (static_cast<size_t>(y) * 8 + x) * 4;
             CHECK(std::memcmp(&off[i], &on[i], 4) == 0);
         }
+}
+
+// ---- HDR test patterns (extras/hdr_pattern.h) ----------------------------------------------------------------------------------------
+
+namespace {
+// The shader's tiles at destination pixel (x, y) of a w x h picture: the distance from the tile centre (max norm, 0..0.5) and the tile.
+double pattern_tile(uint32_t x, uint32_t y, uint32_t w, uint32_t h, int* cx, int* cy) {
+    const double tx = (x + 0.5) / w * 8.0, ty = (y + 0.5) / h * 4.5 + 0.25;
+    *cx = static_cast<int>(std::floor(tx));
+    *cy = static_cast<int>(std::floor(ty));
+    return std::max(std::fabs(tx - std::floor(tx) - 0.5), std::fabs(ty - std::floor(ty) - 0.5));
+}
+bool near_edge(double m) { return std::fabs(m - 0.07) < 0.01 || std::fabs(m - 0.13) < 0.01 || std::fabs(m - 0.3) < 0.01; }
+uint32_t red_code(const std::vector<uint8_t>& px, size_t i) {
+    uint32_t v;
+    std::memcpy(&v, &px[i * 4], 4);
+    return v & 1023u;
+}
+}  // namespace
+
+// Peak: 10000 nits around the peak being tried, on black, with no peak limit; black: codes 1..16 through the encode; SDR: no pattern.
+NXTEST(hdr10_test_patterns) {
+    Rig r;
+    Teardown td{r};
+    if (!make_device(r)) {
+        nxtest::skip("no headless Vulkan device");
+        return;
+    }
+    if (!formats_supported(*r.dev, VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_A2B10G10R10_UNORM_PACK32)) {
+        nxtest::skip("needed format not supported");
+        return;
+    }
+    const uint8_t v[8] = {128, 128, 128, 128, 128, 128, 128, 128};
+    REQUIRE(upload_source(r, VK_FORMAT_R8G8B8A8_SRGB, 8, 8, grey_columns(v)));
+    const uint32_t W = 256, H = 144;
+    REQUIRE(make_dst(r, VK_FORMAT_A2B10G10R10_UNORM_PACK32, W, H, 4));
+    auto params = [&](hdr::HdrPattern kind, float nits) {
+        hdr::OutputParams p = base_params(r, 8, 8);
+        p.keep_aspect = false;
+        p.out = hdr::OutputKind::Hdr10;
+        p.src_linear = true;
+        p.paper_white_nits = 200.0f;
+        p.peak_nits = 1000.0f;
+        p.expand_ratio = 2.6f;
+        p.deband = true;
+        p.pattern.kind = kind;
+        p.pattern.peak_nits = nits;
+        return p;
+    };
+    const uint32_t c10000 = 1023, c0 = 0;
+    for (float tried : {600.0f, 0.0f}) {   // 0: the current peak (1000)
+        std::vector<uint8_t> got;
+        REQUIRE(run_pass(r, params(hdr::HdrPattern::Peak, tried), &got) == 2);
+        const uint32_t cin = static_cast<uint32_t>(std::lround(hdr::pq_oetf(tried > 0 ? tried : 1000.0f) * 1023.0));
+        int bad = 0, inner = 0;
+        for (uint32_t y = 0; y < H; ++y)
+            for (uint32_t x = 0; x < W; ++x) {
+                int cx, cy;
+                const double m = pattern_tile(x, y, W, H, &cx, &cy);
+                if (near_edge(m)) continue;
+                const uint32_t want = m < 0.07 ? cin : (m < 0.13 ? c10000 : c0);
+                const uint32_t have = red_code(got, static_cast<size_t>(y) * W + x);
+                inner += m < 0.07;
+                if (have + 1 < want || have > want + 1) ++bad;
+            }
+        int lit = 0;
+        for (size_t i = 0; i < static_cast<size_t>(W) * H; ++i) lit += red_code(got, i) > 0;
+        std::printf("    peak pattern at %.0f nits: inner code %u, %d inner pixels, %d pixels off, %.1f%% of the screen lit\n", tried, cin, inner, bad,
+                    100.0 * lit / (W * H));
+        CHECK(lit * 10 < static_cast<int>(W * H));   // under 10%: the display's peak, not its limit for a large bright area
+        CHECK(inner > 0);
+        CHECK_EQ(bad, 0);
+    }
+    {
+        std::vector<uint8_t> got;
+        REQUIRE(run_pass(r, params(hdr::HdrPattern::Black, 0.0f), &got) == 2);
+        std::vector<float> lin;
+        REQUIRE(hdr::decode_hdr_capture(hdr::CaptureFormat::A2B10G10R10, got.data(), W, H, 200.0f, &lin, nullptr, nullptr, nullptr));
+        const double codes[8] = {1, 2, 3, 4, 6, 8, 12, 16};
+        int bad = 0, black_not_zero = 0;
+        for (uint32_t y = 0; y < H; ++y)
+            for (uint32_t x = 0; x < W; ++x) {
+                int cx, cy;
+                const double m = pattern_tile(x, y, W, H, &cx, &cy);
+                if (near_edge(m)) continue;
+                const size_t i = static_cast<size_t>(y) * W + x;
+                if (m >= 0.3) {
+                    black_not_zero += red_code(got, i) != 0;
+                    continue;
+                }
+                const double want = hdr::srgb_eotf(static_cast<float>(codes[(cx + cy * 3) % 8] / 255.0));
+                if (!close_to(lin[i * 3], want, 0.05, 0.0005)) ++bad;   // no expansion, no deband on the pattern
+            }
+        std::printf("    black pattern: %d squares pixels off, %d background pixels not black\n", bad, black_not_zero);
+        CHECK_EQ(bad, 0);
+        CHECK_EQ(black_not_zero, 0);
+    }
+    {   // staircase: 8 bars of 300..1000 nits along the top 7%, black elsewhere
+        std::vector<uint8_t> got;
+        REQUIRE(run_pass(r, params(hdr::HdrPattern::Staircase, 0.0f), &got) == 2);
+        int bad = 0, lit = 0;
+        for (uint32_t y = 0; y < H; ++y)
+            for (uint32_t x = 0; x < W; ++x) {
+                const double lx = (x + 0.5) / W, ly = (y + 0.5) / H, f = lx * 8.0 - std::floor(lx * 8.0);
+                if (std::fabs(ly - 0.07) < 0.01 || std::fabs(f - 0.04) < 0.02 || std::fabs(f - 0.96) < 0.02) continue;
+                const bool on = ly < 0.07 && f > 0.04 && f < 0.96;
+                const uint32_t want = on ? static_cast<uint32_t>(std::lround(hdr::pq_oetf(static_cast<float>(300.0 + 100.0 * std::floor(lx * 8.0))) * 1023.0)) : 0u;
+                const uint32_t have = red_code(got, static_cast<size_t>(y) * W + x);
+                lit += on;
+                if (have + 1 < want || have > want + 1) ++bad;
+            }
+        const size_t row = static_cast<size_t>(2) * W;
+        std::printf("    staircase: %d bar pixels, %d pixels off, codes %u .. %u\n", lit, bad, red_code(got, row + W / 16), red_code(got, row + W - W / 16));
+        CHECK(lit > 0);
+        CHECK_EQ(bad, 0);
+        CHECK(red_code(got, row + W - W / 16) > red_code(got, row + W / 16));   // brighter to the right
+    }
+    {   // no pattern: the picture
+        std::vector<uint8_t> a, b;
+        hdr::OutputParams p = params(hdr::HdrPattern::None, 0.0f);
+        REQUIRE(run_pass(r, p, &a) == 2);
+        p.deband = false;
+        REQUIRE(run_pass(r, p, &b) == 2);
+        const uint32_t code_mid = red_code(b, 0);
+        CHECK(code_mid > 300 && code_mid < 700);   // grey 128, not a pattern
+    }
+}
+
+NXTEST(sdr_ignores_test_patterns) {
+    Rig r;
+    Teardown td{r};
+    if (!make_device(r)) {
+        nxtest::skip("no headless Vulkan device");
+        return;
+    }
+    if (!formats_supported(*r.dev, VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_R8G8B8A8_UNORM)) {
+        nxtest::skip("needed format not supported");
+        return;
+    }
+    const uint8_t v[8] = {0, 30, 60, 90, 120, 160, 200, 255};
+    REQUIRE(upload_source(r, VK_FORMAT_R8G8B8A8_SRGB, 8, 8, grey_columns(v)));
+    REQUIRE(make_dst(r, VK_FORMAT_R8G8B8A8_UNORM, 8, 8, 4));
+    hdr::OutputParams p = base_params(r, 8, 8);
+    p.out = hdr::OutputKind::Sdr8;
+    p.src_linear = true;
+    std::vector<uint8_t> plain, with;
+    REQUIRE(run_pass(r, p, &plain) == 1);
+    p.pattern.kind = hdr::HdrPattern::Peak;
+    p.pattern.peak_nits = 600.0f;
+    REQUIRE(run_pass(r, p, &with) == 1);
+    CHECK(plain == with);
+}
+
+NXTEST(hdr_pattern_lasts_while_asked) {
+    CHECK(hdr::hdr_pattern().kind == hdr::HdrPattern::None);
+    hdr::set_hdr_pattern(hdr::HdrPattern::Peak, 650.0f);
+    hdr::HdrPatternLive l = hdr::hdr_pattern();
+    CHECK(l.kind == hdr::HdrPattern::Peak);
+    CHECK(l.peak_nits == 650.0f);
+    hdr::set_hdr_pattern(hdr::HdrPattern::Black, -5.0f);
+    l = hdr::hdr_pattern();
+    CHECK(l.kind == hdr::HdrPattern::Black);
+    CHECK(l.peak_nits == 0.0f);
+    hdr::set_hdr_pattern(hdr::HdrPattern::Staircase, 0.0f);
+    CHECK(hdr::hdr_pattern().kind == hdr::HdrPattern::Staircase);
+    hdr::set_hdr_pattern(static_cast<hdr::HdrPattern>(7), 0.0f);   // not a pattern
+    CHECK(hdr::hdr_pattern().kind == hdr::HdrPattern::None);
+    hdr::set_hdr_pattern(hdr::HdrPattern::Peak, 650.0f);
+    std::this_thread::sleep_for(std::chrono::milliseconds(400));   // the menu stopped asking
+    CHECK(hdr::hdr_pattern().kind == hdr::HdrPattern::None);
 }
