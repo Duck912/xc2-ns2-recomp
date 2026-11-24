@@ -247,6 +247,12 @@ bool tex_gpu_rendered(Texture* t);
 TexGpu* tex_gpu_attachment(Texture* t);
 TexGpu* tex_gpu_scaled(Texture* t, float scale);
 float render_scale();                                   // [gfx] render_scale (1 until known)
+float render_scale_live();                              // active scene-side scale (1 until known)
+float output_scale_live();                              // active output-side scale (1 until known)
+uint32_t quality_output_height_live();                  // [upscale] render_quality output height (0 if unset/console)
+// Pure helper shared by attachment_scale() and unit tests to decide the resolution scale of a target texture.
+float compute_attachment_scale(int width, int height, int target, int flags, bool compressed, int block_w, int block_h,
+                               float scene, float out, int out_min, int min_w, bool quality_set, int quality_out_h);
 float tex_scale(Texture* t);                            // the image size over the NVN size (1 for most textures)
 VkExtent3D tex_image_extent(Texture* t, uint32_t level = 0);   // the image's own size (tex_extent times tex_scale)
 // The scale a render target should have: its own when it was brought back to 1 for good, else the render scale when it qualifies.

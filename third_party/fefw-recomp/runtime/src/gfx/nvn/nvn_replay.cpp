@@ -3457,9 +3457,8 @@ const int ff_mode = std::clamp(hot_int("front_face", ff_cfg), 0, 3);   // live: 
                           (mode == NVN_POLYGON_MODE_POINT && (off & NVN_POLYGON_OFFSET_ENABLE_POINT));
         vkCmdSetDepthBiasEnable(cb, bias);
         const float clamp = device().features().depth_bias_clamp ? S.bias_clamp : 0.0f;
-        // On D32_SFLOAT_S8_UINT targets, NVIDIA scales depthBiasConstantFactor by the floating-point exponent at each fragment's Z
-        // unless VK_DEPTH_BIAS_REPRESENTATION_LEAST_REPRESENTABLE_VALUE_FORCE_UNORM_EXT is requested, producing shadow-map self-shadowing
-        // stripes on RTX GPUs (#44). Fall back to vkCmdSetDepthBias when the driver or GPU does not support VK_EXT_depth_bias_control.
+        // When opted in via [nvn] depth_bias_force_unorm = 1 and supported, force UNORM depth-bias stepping (investigated for #44);
+        // left off by default because forcing FORCE_UNORM globally causes severe shadow-acne bands on RTX 40/50 GPUs (#51, #54, #39).
         if (device().features().depth_bias_control_force_unorm && vkCmdSetDepthBias2EXT) {
             VkDepthBiasRepresentationInfoEXT rep = {VK_STRUCTURE_TYPE_DEPTH_BIAS_REPRESENTATION_INFO_EXT};
             rep.depthBiasRepresentation = VK_DEPTH_BIAS_REPRESENTATION_LEAST_REPRESENTABLE_VALUE_FORCE_UNORM_EXT;
@@ -5359,6 +5358,81 @@ void trace_snap_after_dispatch(const ShaderInfo& cs, const ProgLayout& pl) {
     }
 }
 
+// XC2 NS2 dispatches its spatial upscale compute variants (0794aaf86ae7fd58, 6139946183e76e3d, 9d2efe26d94e3ac0;
+// cp_t_cb0_20 -> cp_i_cb0_24_) to scale 1080p/1440p colour targets up to the 3840x2160 output buffer (t1/t2).
+// When attachment scaling is active, `src` is already at the target resolution (or output size). Running the translated
+// compute shader would force `dst` back to 1x 3840x2160 via `tex_rescale` and point-subsample `src` at `render_scale`
+// multiples, throwing away 4K detail and causing 4K HUD overhead at 1080p/1440p (#55, #56).
+bool try_bypass_upscaled_output_compute(const ShaderInfo& cs, const ProgLayout& pl, uint64_t indirect) {
+    if (indirect) return false;
+    Texture* src = nullptr;
+    Texture* dst = nullptr;
+    const DescriptorBinding* src_b = nullptr;
+    const DescriptorBinding* dst_b = nullptr;
+    int sampler_count = 0, storage_count = 0;
+    for (const BindingDesc& d : pl.bindings) {
+        if (d.type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER) {
+            ++sampler_count;
+            src_b = &d.shader->refl.bindings[d.index];
+            src = resolve_texture(d).tex;
+        } else if (d.type == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE) {
+            ++storage_count;
+            dst_b = &d.shader->refl.bindings[d.index];
+            dst = resolve_image(d).tex;
+        }
+    }
+    if (sampler_count != 1 || storage_count != 1 || !src || !dst || !tex_gpu(src)) return false;
+    const bool known_hash = (cs.hash == "0794aaf86ae7fd58" || cs.hash == "6139946183e76e3d" || cs.hash == "9d2efe26d94e3ac0");
+    const bool known_names = (src_b && dst_b && src_b->name == "cp_t_cb0_20" && dst_b->name == "cp_i_cb0_24_");
+    if (!known_hash && !known_names) return false;
+    if (src->b.width < 1920 || src->b.height < 1080 || src->b.width >= dst->b.width || dst->b.width != 3840 || dst->b.height != 2160)
+        return false;
+    const float src_sc = tex_scale(src);
+    const float out_sc = output_scale_live();
+    const uint32_t q_out_h = quality_output_height_live();
+    if (src_sc == 1.0f && out_sc == 1.0f && q_out_h == 0) return false;
+    const VkExtent3D se = tex_image_extent(src, 0);
+    const float dst_want_est = (q_out_h > 0) ? (static_cast<float>(q_out_h) / static_cast<float>(dst->b.height))
+                                             : (out_sc > 1.0f ? std::max(1.0f, std::min(out_sc, std::round(out_sc * 1080.0f) / static_cast<float>(dst->b.height))) : 1.0f);
+    if (src_sc == 1.0f && std::fabs(dst_want_est - 1.0f) < 0.01f) return false;
+    const uint32_t est_w = static_cast<uint32_t>(std::lround(static_cast<double>(dst->b.width) * dst_want_est));
+    if (se.width == 0 || se.height == 0 || (se.width != est_w && src_sc < 1.99f)) return false;
+    out_texture_read(src);
+    end_pass(true);
+    tex_ensure_current(src, *F);
+    if (!tex_gpu_attachment(dst)) return false;
+    const float dst_want = tex_scale_wanted(dst);
+    if (tex_scale(dst) != dst_want) tex_rescale(dst, *F, dst_want, "upscaler already at output size");
+    tex_transition(src, *F, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    tex_transition(dst, *F, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    tex_mark_gpu_written(dst);
+    const VkExtent3D de = tex_image_extent(dst, 0);
+    if (se.width == de.width && se.height == de.height && tex_vk_format(src) == tex_vk_format(dst)) {
+        VkImageCopy c = {};
+        c.srcSubresource = {tex_aspect(src), 0, 0, 1};
+        c.dstSubresource = {tex_aspect(dst), 0, 0, 1};
+        c.extent = {se.width, se.height, 1};
+        vkCmdCopyImage(F->cb, tex_image(src), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, tex_image(dst), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &c);
+    } else {
+        VkImageBlit b = {};
+        b.srcSubresource = {tex_aspect(src), 0, 0, 1};
+        b.dstSubresource = {tex_aspect(dst), 0, 0, 1};
+        b.srcOffsets[1] = {static_cast<int32_t>(se.width), static_cast<int32_t>(se.height), 1};
+        b.dstOffsets[1] = {static_cast<int32_t>(de.width), static_cast<int32_t>(de.height), 1};
+        vkCmdBlitImage(F->cb, tex_image(src), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, tex_image(dst), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &b,
+                       VK_FILTER_LINEAR);
+    }
+    memory_barrier(F->cb);
+    if (gpass_on()) gstamp("cs 0794->copy");
+    counters().copies.fetch_add(1, std::memory_order_relaxed);
+    TRACE("    cs %s bypassed -> direct copy %ux%u to t%u (%ux%u)", cs.hash.c_str(), se.width, se.height, dst->id, de.width, de.height);
+    if (first_time_key("cs-upscale-bypass-" + cs.hash)) {
+        NXLOG_I(kTag, "cs %s: bypassed 1080p->4K upscale (t%u %ux%u -> t%u %ux%u)",
+                cs.hash.c_str(), src->id, se.width, se.height, dst->id, de.width, de.height);
+    }
+    return true;
+}
+
 void do_dispatch(uint32_t x, uint32_t y, uint32_t z, uint64_t indirect) {
     const ShaderInfo* cs = S.stage[kCompute];
     TRACE("dispatch %u %u %u indirect %llx cs %s%s%s", x, y, z, static_cast<unsigned long long>(indirect), cs ? cs->hash.c_str() : "-",
@@ -5368,6 +5442,7 @@ void do_dispatch(uint32_t x, uint32_t y, uint32_t z, uint64_t indirect) {
     const ProgLayout* pl = prog_layout(stages);
     if (!pl) return;
     MemoScope memo(*pl);
+    if (try_bypass_upscaled_output_compute(*cs, *pl, indirect)) return;
     prepare_textures(*pl);
     end_pass();
     if (g_trace) {   // the compute bindings: buffers (source, slot, address), texel buffers and textures, and the first words of each uniform block

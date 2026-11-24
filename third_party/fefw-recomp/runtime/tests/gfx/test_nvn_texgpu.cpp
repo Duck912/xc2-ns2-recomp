@@ -6,6 +6,7 @@
 // allocation is left after shutdown.
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -29,6 +30,7 @@
 #include "nvn_texture_layout.h"
 #include "nxrt/gfx.h"
 #include "nxrt/gfx_tuning.h"
+#include "nxrt/nvn_backend.h"
 #include "tegra_tiling.h"
 #include "test_framework.h"
 NXTEST_GROUP(gfx_nvn_texgpu)
@@ -1358,4 +1360,50 @@ NXTEST(sparse_texture_segments) {
     Texture plain;
     uint64_t hp = 0;
     CHECK(!texture_hash_virtual(plain, hp));
+}
+
+// Regression guards for #55 and #56: attachment scaling must never bloat intermediate 1080p-family targets past output
+// height (e.g. 1536x864 -> 4608x2592 at 4K or 3072x1728 at 1440p) and must downscale 3840x2160 targets even at 1080p.
+NXTEST(attachment_scale_xc2_targets) {
+    constexpr int T2D = NVN_TEXTURE_TARGET_2D;
+    auto near_f = [](float got, float want) { return std::fabs(got - want) < 1e-4f; };
+    // 4K Native: scene=3.0, out=2.0, out_h=2160
+    CHECK(near_f(gpu::compute_attachment_scale(1280, 720, T2D, 0, false, 1, 1, 3.0f, 2.0f, 1920, 0, true, 2160), 3.0f));
+    CHECK(near_f(gpu::compute_attachment_scale(1920, 1080, T2D, 0, false, 1, 1, 3.0f, 2.0f, 1920, 0, true, 2160), 2.0f));
+    CHECK(near_f(gpu::compute_attachment_scale(1536, 864, T2D, 0, false, 1, 1, 3.0f, 2.0f, 1920, 0, true, 2160), 2.0f));
+    CHECK(near_f(gpu::compute_attachment_scale(960, 540, T2D, 0, false, 1, 1, 3.0f, 2.0f, 1920, 0, true, 2160), 2.0f));
+    CHECK(near_f(gpu::compute_attachment_scale(3840, 2160, T2D, 0, false, 1, 1, 3.0f, 2.0f, 1920, 0, true, 2160), 1.0f));
+    // 1440p Native: scene=2.0, out=4/3, out_h=1440
+    const float o1440 = 4.0f / 3.0f;
+    CHECK(near_f(gpu::compute_attachment_scale(1280, 720, T2D, 0, false, 1, 1, 2.0f, o1440, 1920, 0, true, 1440), 2.0f));
+    CHECK(near_f(gpu::compute_attachment_scale(1536, 864, T2D, 0, false, 1, 1, 2.0f, o1440, 1920, 0, true, 1440), o1440));
+    CHECK(near_f(gpu::compute_attachment_scale(960, 540, T2D, 0, false, 1, 1, 2.0f, o1440, 1920, 0, true, 1440), o1440));
+    CHECK(near_f(gpu::compute_attachment_scale(3840, 2160, T2D, 0, false, 1, 1, 2.0f, o1440, 1920, 0, true, 1440), 2.0f / 3.0f));
+    // 1080p Quality: scene=1.0, out=1.0, out_h=1080 -> 3840x2160 targets still downscale to 0.5x (1920x1080)
+    CHECK(near_f(gpu::compute_attachment_scale(3840, 2160, T2D, 0, false, 1, 1, 1.0f, 1.0f, 1920, 0, true, 1080), 0.5f));
+    CHECK(near_f(gpu::compute_attachment_scale(1280, 720, T2D, 0, false, 1, 1, 1.0f, 1.0f, 1920, 0, true, 1080), 1.0f));
+    // 4K Ultra Performance: scene=1.0, out=2.0 -> 960x540 stays <= scene (1.0x)
+    CHECK(near_f(gpu::compute_attachment_scale(960, 540, T2D, 0, false, 1, 1, 1.0f, 2.0f, 1920, 0, true, 2160), 1.0f));
+}
+
+NXTEST(scale_viewport_info_for_overlay) {
+    nxrt::nvn::GameViewportInfo gvi;
+    gvi.render_w = 1280; gvi.render_h = 720;
+    gvi.base_w = 3840; gvi.base_h = 2160;
+    // 4K Native: 1280x720 * 3.0 = 3840x2160 against 3840x2160 (100%, not 33%)
+    auto v4k = nxrt::nvn::scale_viewport_info(gvi, 3.0f, 2.0f, 2160);
+    CHECK_EQ(v4k.render_w, 3840u);
+    CHECK_EQ(v4k.render_h, 2160u);
+    CHECK_EQ(v4k.base_w, 3840u);
+    CHECK_EQ(v4k.base_h, 2160u);
+    // 1440p Quality: 1280x720 * 4/3 = 1707x960 against 2560x1440
+    auto v1440 = nxrt::nvn::scale_viewport_info(gvi, 4.0f / 3.0f, 4.0f / 3.0f, 1440);
+    CHECK_EQ(v1440.render_w, 1707u);
+    CHECK_EQ(v1440.render_h, 960u);
+    CHECK_EQ(v1440.base_w, 2560u);
+    CHECK_EQ(v1440.base_h, 1440u);
+    // Console mode (no scaling): unchanged
+    auto vcon = nxrt::nvn::scale_viewport_info(gvi, 1.0f, 1.0f, 0);
+    CHECK_EQ(vcon.render_w, 1280u);
+    CHECK_EQ(vcon.base_w, 3840u);
 }

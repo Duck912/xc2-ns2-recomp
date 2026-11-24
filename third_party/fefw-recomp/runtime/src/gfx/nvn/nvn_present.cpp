@@ -169,18 +169,19 @@ void present_on_render_thread(Window* w, int index, bool again) {
     f.serial = current_serial();
     const extras::HdrState hs = extras::hdr_state();
     VkImageView src = VK_NULL_HANDLE;
+    bool decoded = false;
     {
         NXFT("present.transition");
         tex_transition(t, f, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         // the HDR output pass encodes a scene-linear source; an 8-bit window texture is display-referred, so it is read through
         // its sRGB view there (one decode, no second gamma). The SDR path copies the bytes unchanged, as the console does.
-        bool decoded = false;
         src = hs.scene_hdr ? tex_present_view_linear(t, &decoded) : tex_present_view(t);
         static bool told = false;
         if (hs.scene_hdr && !told) {
             told = true;
             NXLOG_I("nvn", "present: window texture %s is %s on the HDR output path", t->fmt ? t->fmt->name : "?",
-                    decoded ? "display-referred (sampled through its sRGB view)" : "scene-linear (sampled as is)");
+                    decoded ? (hs.peak_ratio > 1.001f ? "display-referred (sRGB view + highlight expansion)" : "display-referred (sampled through its sRGB view)")
+                            : "scene-linear (sampled as is)");
         }
     }
     NXFT("present.record");
@@ -218,6 +219,7 @@ void present_on_render_thread(Window* w, int index, bool again) {
             prm.out = hs.output;
             prm.paper_white_nits = hs.paper_white_nits;
             prm.peak_nits = hs.peak_nits;
+            prm.expand_ratio = (decoded && hs.scene_hdr && hs.output != extras::OutputKind::Sdr8) ? hs.peak_ratio : 1.0f;
             prm.fsr1 = extras::upscale_mode() == extras::UpscaleMode::Fsr1;
             prm.nis = extras::upscale_mode() == extras::UpscaleMode::Nis;
             prm.sharpness = extras::upscale_sharpness();

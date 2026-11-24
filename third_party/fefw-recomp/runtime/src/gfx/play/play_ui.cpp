@@ -434,7 +434,9 @@ void pane_begin(const char* id, float bottom_reserve) {
     avail.y = std::max(px(120.0f), avail.y - bottom_reserve);
     ImGui::PushID(id);
     g_pane.rows_step_owner = ImGui::GetID("##rows_step_owner");
-    ImGui::BeginChild("##rows_pane", ImVec2(avail.x * 0.59f, avail.y), ImGuiChildFlags_NavFlattened);
+    // Isolate ##rows_pane as its own nav child window with a fixed scrollbar width so D-pad Up/Down/Left/Right
+    // stays inside the option cards and frame-0 scrollbar spawn never invalidates NavRectRel (#50).
+    ImGui::BeginChild("##rows_pane", ImVec2(avail.x * 0.59f, avail.y), 0, ImGuiWindowFlags_AlwaysVerticalScrollbar);
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, px(7.0f)));
 }
 
@@ -572,15 +574,22 @@ int draw_card_raw(const char* id, const char* label, const char* value, const ch
     const ImVec2 p = ImGui::GetCursorScreenPos();
 
     ImGui::PushID(id);
-    const bool clicked = ImGui::InvisibleButton("##card", ImVec2(w, h));
+    const bool clicked = ImGui::InvisibleButton("##card", ImVec2(w, h), ImGuiButtonFlags_EnableNav);
     const ImGuiID item_id = ImGui::GetItemID();
     const bool hov = ImGui::IsItemHovered();
     bool foc = ImGui::IsItemFocused();
     ImGui::PopID();
 
     if (g_pane.focus_first && !disabled) {
-        ImGui::SetFocusID(item_id, ImGui::GetCurrentWindow());
-        if (ImGuiContext* ctx = ImGui::GetCurrentContext()) ctx->NavCursorVisible = true;
+        ImGuiWindow* win = ImGui::GetCurrentWindow();
+        ImGui::FocusWindow(win);
+        ImGui::SetFocusID(item_id, win);
+        ImGui::SetScrollHereY(0.0f);
+        if (ImGuiContext* ctx = ImGui::GetCurrentContext()) {
+            ctx->NavCursorVisible = true;
+            ctx->NavInitRequest = false;
+            ctx->NavInitResult.ID = 0;
+        }
         g_pane.focus_first = false;
         foc = true;
     } else if (clicked && !disabled) {
@@ -606,6 +615,7 @@ int draw_card_raw(const char* id, const char* label, const char* value, const ch
                 ImGui::IsKeyPressed(ImGuiKey_GamepadDpadRight, ImGuiInputFlags_Repeat, owner_id) ||
                 ImGui::IsKeyPressed(ImGuiKey_GamepadLStickRight, ImGuiInputFlags_Repeat, owner_id))
                 step = 1;
+            if (step == -1 || step == 1) ImGui::NavMoveRequestCancel();
         }
     }
 
@@ -1151,7 +1161,7 @@ void tab_graphics(const LiveStatus& live, Page& p, float bottom_h) {
     if (card_slider_f("hdr_boost", "HDR 高光增强", "HDR highlight boost",
                       "控制高光向峰值亮度扩展的幅度，0.00 接近 SDR，1.00 标准 HDR。",
                       "Expands highlights toward peak brightness.",
-                      &hdr.highlight_boost, 0.0, 2.0, 0.10, "%.2f")) {
+                      &hdr.highlight_boost, 0.0, 2.0, 0.10, "%.2f", false, true)) {
         mark(p);
     }
 
@@ -1280,6 +1290,7 @@ void tab_controls(UiHost& host, const LiveStatus& live, Page& p, float bottom_h)
     }
 
     ImGui::Spacing();
+    ImGui::PushItemFlag(ImGuiItemFlags_NoNav, true);
     if (ImGui::CollapsingHeader(tr("实时手柄 / 键盘输入状态测试", "Live Switch Pad Monitor"), ImGuiTreeNodeFlags_DefaultOpen)) {
         for (int i = 0; i < kSwitchButtonCount; ++i) {
             const bool on = (live.out.buttons & hid::btn(kSwitchButtons[i].bit)) != 0;
@@ -1292,6 +1303,7 @@ void tab_controls(UiHost& host, const LiveStatus& live, Page& p, float bottom_h)
         }
         ImGui::Text("LS (%.2f, %.2f)   RS (%.2f, %.2f)", live.out.lx, live.out.ly, live.out.rx, live.out.ry);
     }
+    ImGui::PopItemFlag();
 
     card_group("当前键位速查表 (实时映射)", "Active Controls Reference");
     card_button("kb_move", "角色移动 (左摇杆)", "Move (Left Stick)",
@@ -1501,12 +1513,15 @@ void draw_settings_page(UiHost& host) {
     ImGui::Separator();
     ImGui::Dummy(ImVec2(0.0f, px(3.0f)));
 
-    if (p.dirty) {
+    const bool was_dirty = p.dirty;
+    if (was_dirty) {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.14f, 0.50f, 0.46f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.18f, 0.64f, 0.58f, 1.0f));
     }
-    if (ImGui::Button(tr("应用并保存", "Apply & Save"), ImVec2(px(138.0f), px(34.0f)))) apply_now(host, p);
-    if (p.dirty) ImGui::PopStyleColor(2);
+    if (ImGui::Button(tr("应用并保存", "Apply & Save"), ImVec2(px(138.0f), px(34.0f))) ||
+        (!host.capturing() && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopup) && ImGui::IsKeyPressed(ImGuiKey_GamepadR2, false)))
+        apply_now(host, p);
+    if (was_dirty) ImGui::PopStyleColor(2);
 
     ImGui::SameLine();
     if (ImGui::Button(tr("放弃修改", "Revert"), ImVec2(px(108.0f), px(34.0f)))) revert_to_saved(host, p);
@@ -1519,13 +1534,13 @@ void draw_settings_page(UiHost& host) {
         ImGui::TextColored(kGold, "%s", tr("请按下要绑定的按键，按 Esc 取消...", "Press a key to bind, Esc to cancel..."));
     } else if (p.dirty) {
         ImGui::AlignTextToFramePadding();
-        ImGui::TextColored(kOrange, "%s", tr("● 有未保存的修改", "● Unsaved changes"));
+        ImGui::TextColored(kOrange, "%s", tr("● 有未保存的修改 (按 ZR 应用并保存)", "● Unsaved changes (ZR to apply)"));
     } else if (!p.notice.empty()) {
         ImGui::AlignTextToFramePadding();
         ImGui::TextColored(p.notice_warn ? kOrange : kEmerald, "%s", p.notice.c_str());
     } else {
         ImGui::AlignTextToFramePadding();
-        ImGui::TextColored(kDimText, "%s", tr("提示：方向键或悬停选择条目，左右微调，右侧查看说明", "Tip: D-pad or hover to select, Left/Right to adjust"));
+        ImGui::TextColored(kDimText, "%s", tr("提示：方向键选条，左右调节，L/R 换页，ZR 应用保存", "Tip: D-pad select, Left/Right adjust, L/R tabs, ZR apply"));
     }
 }
 
@@ -1542,13 +1557,10 @@ void draw_settings_menu(UiHost& host, gfx::Overlay& ov) {
     if (opened) {
         g_pane.rows_focused = false;
     } else if (g_pane.rows_focused) {
-        // Keep Left/Right/Stick-X adjusting left-pane option cards instead of leaking focus across the NavFlattened border.
+        // Keep Left/Right/Stick-X adjusting left-pane option cards instead of triggering horizontal ImGui nav moves.
         lock_rows_step_keys(g_pane.rows_step_owner);
         if (ImGuiContext* ctx = ImGui::GetCurrentContext()) {
-            if (ctx->NavMoveDir == ImGuiDir_Left || ctx->NavMoveDir == ImGuiDir_Right) {
-                ctx->NavMoveDir = ImGuiDir_None;
-                ctx->NavMoveClipDir = ImGuiDir_None;
-            }
+            if (ctx->NavMoveDir == ImGuiDir_Left || ctx->NavMoveDir == ImGuiDir_Right) ImGui::NavMoveRequestCancel();
         }
     }
     if (!opened && !host.capturing() && !ImGui::IsAnyItemActive() && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopup) &&

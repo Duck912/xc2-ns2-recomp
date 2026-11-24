@@ -817,13 +817,14 @@ void dlss_replay(gpu::Frame& f, Obj* o) {
     h.prev_jitter[1] = jy;
     n.resets += reset ? 1 : 0;
     ++n.evals;
-    g_in_use.store(static_cast<int>(tf.spatial ? Upscaler::Bilinear : Upscaler::Taau), std::memory_order_relaxed);
+    const Upscaler active = tf.spatial ? Upscaler::Bilinear : Upscaler::Taau;
+    g_in_use.store(static_cast<int>(active), std::memory_order_relaxed);
     gpu::counters().dispatches.fetch_add(1, std::memory_order_relaxed);
     maybe_dump(f, n, *e, c, rm, dst.img);
     feed_framegen(f, n, prep, in_img, tf.jitter, reset, tf.depth_inverted, false);
     if (n.evals % 1800 == 0)
         NXLOG_I(kTag, "network %u: %llu evaluations, %llu history resets, %s %ux%u -> %ux%u", net.id, static_cast<unsigned long long>(n.evals),
-                static_cast<unsigned long long>(n.resets), upscaler_name(u), in_img.width, in_img.height, out_img.width, out_img.height);
+                static_cast<unsigned long long>(n.resets), upscaler_name(active), in_img.width, in_img.height, out_img.width, out_img.height);
 }
 
 const char* dlss_upscaler_in_use() {

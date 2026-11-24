@@ -1554,7 +1554,7 @@ void Overlay::Impl::draw_perf_hud(const FrameInfo& f, double now_s) {
     draw_kv(y, cAmber, zh ? "纹理上传耗时" : "Texture upload time", buf1); y += line_h + sec_gap;
 
     // Display & Resolution section
-    const nvn::GameViewportInfo gvi = nvn::game_viewport_info();
+    const nvn::GameViewportInfo gvi = nvn::scaled_game_viewport_info();
     const uint32_t game_w = gvi.base_w > 0 ? gvi.base_w : f.extent.width;
     const uint32_t game_h = gvi.base_h > 0 ? gvi.base_h : f.extent.height;
     const uint32_t scn_w = gvi.render_w > 0 ? gvi.render_w : game_w;

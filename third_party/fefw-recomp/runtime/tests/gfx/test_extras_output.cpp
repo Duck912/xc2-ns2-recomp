@@ -616,3 +616,45 @@ NXTEST(fsr1_hdr_keeps_highlights) {
     CHECK(hi_bad == 0);
     CHECK(lo_bad == 0);
 }
+
+NXTEST(hdr10_highlight_expansion_lifts_display_white) {
+    Rig r;
+    Teardown td{r};
+    if (!make_device(r)) {
+        nxtest::skip("no headless Vulkan device");
+        return;
+    }
+    if (!formats_supported(*r.dev, VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_A2B10G10R10_UNORM_PACK32)) {
+        nxtest::skip("needed format not supported");
+        return;
+    }
+    // Columns: x<4 = mid-grey (128 -> ~0.216 linear, <= 0.25 knee, stays ~1x paper white);
+    //          x>=4 = peak sRGB white (255 -> 1.0 linear, expands to peak/paper = 1200/230 = 5.217).
+    std::vector<uint8_t> src(8 * 8 * 4);
+    for (uint32_t y = 0; y < 8; ++y)
+        for (uint32_t x = 0; x < 8; ++x) {
+            const uint8_t v = (x < 4) ? 128 : 255;
+            const size_t o = (static_cast<size_t>(y) * 8 + x) * 4;
+            src[o + 0] = src[o + 1] = src[o + 2] = v;
+            src[o + 3] = 255;
+        }
+    REQUIRE(upload_source(r, VK_FORMAT_R8G8B8A8_SRGB, 8, 8, src));
+    REQUIRE(make_dst(r, VK_FORMAT_A2B10G10R10_UNORM_PACK32, 8, 8, 4));
+    hdr::OutputParams p = base_params(r, 8, 8);
+    p.out = hdr::OutputKind::Hdr10;
+    p.src_linear = true;
+    p.paper_white_nits = 230.0f;
+    p.peak_nits = 1200.0f;
+    p.expand_ratio = 1200.0f / 230.0f;
+    std::vector<uint8_t> got;
+    const int mode = run_pass(r, p, &got);
+    CHECK_EQ(mode, 2);
+
+    std::vector<float> lin;
+    REQUIRE(hdr::decode_hdr_capture(hdr::CaptureFormat::A2B10G10R10, got.data(), 8, 8, 230.0f, &lin, nullptr, nullptr, nullptr));
+    const double mid = lin[(0 * 8 + 1) * 3];
+    const double peak_hi = lin[(0 * 8 + 6) * 3];
+    std::printf("    hdr10 expand: sRGB 128 -> %.4f (expected ~0.216), sRGB 255 -> %.4f (expected ~5.217 = 1200 nits)\n", mid, peak_hi);
+    CHECK(mid > 0.19 && mid < 0.25);
+    CHECK(peak_hi > 5.0 && peak_hi < 5.35);
+}

@@ -32,7 +32,8 @@ layout(set = 0, binding = 0) uniform sampler2D u_src;
 layout(push_constant) uniform PushConstants {
     vec4 pic;    // the picture rectangle in destination UV: origin xy, size zw (0,0,1,1 when the picture fills the target)
     vec4 crop;   // the source crop in texels: origin xy, size zw
-    vec4 src;    // xy: the whole source size in texels, z: 1 = flip the picture vertically
+    vec4 src;    // xy: the whole source size in texels, z: 1 = flip the picture vertically,
+                 // w: highlight expansion peak ratio (> 1.0 expands display-referred [0,1] highlights toward peak_nits in HDR modes)
     vec4 p;      // x: mode (0 copy, 1 linear to sRGB, 2 linear to HDR10, 3 linear to scRGB), y: paper white nits, z: peak nits,
                  // w: 1 = apply the picture controls in adj
     vec4 adj;    // picture controls: x contrast, y saturation, z black level, w gamma (neutral 1, 1, 0, 1)
@@ -84,6 +85,17 @@ void main() {
     int mode = int(pc.p.x + 0.5);
     bool adjust = pc.p.w > 0.5;
     if (adjust && mode >= 2) rgb = pow(picture(pow(max(rgb, vec3(0.0)), vec3(1.0 / 2.2))), vec3(2.2));   // HDR: on a 2.2 power curve
+    // Display-referred 8-bit game output is clamped to [0,1] (= [0, paper white]). When highlight expansion is requested,
+    // keep shadows/midtones at 1:1 paper white and lift upper highlights smoothly toward peak_ratio * paper_white.
+    if (mode >= 2 && pc.src.w > 1.001) {
+        rgb = max(rgb, vec3(0.0));
+        float l = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
+        float m = max(max(rgb.r, rgb.g), rgb.b);
+        float driver = mix(l, m, 0.5);
+        float u = clamp((driver - 0.25) / 0.75, 0.0, 1.0);
+        float gain = 1.0 + (pc.src.w - 1.0) * pow(u, 2.2);
+        rgb *= gain;
+    }
     vec3 outc;
     if (mode == 1) {
         outc = srgb_oetf(rgb);

@@ -188,7 +188,7 @@ VkPipeline OutputPass::encode_pipeline(VkFormat fmt) {
 }
 
 void OutputPass::encode(VkCommandBuffer cb, VkImageView dst_view, VkFormat dst_format, VkExtent2D dst_extent, VkImageView src, VkExtent2D src_extent, const int32_t crop_in[4],
-                        bool keep_aspect, bool flip_y, int mode, float paper, float peak, VkImageLayout src_layout, const float* pic) {
+                        bool keep_aspect, bool flip_y, int mode, float paper, float peak, float expand_ratio, VkImageLayout src_layout, const float* pic) {
     VkPipeline pipe = encode_pipeline(dst_format);
     if (!pipe) return;
     const int32_t sw = static_cast<int32_t>(src_extent.width), sh = static_cast<int32_t>(src_extent.height);
@@ -229,6 +229,7 @@ void OutputPass::encode(VkCommandBuffer cb, VkImageView dst_view, VkFormat dst_f
     pc.src[0] = static_cast<float>(sw);
     pc.src[1] = static_cast<float>(sh);
     pc.src[2] = flip_y ? 1.0f : 0.0f;
+    pc.src[3] = expand_ratio;
     pc.p[0] = static_cast<float>(mode);
     pc.p[1] = paper;
     pc.p[2] = peak;
@@ -304,11 +305,11 @@ int OutputPass::record(VkCommandBuffer cb, VkImageView dst_view, VkFormat dst_fo
         // display-referred picture: the HDR window texture is 1.0 = paper white, so no pre-scale; SDR bytes are already [0,1]
         if (VkImageView up = su ? su->upscale(cb, p.src, in_view, p.src_extent, out, p.src_linear, 1.0f, p.sharpness) : VK_NULL_HANDLE) {
             const int32_t whole[4] = {0, 0, 0, 0};
-            encode(cb, dst_view, dst_format, dst_extent, up, VkExtent2D{upw, uph}, whole, p.keep_aspect, p.flip_y, mode, p.paper_white_nits, p.peak_nits, VK_IMAGE_LAYOUT_GENERAL, pic);
+            encode(cb, dst_view, dst_format, dst_extent, up, VkExtent2D{upw, uph}, whole, p.keep_aspect, p.flip_y, mode, p.paper_white_nits, p.peak_nits, p.expand_ratio, VK_IMAGE_LAYOUT_GENERAL, pic);
             return mode;
         }
     }
-    encode(cb, dst_view, dst_format, dst_extent, p.src, p.src_extent, p.crop, p.keep_aspect, p.flip_y, mode, p.paper_white_nits, p.peak_nits, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, pic);
+    encode(cb, dst_view, dst_format, dst_extent, p.src, p.src_extent, p.crop, p.keep_aspect, p.flip_y, mode, p.paper_white_nits, p.peak_nits, p.expand_ratio, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, pic);
     return mode;
 }
 

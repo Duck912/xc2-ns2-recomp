@@ -882,6 +882,25 @@ static void arm_native_res(uint64_t main_base) {
                 if (view && nxrt::mem::is_mapped(view + 0x18, 16)) {
                     std::memcpy(d, reinterpret_cast<const void*>(view + 0x18), 16);
                     have_dims = (d[2] > 0 && d[3] > 0);
+                    // Clamp dynamic-resolution drops BEFORE updating viewport info or logging rt_rebuild (#55),
+                    // so locked 1280x720 runs never report or publish transient 1216x684 / 960x540 rungs.
+                    static uint32_t g_pin_w = 0, g_pin_h = 0;
+                    static bool g_pin_init = false;
+                    if (!g_pin_init) {
+                        g_pin_init = true;
+                        if (const char* s = std::getenv("XC2_RENDER_SIZE_PIN")) {
+                            unsigned a = 0, b = 0;
+                            if (std::sscanf(s, "%ux%u", &a, &b) == 2 && a && b) { g_pin_w = a; g_pin_h = b; }
+                        }
+                        if (!g_pin_w && xc2_lock_render_size()) { g_pin_w = 1280; g_pin_h = 720; }
+                    }
+                    if (g_nat_mode == 0 && g_pin_w && d[0] > 0 && d[1] > 0 && d[0] <= 1920 && d[1] <= 1080 &&
+                        (d[0] < static_cast<int32_t>(g_pin_w) || d[1] < static_cast<int32_t>(g_pin_h))) {
+                        const uint32_t pinned[2] = {g_pin_w, g_pin_h};
+                        std::memcpy(reinterpret_cast<void*>(view + 0x18), pinned, 8);
+                        d[0] = static_cast<int32_t>(g_pin_w);
+                        d[1] = static_cast<int32_t>(g_pin_h);
+                    }
                     if (have_dims && d[0] > 0 && d[1] > 0) {
                         nxrt::nvn::set_game_viewport_info(static_cast<uint32_t>(d[0]), static_cast<uint32_t>(d[1]),
                                                           static_cast<uint32_t>(d[2]), static_cast<uint32_t>(d[3]),

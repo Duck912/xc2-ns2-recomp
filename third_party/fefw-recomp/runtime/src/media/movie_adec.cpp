@@ -174,15 +174,22 @@ void adec_finalize(::Ctx* c) {
             std::lock_guard<std::mutex> g(g_reg_mu);
             g_reg.erase(std::remove(g_reg.begin(), g_reg.end(), d), g_reg.end());
         }
-        std::lock_guard<std::mutex> lk(d->mu);
-        d->finalized = true;
-        d->frames.clear();
-        d->free_.clear();
-        d->ready.clear();
-        d->sound.clear();
-        d->eos_pending = false;
-        d->in_paused = false;
-        d->gated = false;
+        bool wake_in = false, wake_out = false;
+        {
+            std::lock_guard<std::mutex> lk(d->mu);
+            d->finalized = true;
+            wake_in = d->in_paused;
+            wake_out = d->gated || !d->ready.empty() || !d->sound.empty();
+            d->frames.clear();
+            d->free_.clear();
+            d->ready.clear();
+            d->sound.clear();
+            d->eos_pending = false;
+            d->in_paused = false;
+            d->gated = false;
+        }
+        if (wake_in) d->in_ready.signal();
+        if (wake_out) signal_output_ready(*d);
     }
     RET(0);
 }
@@ -737,7 +744,7 @@ void movie_adec_film_end() {
         std::lock_guard<std::mutex> g(g_reg_mu);
         for (AudioDecoder* d : g_reg) {
             std::lock_guard<std::mutex> lk(d->mu);
-            if (d->finalized || d->eos_acquired) continue;
+            if (d->finalized || d->eos_acquired || (d->eos_sent && d->sound.empty())) continue;
             // The picture is over, so the placeholder track is over: ensure the guest acquires a frame carrying the EOS flag
             // rather than waiting on buffered chunks or an already-coalesced output-ready signal (measured 2026-11-23: when
             // audio ended 0.8 s early with 2 frames queued in d->ready, AutoClear coalescing left the last frame stranded).

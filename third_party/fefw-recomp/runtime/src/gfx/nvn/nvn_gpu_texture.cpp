@@ -813,38 +813,56 @@ float output_scale_now() {
 // The scale a texture gets when its image is made for a render target (after Ryujinx's TextureScaling rules): 2D colour or depth targets
 // of at least 32x32, not block-compressed, not pitch-linear, and not square powers of two (shadow
 // maps, LUTs). Everything else, and every texture first used another way, keeps the NVN size.
-float attachment_scale(const Texture& t) {
-    const float scene = render_scale_now(), out = output_scale_now();
-    if (scene == 1.0f && out == 1.0f) return 1.0f;
-    static const int out_min = static_cast<int>(nxrt::config_get_int("gfx", "output_min_width", 1920));
-    float sc = t.b.width >= out_min ? out : scene;
+}  // namespace
+
+float compute_attachment_scale(int w, int h, int target, int flags, bool compressed, int block_w, int block_h,
+                               float scene, float out, int out_min, int min_w, bool quality_set, int quality_out_h) {
+    if (scene == 1.0f && out == 1.0f && !quality_set) return 1.0f;
+    float sc = w >= out_min ? out : scene;
+    // Output-side derivative targets (e.g. XC2's 1536x864 = 0.8 * 1080p) must not inherit `scene` (which assumes 720p base),
+    // otherwise 4K native scales 1536x864 -> 4608x2592 and 1440p native scales it -> 3072x1728.
+    if (w > 1280 && w < out_min && h > 720) sc = std::min(sc, out);
+    // When [upscale] render_quality locks the 3D ladder at 1280x720, 960x540 belongs to the 1080p half-res path; cap it at `out`.
+    if (quality_set && w == 960 && h == 540) sc = std::min(sc, out);
     // Output-side targets taller than 1080 lines (XC2's own 4K set) are drawn at the output height, not scaled past it.
-    if (t.b.width >= out_min && t.b.height > 1080) {
-        const float h = static_cast<float>(t.b.height);
-        if (quality_scales().set)
-            sc = static_cast<float>(quality_scales().out_h) / h;
+    if (w >= out_min && h > 1080) {
+        const float hf = static_cast<float>(h);
+        if (quality_set && quality_out_h > 0)
+            sc = static_cast<float>(quality_out_h) / hf;
         else if (sc > 1.0f)
-            sc = std::max(1.0f, std::min(sc, std::round(out * 1080.0f) / h));
+            sc = std::max(1.0f, std::min(sc, std::round(out * 1080.0f) / hf));
         if (std::fabs(sc - 1.0f) < 0.01f) sc = 1.0f;
     }
     if (sc == 1.0f) return 1.0f;
-    const TextureBuilderInfo& b = t.b;
-    if (!t.fmt || t.fmt->compressed || t.fmt->block_w != 1 || t.fmt->block_h != 1) return 1.0f;
-    if (b.target != NVN_TEXTURE_TARGET_2D && b.target != NVN_TEXTURE_TARGET_2D_ARRAY && b.target != NVN_TEXTURE_TARGET_2D_MULTISAMPLE &&
-        b.target != NVN_TEXTURE_TARGET_2D_MULTISAMPLE_ARRAY && b.target != NVN_TEXTURE_TARGET_RECTANGLE)
+    if (compressed || block_w != 1 || block_h != 1) return 1.0f;
+    if (target != NVN_TEXTURE_TARGET_2D && target != NVN_TEXTURE_TARGET_2D_ARRAY && target != NVN_TEXTURE_TARGET_2D_MULTISAMPLE &&
+        target != NVN_TEXTURE_TARGET_2D_MULTISAMPLE_ARRAY && target != NVN_TEXTURE_TARGET_RECTANGLE)
         return 1.0f;
     // not the IMAGE flag: the game sets it on every render target; storage use brings a scaled image back instead (tex_rescale)
-    if (b.flags & (NVN_TEXTURE_FLAGS_LINEAR | NVN_TEXTURE_FLAGS_VIDEO_DECODE)) return 1.0f;
-    const int w = b.width, h = b.height;
+    if (flags & (NVN_TEXTURE_FLAGS_LINEAR | NVN_TEXTURE_FLAGS_VIDEO_DECODE)) return 1.0f;
     if (w < 32 || h < 32) return 1.0f;
     // [gfx] render_scale_min_width (default 0): textures narrower than this keep their size. XC2 NS2 draws its 3D scene into a
     // 1280x720 set (G-buffer, depth, 640x360 effect masks) one of which is a storage image, so the whole set falls back to 1x and
     // the effects that mix it with scaled masks read every other pixel (a dot grid over the shadows). 1920 keeps that set together
     // at 1x and scales the 1920x1080 post chain and the 3840x2160 targets: the upscaler then writes the 4K output directly.
-    static const int min_w = static_cast<int>(nxrt::config_get_int("gfx", "render_scale_min_width", 0));
     if (w < min_w) return 1.0f;
     if (w == h && (w & (w - 1)) == 0) return 1.0f;
     return sc;
+}
+
+namespace {
+
+float attachment_scale(const Texture& t) {
+    const float scene = render_scale_now(), out = output_scale_now();
+    static const int out_min = static_cast<int>(nxrt::config_get_int("gfx", "output_min_width", 1920));
+    static const int min_w = static_cast<int>(nxrt::config_get_int("gfx", "render_scale_min_width", 0));
+    const QualityScales& qs = quality_scales();
+    const TextureBuilderInfo& b = t.b;
+    const bool compressed = !t.fmt || t.fmt->compressed;
+    const int blk_w = t.fmt ? t.fmt->block_w : 1;
+    const int blk_h = t.fmt ? t.fmt->block_h : 1;
+    return compute_attachment_scale(b.width, b.height, b.target, b.flags, compressed, blk_w, blk_h,
+                                    scene, out, out_min, min_w, qs.set, qs.out_h);
 }
 
 // ---- barriers and copies ----------------------------------------------------------------------------------------------------
@@ -1553,6 +1571,15 @@ TexGpu* tex_gpu_scaled(Texture* t, float scale) { return tex_or_null(t, scale); 
 float render_scale() {
     const float s = render_scale_now();
     return s != 1.0f ? s : output_scale_now();
+}
+
+float render_scale_live() { return render_scale_now(); }
+
+float output_scale_live() { return output_scale_now(); }
+
+uint32_t quality_output_height_live() {
+    const QualityScales& q = quality_scales();
+    return (q.set && q.out_h > 0) ? static_cast<uint32_t>(q.out_h) : 0u;
 }
 
 float tex_scale(Texture* t) {

@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <condition_variable>
 #include <cstring>
@@ -1496,6 +1497,43 @@ GameViewportInfo game_viewport_info() {
     info.apply_present_crop = g_vp_crop.load(std::memory_order_relaxed);
     info.dlss_bypassed = g_vp_bypass.load(std::memory_order_relaxed);
     return info;
+}
+
+GameViewportInfo scale_viewport_info(const GameViewportInfo& gvi, float scene_scale, float out_scale, uint32_t quality_out_h,
+                                     int out_min) {
+    GameViewportInfo out = gvi;
+    if (gvi.render_w > 0 && gvi.render_h > 0) {
+        const float r_sc = be::gpu::compute_attachment_scale(
+            static_cast<int>(gvi.render_w), static_cast<int>(gvi.render_h),
+            NVN_TEXTURE_TARGET_2D, 0, false, 1, 1,
+            scene_scale, out_scale, out_min, 0, quality_out_h > 0, static_cast<int>(quality_out_h));
+        out.render_w = static_cast<uint32_t>(std::max(1L, std::lround(static_cast<double>(gvi.render_w) * r_sc)));
+        out.render_h = static_cast<uint32_t>(std::max(1L, std::lround(static_cast<double>(gvi.render_h) * r_sc)));
+    }
+    if (gvi.base_w > 0 && gvi.base_h > 0) {
+        const float b_sc = be::gpu::compute_attachment_scale(
+            static_cast<int>(gvi.base_w), static_cast<int>(gvi.base_h),
+            NVN_TEXTURE_TARGET_2D, 0, false, 1, 1,
+            scene_scale, out_scale, out_min, 0, quality_out_h > 0, static_cast<int>(quality_out_h));
+        out.base_w = static_cast<uint32_t>(std::max(1L, std::lround(static_cast<double>(gvi.base_w) * b_sc)));
+        out.base_h = static_cast<uint32_t>(std::max(1L, std::lround(static_cast<double>(gvi.base_h) * b_sc)));
+    }
+    return out;
+}
+
+GameViewportInfo scaled_game_viewport_info() {
+    const GameViewportInfo gvi = game_viewport_info();
+    if (!be::gpu::active()) return gvi;
+    static const int out_min = static_cast<int>(nxrt::config_get_int("gfx", "output_min_width", 1920));
+    // Call render_scale() first to ensure lazy init of scales, then read out_scale and quality_out_h.
+    (void)be::gpu::render_scale();
+    // Use direct render/output scale via compute_attachment_scale behavior:
+    // Note: when scene == 1.0f, be::gpu::render_scale() returns output_scale_live(), so expose exact render_scale_live too or query via config:
+    // Better: compute_attachment_scale uses exact scene & out; let's check both.
+    const float out_sc = be::gpu::output_scale_live();
+    const uint32_t q_h = be::gpu::quality_output_height_live();
+    // Wait: if scene != out, be::gpu::render_scale_now() != render_scale() when scene==1.0f! Let's read scene via render_scale_live().
+    return scale_viewport_info(gvi, be::gpu::render_scale_live(), out_sc, q_h, out_min);
 }
 
 BackendStats backend_stats() {

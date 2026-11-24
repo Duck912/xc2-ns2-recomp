@@ -692,7 +692,9 @@ bool Device::init(const DeviceDesc& desc, std::string* error) {
     const bool x_fsi = add_ext(VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME, &afsi);
     const bool x_dcc = add_ext(VK_EXT_DEPTH_CLIP_CONTROL_EXTENSION_NAME, &adcc);
     const bool x_dce = add_ext(VK_EXT_DEPTH_CLIP_ENABLE_EXTENSION_NAME, &adce);
-    const bool x_dbc = add_ext(VK_EXT_DEPTH_BIAS_CONTROL_EXTENSION_NAME, &adbc);
+    // Opt-in only ([nvn] depth_bias_force_unorm = 1): enabling FORCE_UNORM globally broke RTX 40/50 shadow passes (#51, #54, #39).
+    const bool want_dbc = nxrt::config_get_bool("nvn", "depth_bias_force_unorm", false);
+    const bool x_dbc = want_dbc && add_ext(VK_EXT_DEPTH_BIAS_CONTROL_EXTENSION_NAME, &adbc);
     const bool x_cbc = add_ext(VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME, &acbc);
     const bool x_eds3 = add_ext(VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME, &aeds3);
     const bool x_vids = add_ext(VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME, &avids);
