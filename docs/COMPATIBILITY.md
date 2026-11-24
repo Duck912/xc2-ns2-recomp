@@ -17,7 +17,7 @@ You need your own dump: the ExeFS of the 3.0.1 program and its romfs. No game da
 | Hardware / Environment | Coverage | Current Notes & Open Issues |
 |---|---|---|
 | **AMD RDNA 2 / RDNA 4** (RX 6800 XT / 9070 XT) | Primary dev & benchmark | 59–60 fps typical, 43–52 fps open plains (`1440p` HDR10); mirror-capture fixes cloud-sea rim & motion shimmer; `v0.2.3` defers video prewarm (`#42`) and fixes `spirv_uint_samplers` declaration order for `amdvlk64.dll` |
-| **NVIDIA** (RTX series) | Community & partial repro | `#15` blinking/dialogue flicker fixed (`v0.2.3`, requires shader cache rebuild); `#44` RTX 40-series 3D shadow stripes fixed via `[nvn] depth_bias_force_unorm` (`#51`/`#54` opt-in since `v0.2.4`); `#47`/`#39` 4K `DLAA`/`Quality` scaling restored; `#32` Tyrannotitan Kurodil freeze (TDR) remains open; see [`tools/shader/PATCHES.md`](../tools/shader/PATCHES.md) for NVIDIA validation state |
+| **NVIDIA** (RTX series) | Community & partial repro | `#15` blinking/dialogue flicker fixed (`v0.2.3`, requires shader cache rebuild); `#44` RTX 40-series 3D shadow stripes fixed via `[nvn] depth_bias_force_unorm` (`#51`/`#54` opt-in since `v0.2.4`); `#47`/`#39` 4K `DLAA`/`Quality` scaling restored (`#55`/`#56` dynres fixed in `v0.2.4`); **dedicated TDR blocker** tracking `nvoglv64.dll` hangs / `VK_ERROR_DEVICE_LOST` (`#32` Kurodil, `#41` Brighid cutscene, `#59` fast-travel load); see [`tools/shader/PATCHES.md`](../tools/shader/PATCHES.md) for NVIDIA validation state |
 | **Intel GPU / Other environments** | Best-effort compatibility | Primary target is native Windows 11 x64; `#49` fixes Intel `igvk64.dll` `vkGetPipelineCacheData` crash (`v0.2.4`); `#25` / `#33` startup & setup fixes, `#45` `<CETCompat>false</CETCompat>` and `#58` PowerShell 5.1 fallback for Win 10; `#35` adds CPU `dav1d` drop recovery & SEH stackwalk guard (Windows 10 & Linux/SteamOS/Proton/Wine best-effort, community PRs/forks welcome) |
 
 ## Measured frame rate
@@ -67,6 +67,5 @@ Ryzen 7 5800X + Radeon RX 6800 XT, Adrenalin 26.10.1, 1440p window:
   [`tools/shader/patch_ds_samplers.py`](../tools/shader/patch_ds_samplers.py), and the retired `2649526f56d9b5b6`
   volumetric-fog workaround was removed on 2026-11-17. [`tools/shader/PATCHES.md`](../tools/shader/PATCHES.md) is the
   single source of truth for the remaining unautomated/per-shader items.
-- **Lv. 130 Tyrannotitan Kurodil freeze on NVIDIA ([#32](https://github.com/weile10000/xc2-ns2-recomp/issues/32))**:
-  reproduces on NVIDIA GPUs around a high-concurrency draw (`fs be528292f3d04f1b`) and triggers a driver TDR; open for
-  investigation.
+- **Dedicated blocker — NVIDIA GPU TDR / `VK_ERROR_DEVICE_LOST` ([#32](https://github.com/weile10000/xc2-ns2-recomp/issues/32), [#41](https://github.com/weile10000/xc2-ns2-recomp/issues/41), [#59](https://github.com/weile10000/xc2-ns2-recomp/issues/59))**:
+  reproduces on NVIDIA GPUs under heavy particle overdraw or map-transition concurrency (logs consistently show `nvn-render` stalled inside `nvoglv64.dll` with `timeline value = UINT64_MAX` / `fs be528292f3d04f1b` in the final draw ring). Tracked as a dedicated blocker for root-cause investigation.
