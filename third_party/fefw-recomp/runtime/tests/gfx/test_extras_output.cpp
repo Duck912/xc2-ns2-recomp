@@ -1000,3 +1000,64 @@ NXTEST(hdr10_ui_brightness) {
         CHECK(close_to(up, c.want_ui, 0.03, 0.01));
     }
 }
+
+// Debanding: noise of at most one 8-bit step on the sRGB code, averaging to the plain picture; pure black and white exactly as without it.
+NXTEST(hdr10_deband) {
+    Rig r;
+    Teardown td{r};
+    if (!make_device(r)) {
+        nxtest::skip("no headless Vulkan device");
+        return;
+    }
+    if (!formats_supported(*r.dev, VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_A2B10G10R10_UNORM_PACK32)) {
+        nxtest::skip("needed format not supported");
+        return;
+    }
+    const uint8_t v[8] = {0, 1, 40, 90, 128, 200, 254, 255};
+    REQUIRE(upload_source(r, VK_FORMAT_R8G8B8A8_SRGB, 8, 8, grey_columns(v)));
+    REQUIRE(make_dst(r, VK_FORMAT_A2B10G10R10_UNORM_PACK32, 8, 8, 4));
+    auto run = [&](bool deband, float expand, std::vector<uint8_t>* got) {
+        hdr::OutputParams p = base_params(r, 8, 8);
+        p.out = hdr::OutputKind::Hdr10;
+        p.src_linear = true;
+        p.paper_white_nits = 230.0f;
+        p.peak_nits = 1200.0f;
+        p.expand_ratio = expand;
+        p.deband = deband;
+        return run_pass(r, p, got);
+    };
+    std::vector<uint8_t> off, on;
+    // no expansion: the output decodes back to the source's sRGB code
+    REQUIRE(run(false, 1.0f, &off) == 2);
+    REQUIRE(run(true, 1.0f, &on) == 2);
+    std::vector<float> loff, lon;
+    REQUIRE(hdr::decode_hdr_capture(hdr::CaptureFormat::A2B10G10R10, off.data(), 8, 8, 230.0f, &loff, nullptr, nullptr, nullptr));
+    REQUIRE(hdr::decode_hdr_capture(hdr::CaptureFormat::A2B10G10R10, on.data(), 8, 8, 230.0f, &lon, nullptr, nullptr, nullptr));
+    int changed = 0;
+    for (uint32_t x = 0; x < 8; ++x) {
+        double sum = 0, worst = 0;
+        for (uint32_t y = 0; y < 8; ++y) {
+            const size_t i = (static_cast<size_t>(y) * 8 + x) * 4;
+            const size_t c = (static_cast<size_t>(y) * 8 + x) * 3;
+            if (x == 0 || x == 7) CHECK(std::memcmp(&off[i], &on[i], 4) == 0);   // black and white untouched
+            if (std::memcmp(&off[i], &on[i], 4) != 0) ++changed;
+            const double d = (hdr::srgb_oetf(lon[c]) - hdr::srgb_oetf(loff[c])) * 255.0;
+            sum += d;
+            worst = std::max(worst, std::fabs(d));
+        }
+        std::printf("    column %u (code %u): mean shift %.3f steps, largest %.3f steps\n", x, v[x], sum / 8.0, worst);
+        if (x >= 2 && x <= 6) {
+            CHECK(worst <= 1.3);                  // one step, plus the 10-bit PQ rounding
+            CHECK(std::fabs(sum / 8.0) <= 0.6);   // the noise averages out
+        }
+    }
+    CHECK(changed >= 16);   // the mid greys do get the noise
+    // with the highlight expansion: white still exact
+    REQUIRE(run(false, 1200.0f / 230.0f, &off) == 2);
+    REQUIRE(run(true, 1200.0f / 230.0f, &on) == 2);
+    for (uint32_t y = 0; y < 8; ++y)
+        for (uint32_t x : {0u, 7u}) {
+            const size_t i = (static_cast<size_t>(y) * 8 + x) * 4;
+            CHECK(std::memcmp(&off[i], &on[i], 4) == 0);
+        }
+}

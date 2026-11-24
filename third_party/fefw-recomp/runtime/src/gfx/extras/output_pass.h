@@ -36,6 +36,7 @@ struct OutputParams {
     float expand_ratio = 1.0f;               // > 1.0: expand display-referred [0,1] highlights toward peak_nits in HDR modes
     VkImageView scene = VK_NULL_HANDLE;      // src before the UI was drawn (same size, SHADER_READ_ONLY_OPTIMAL): the UI is not expanded
     float ui_scale = 1.0f;                   // HDR: the UI's brightness over paper white (needs scene)
+    bool deband = false;                     // HDR: noise of one step on an 8-bit source, so the stretched picture shows no bands
     bool fsr1 = false;                       // upscale with FSR 1 when the picture is larger than the source
     bool nis = false;                        // upscale with NVIDIA Image Scaling instead (FSR 1 when the scale is beyond 2x)
     float sharpness = 0.8f;                  // 0..1 (RCAS / NIS)

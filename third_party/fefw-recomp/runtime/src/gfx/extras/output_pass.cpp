@@ -247,6 +247,7 @@ void OutputPass::encode(VkCommandBuffer cb, VkImageView dst_view, VkFormat dst_f
     const float own[4] = {static_cast<float>(cx / sw), static_cast<float>(cy / sh), static_cast<float>(cw / sw), static_cast<float>(ch / sh)};
     for (int i = 0; i < 4; ++i) pc.scn[i] = in.upscaled ? in.scn[i] : own[i];
     pc.ui[0] = p.ui_scale;
+    pc.ui[1] = p.deband ? 1.0f : 0.0f;
 
     // the UI split reads the presented picture and its copy before the UI at the source size; with no copy, the picture twice
     const VkImageView fin = p.src;

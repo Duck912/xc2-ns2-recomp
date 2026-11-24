@@ -519,6 +519,7 @@ bool apply_fixed(Sec sec, const std::string& k, const std::string& v, Settings* 
             if (k == "paper_white_nits") return set_zero_or_real(80.0, 500.0, &h.paper_white_nits);
             if (k == "highlight_boost") return set_real(0.0, 2.0, &h.highlight_boost);
             if (k == "ui_white_nits") return set_zero_or_real(80.0, 500.0, &h.ui_white_nits);
+            if (k == "deband") return set_bool(&h.deband);
             break;
         }
         case Sec::Upscale: {
@@ -975,6 +976,7 @@ std::string format_settings(const Settings& s) {
     kv("paper_white_nits", num_exact(s.extras.hdr.paper_white_nits));
     kv("highlight_boost", num_exact(s.extras.hdr.highlight_boost));
     kv("ui_white_nits", num_exact(s.extras.hdr.ui_white_nits));
+    kv("deband", flag(s.extras.hdr.deband));
 
     o += "\n[upscale]\n";
     kv("mode", kUpscaleWords[static_cast<int>(s.extras.upscale.mode)]);

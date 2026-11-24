@@ -1173,6 +1173,11 @@ void tab_graphics(const LiveStatus& live, Page& p, float bottom_h) {
         hdr.ui_white_nits = ui_white;
         mark(p);
     }
+    if (card_toggle("hdr_deband", "HDR 去色带", "HDR debanding",
+                    "以极细的噪点隐藏天空、雾气和光晕中的色阶。",
+                    "Hides stepping in skies, fog and glows with a very fine noise.", &hdr.deband, false, true)) {
+        mark(p);
+    }
 
     // ---- Experimental: options of this PC version, not of the game, each with what it costs ----
     card_group("实验性功能", "Experimental");

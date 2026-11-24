@@ -225,6 +225,7 @@ void present_on_render_thread(Window* w, int index, bool again) {
             prm.expand_ratio = (decoded && hs.scene_hdr && hs.output != extras::OutputKind::Sdr8) ? hs.peak_ratio : 1.0f;
             prm.scene = from == src ? hdr_ui.scene : VK_NULL_HANDLE;
             prm.ui_scale = hdr_ui.ui_scale;
+            prm.deband = decoded && extras::settings().hdr.deband;
             prm.fsr1 = extras::upscale_mode() == extras::UpscaleMode::Fsr1;
             prm.nis = extras::upscale_mode() == extras::UpscaleMode::Nis;
             prm.sharpness = extras::upscale_sharpness();
