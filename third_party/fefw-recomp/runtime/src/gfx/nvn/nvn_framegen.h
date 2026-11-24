@@ -9,7 +9,8 @@
 
 namespace nxrt::nvn::be::gpu {
 
-bool fg_hudless_on();      // [dlss] frame_gen and [dlss] frame_gen_hudless (default 1), read once
+VkFormat hudless_copy_format(VkFormat tex_fmt, bool scene_hdr);   // copy image format matching present's sRGB/UNORM view choice
+bool fg_hudless_on();      // [dlss] frame_gen and [dlss] frame_gen_hudless (defaults to game::Info::frame_gen_hudless_default), read once
 void fg_note_eval();       // replay: this frame's DLSS evaluation fed frame generation
 // replay, before a draw into colour target t (blended: blending on target 0): true = call fg_hudless_capture now, with no pass open
 bool fg_hudless_candidate(Texture* t, bool blended);

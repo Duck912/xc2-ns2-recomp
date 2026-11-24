@@ -18,8 +18,8 @@ const SECTIONS = [
     title: 'settings.sec.picture', icon: 'monitor', file: 'game',
     fields: [
       // [am] resolution is "WxH"; empty means the console's own default for the operation mode (1920x1080 docked,
-      // 1280x720 handheld). The runtime caps the internal render at 1440p whatever is chosen here.
-      { id: 'resolution', type: 'select', label: 'settings.resolution.label', sec: 'am', key: 'resolution', def: '',
+      // 1280x720 handheld). Baseline installs default to explicit 1920x1080 docked.
+      { id: 'resolution', type: 'select', label: 'settings.resolution.label', sec: 'am', key: 'resolution', def: '1920x1080',
         options: [['', 'settings.resolution.auto'], ['1280x720', '720p'], ['1920x1080', '1080p'],
           ['2560x1440', '1440p'], ['3840x2160', '2160p (4K)']],
         hint: 'settings.resolution.hint' },
@@ -28,11 +28,11 @@ const SECTIONS = [
         hint: 'settings.opMode.hint' },
       { id: 'upscaler', type: 'select', label: 'settings.upscaler.label', sec: 'dlss', key: 'upscaler', def: 'taau',
         options: [['taau', 'settings.upscaler.taau'], ['fsr3', 'settings.upscaler.fsr3'], ['dlss', 'settings.upscaler.dlss'],
-          ['xess', 'settings.upscaler.xess'], ['auto', 'settings.upscaler.auto']],
+          ['auto', 'settings.upscaler.auto']],
         hint: 'settings.upscaler.hint',
         // the DLSS files (NVIDIA's, not in the package) and the button that fetches them, while DLSS is chosen for upscaling or frames
         status: 'dlss', showStatus: (m) => m.upscaler === 'dlss' || m.upscaler === 'auto' || m.frame_gen === 'dlss' },
-      { id: 'lockRenderSize', type: 'toggle', label: 'settings.lockRenderSize.label', sec: 'upscale', key: 'lock_render_size', def: '0',
+      { id: 'lockRenderSize', type: 'toggle', label: 'settings.lockRenderSize.label', sec: 'upscale', key: 'lock_render_size', def: '1',
         hint: 'settings.lockRenderSize.hint' },
       { id: 'fsr_dll', type: 'path', label: 'settings.fsrDll.label', sec: 'upscale', key: 'fsr_dll', def: '', placeholder: 'settings.fsrDll.placeholder',
         hint: 'settings.fsrDll.hint',
@@ -54,10 +54,10 @@ const SECTIONS = [
   {
     title: 'settings.sec.frameRate', icon: 'gauge', file: 'game',
     fields: [
-      // [xc2] fps: 0 keeps the game's own 30 Hz step, 60/120 make the runtime drive its limiter faster. The game paces
-      // itself by real time, so this changes the smoothness, not the speed (handover 132).
+      // [xc2] fps: retail 3.0.1 natively steps up to 60 Hz; 0 keeps the 30 Hz cadence/cap (higher output needs Frame Generation).
       { id: 'fps', type: 'select', label: 'settings.fps.label', sec: 'xc2', key: 'fps', def: '60',
-        options: [['0', 'settings.fps.native'], ['60', '60'], ['120', '120']],
+        options: [['0', 'settings.fps.native'], ['60', '60']],
+        normalize: (v) => (['0', '30'].includes(String(v).trim()) ? '0' : '60'),
         hint: 'settings.fps.hint' },
       { id: 'vsync_cap', type: 'toggle', label: 'settings.vsyncCap.label', sec: 'latency', key: 'vsync_cap', def: '1',
         hint: 'settings.vsyncCap.hint' },
@@ -133,7 +133,10 @@ export async function render(el, ctx) {
 
   // ----- model: one UI value per field -----
   const READ = {
-    select: (f) => get(f, f.key, f.def),
+    select: (f) => {
+      const v = get(f, f.key, f.def);
+      return f.normalize ? f.normalize(v) : v;
+    },
     toggle: (f) => (f.off !== undefined ? ![f.off, '0', 'false', 'no'].includes(String(get(f, f.key, f.def)).trim().toLowerCase()) : truthy(get(f, f.key, f.def))),
     size: (f) => ({ w: get(f, f.keys[0], f.def[0]), h: get(f, f.keys[1], f.def[1]) }),
     autonum: (f) => {
@@ -289,14 +292,13 @@ export async function render(el, ctx) {
   let checkSeq = 0;
   async function checkFiles() {
     const seq = ++checkSeq;
-    const r = await api('upscaler_files', { fsrDir: fwd(model.fsr_dll || ''), dlssDir: fwd(model.dlss_dll || ''), xessDir: fwd(model.xess_dll || '') })
+    const r = await api('upscaler_files', { fsrDir: fwd(model.fsr_dll || ''), dlssDir: fwd(model.dlss_dll || '') })
       .catch(() => null);
     if (seq !== checkSeq || !r) return;
     const line = (name, x) => `${t(name)}: ${x.found ? t('settings.files.found', { detail: x.detail }) : t('settings.files.notFound', { detail: fileDetail(x.detail) })}`;
     const put = (which, text) => el.querySelectorAll(`[data-status="${which}"]`).forEach((n) => { n.textContent = text; });
     put('fsr', `${line('settings.files.upscaling', r.fsr_upscaling)}. ${line('settings.files.frameGen', r.fsr_framegen)}.`);
     put('dlss', `${line('settings.files.dlss', r.dlss)}. ${line('settings.files.dlssFrameGen', r.dlss_framegen)}.`);
-    if (r.xess) put('xess', `${line('settings.files.xess', r.xess)}.`);
     // Optional official-source downloaders for DLSS (NVIDIA Streamline) and FSR (AMD GPUOpen), shown while the default folder lacks them.
     const syncDl = async (kind, need) => {
       const st = await api(`${kind}_download_status`).catch(() => null);
@@ -313,6 +315,7 @@ export async function render(el, ctx) {
       getKey: 'settings.files.dlssGet',
       hintKey: 'settings.files.dlssGetHint',
       doneKey: 'settings.files.dlssGetDone',
+      titleKey: 'settings.files.dlssConfirmTitle',
       confirmKey: 'settings.files.dlssConfirm',
       params: { version: '2.14.16', size: 276 },
     },
@@ -321,11 +324,70 @@ export async function render(el, ctx) {
       getKey: 'settings.files.fsrGet',
       hintKey: 'settings.files.fsrGetHint',
       doneKey: 'settings.files.fsrGetDone',
+      titleKey: 'settings.files.fsrConfirmTitle',
       confirmKey: 'settings.files.fsrConfirm',
       params: { version: '2.4.0 / 1.1.4', size: 46 },
     },
   };
   const dlPoll = { dlss: 0, fsr: 0 };
+  let modalOpen = false;
+
+  const fmtBytes = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MiB` : `${(n / 1024).toFixed(1)} KiB`);
+
+  function confirmDownloadModal(cfgDl, info) {
+    if (modalOpen) return Promise.resolve(false);
+    modalOpen = true;
+    return new Promise((resolve) => {
+      const backdrop = document.createElement('div');
+      backdrop.className = 'modal-backdrop';
+      backdrop.setAttribute('role', 'dialog');
+      backdrop.setAttribute('aria-modal', 'true');
+      const assetsHtml = info.assets.map((a) => `
+        <div class="modal-file">
+          <div class="modal-file-head">
+            <span><code>${esc(a.name)}</code></span>
+            <span class="dim">${esc(fmtBytes(a.size))}</span>
+          </div>
+          <div class="modal-kv"><strong>${esc(t('settings.files.confirmUrl'))}:</strong> <code>${esc(a.url)}</code></div>
+          <div class="modal-kv"><strong>${esc(t('settings.files.confirmSha'))}:</strong> <code>${esc(a.sha256)}</code></div>
+        </div>`).join('');
+      backdrop.innerHTML = `
+        <div class="modal-card">
+          <div class="modal-head">
+            ${icon('shield-check')}
+            <h2>${esc(t(cfgDl.titleKey, cfgDl.params))}</h2>
+          </div>
+          <div class="modal-body">
+            <p class="modal-note">${esc(t(cfgDl.confirmKey, cfgDl.params))}</p>
+            <div class="banner info">${icon('triangle-alert')}<div>${esc(t('settings.files.confirmSafety'))}</div></div>
+            <div class="modal-kv"><strong>${esc(t('settings.files.confirmRepo'))}:</strong> <code>${esc(info.repo_url)}</code></div>
+            <div class="modal-kv"><strong>${esc(t('settings.files.confirmDest'))}:</strong> <code>${esc(info.dest)}</code></div>
+            <div class="dim">${esc(t('settings.files.confirmAssets', { count: info.assets.length }))}</div>
+            <div class="modal-files">${assetsHtml}</div>
+          </div>
+          <div class="modal-foot">
+            <button type="button" class="btn quiet" data-modal-cancel>${esc(t('settings.files.confirmCancel'))}</button>
+            <button type="button" class="btn primary" data-modal-ok>${icon('download')}${esc(t('settings.files.confirmAccept'))}</button>
+          </div>
+        </div>`;
+      const close = (ok) => {
+        document.removeEventListener('keydown', onKey);
+        backdrop.remove();
+        modalOpen = false;
+        resolve(ok);
+      };
+      const onKey = (ev) => {
+        if (ev.key === 'Escape') close(false);
+      };
+      backdrop.addEventListener('click', (ev) => { if (ev.target === backdrop) close(false); });
+      backdrop.querySelector('[data-modal-cancel]')?.addEventListener('click', () => close(false));
+      backdrop.querySelector('[data-modal-ok]')?.addEventListener('click', () => close(true));
+      document.addEventListener('keydown', onKey);
+      document.body.appendChild(backdrop);
+      refreshIcons();
+      backdrop.querySelector('[data-modal-cancel]')?.focus();
+    });
+  }
 
   function renderDownloader(kind, show, st) {
     const cfgDl = dlCfg[kind];
@@ -354,9 +416,17 @@ export async function render(el, ctx) {
   }
   async function startDownloader(kind) {
     const cfgDl = dlCfg[kind];
-    if (!window.confirm(t(cfgDl.confirmKey, cfgDl.params))) return;
+    let info;
     try {
-      await api(`start_${kind}_download`);
+      info = await api('upscaler_download_manifest', { kind });
+    } catch (e) {
+      toast(errText(e), 'error');
+      return;
+    }
+    const ok = await confirmDownloadModal(cfgDl, info);
+    if (!ok) return;
+    try {
+      await api(`start_${kind}_download`, { confirmed: true });
     } catch (e) {
       toast(errText(e), 'error');
       return;

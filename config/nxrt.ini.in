@@ -18,11 +18,31 @@ bc7_cache = {bc7_cache}
 [log]
 path = nxrt.log
 
+[am]
+operation_mode = docked
+resolution = 1920x1080
+
+[gfx]
+window_width = 1920
+window_height = 1080
+present_mode = fifo
+
 [dlss]
 upscaler = taau
+frame_gen = 0
+
+[upscale]
+render_quality = native
+lock_render_size = 1
+
+[hdr]
+mode = auto
 
 [xc2]
 fps = 60
+
+[system]
+language = auto
 
 [media]
 video_decoder = library

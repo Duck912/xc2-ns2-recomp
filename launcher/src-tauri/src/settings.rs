@@ -194,18 +194,26 @@ pub fn ensure_play_paths(dir: &Path, p: &Paths) -> Result<(), String> {
         ini.set("fs", "save_dir", "save"); // relative to the run folder
         changed = true;
     }
-    // The game follows the console's language, so this must be a Switch code (zh-CN is a Windows code and the game
-    // falls back to English with it). Written whenever it is missing, so installs made before the key existed get it
-    // too; the settings page edits it afterwards.
+    // The game follows the console's language, so this must be a Switch code (or "auto" to follow Windows).
+    // Written whenever it is missing; the settings page edits it afterwards.
     if ini.get("system", "language").unwrap_or_default().trim().is_empty() {
-        ini.set("system", "language", "zh-Hans");
+        ini.set("system", "language", "auto");
         changed = true;
     }
     if new {
-        // A first ini: the log next to it, the built-in temporal upscaler, and 60 fps - the rate tools\run\play-301.cmd
-        // asks for by default (it sets NXRT_XC2_FPS, which wins over this file, so the two agree rather than conflict).
+        // Portable baseline: 1080p docked output, built-in TAAU at 100% native render quality with dynamic-res locked,
+        // VSync on, Frame Generation off, 60 fps native step, and logs next to the executable.
         ini.set("log", "path", "nxrt.log");
+        ini.set("am", "operation_mode", "docked");
+        ini.set("am", "resolution", "1920x1080");
+        ini.set("gfx", "window_width", "1920");
+        ini.set("gfx", "window_height", "1080");
+        ini.set("gfx", "present_mode", "fifo");
         ini.set("dlss", "upscaler", "taau");
+        ini.set("dlss", "frame_gen", "0");
+        ini.set("upscale", "render_quality", "native");
+        ini.set("upscale", "lock_render_size", "1");
+        ini.set("hdr", "mode", "auto");
         ini.set("xc2", "fps", "60");
     }
     if changed {
@@ -277,5 +285,24 @@ mod tests {
         fs::write(game.join("locales").join("zh.ini"), "the player's own").unwrap();
         install_locales(&game, &p);
         assert_eq!(fs::read_to_string(game.join("locales").join("zh.ini")).unwrap(), "the player's own");
+    }
+
+    #[test]
+    fn ensure_play_paths_writes_1080p_native_taau_baseline_on_new_ini() {
+        let repo = tmp("base-repo");
+        let game = tmp("base-game");
+        let p = paths_with(&repo, &game);
+        ensure_play_paths(&game, &p).unwrap();
+        let ini = load(&game.join(GAME_INI)).unwrap();
+        assert_eq!(ini.get("am", "operation_mode").as_deref(), Some("docked"));
+        assert_eq!(ini.get("am", "resolution").as_deref(), Some("1920x1080"));
+        assert_eq!(ini.get("gfx", "window_width").as_deref(), Some("1920"));
+        assert_eq!(ini.get("gfx", "window_height").as_deref(), Some("1080"));
+        assert_eq!(ini.get("dlss", "upscaler").as_deref(), Some("taau"));
+        assert_eq!(ini.get("dlss", "frame_gen").as_deref(), Some("0"));
+        assert_eq!(ini.get("upscale", "render_quality").as_deref(), Some("native"));
+        assert_eq!(ini.get("upscale", "lock_render_size").as_deref(), Some("1"));
+        assert_eq!(ini.get("xc2", "fps").as_deref(), Some("60"));
+        assert_eq!(ini.get("system", "language").as_deref(), Some("auto"));
     }
 }

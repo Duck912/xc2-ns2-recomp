@@ -141,9 +141,16 @@ class Runner:
             logf.flush()
             # Streamed rather than captured: the log used to appear only when the command exited, so a four
             # minute build looked like a hang to anyone watching setup.log.
-            p = subprocess.Popen([str(a) for a in argv], cwd=str(cwd) if cwd else None, env=full_env,
-                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                 text=True, errors="replace", bufsize=1)
+            try:
+                p = subprocess.Popen([str(a) for a in argv], cwd=str(cwd) if cwd else None, env=full_env,
+                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                     text=True, errors="replace", bufsize=1)
+            except OSError as exc:
+                msg = "  failed to start %s: %s" % (argv[0], exc)
+                self.log(msg)
+                logf.write(msg + "\n")
+                logf.flush()
+                return 127
             for line in p.stdout:
                 logf.write("    " + line)
                 logf.flush()
@@ -164,8 +171,24 @@ def first_file(*candidates):
     return Path(candidates[0])
 
 
+def find_powershell():
+    """Return pwsh when installed, else fall back to built-in Windows PowerShell 5.1 (#58)."""
+    candidates = [shutil.which("pwsh")]
+    if os.name == "nt":
+        sysroot = os.environ.get("SystemRoot") or r"C:\Windows"
+        candidates += [
+            r"C:\Program Files\PowerShell\7\pwsh.exe",
+            shutil.which("powershell"),
+            os.path.join(sysroot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+        ]
+    for c in candidates:
+        if c and Path(c).is_file():
+            return str(c)
+    return "powershell.exe" if os.name == "nt" else "pwsh"
+
+
 def pwsh(*args):
-    return ["pwsh", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", *args]
+    return [find_powershell(), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", *args]
 
 
 NINJA_LINE = re.compile(r"^\[(\d+)/(\d+)\]")
@@ -202,11 +225,11 @@ def import_toolchain(r):
         r.log("  XC2_ENV points at %s, which is not a file; leaving PATH alone" % script)
         return
     try:
-        p = subprocess.run(["pwsh", "-NoProfile", "-Command",
+        p = subprocess.run([find_powershell(), "-NoProfile", "-Command",
                             ". $env:XC2_ENV *> $null; Write-Output $env:PATH"],
                            capture_output=True, text=True, timeout=180)
     except OSError as exc:
-        r.log("  could not run pwsh to read XC2_ENV: %s" % exc)
+        r.log("  could not run PowerShell to read XC2_ENV: %s" % exc)
         return
     lines = [ln for ln in (p.stdout or "").splitlines() if ln.strip()]
     if p.returncode != 0 or not lines:

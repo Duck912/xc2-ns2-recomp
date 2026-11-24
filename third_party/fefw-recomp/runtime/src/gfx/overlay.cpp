@@ -38,6 +38,7 @@
 #include "nxrt/nvn_backend.h"
 #include "nxrt/platform.h"
 #include "nxrt/services_api.h"
+#include "extras/framegen.h"
 #include "extras/overlay_composite.h"
 #include "fps_stats.h"
 
@@ -1128,10 +1129,16 @@ void Overlay::Impl::refresh_counter_text(double now_s) {
     text_s = now_s;
     snap = stats.snapshot(now_s);
     const int detail = counter_detail.load(std::memory_order_relaxed);
+    const extras::FramegenTelemetry fg = extras::framegen_telemetry();
+    const bool fg_live = fg.active && fg.shown_fps > 0.5;
     char buf[64];
     counter_n = 0;
-    if (snap.valid) std::snprintf(buf, sizeof buf, "%.0f FPS", snap.fps);
-    else std::snprintf(buf, sizeof buf, "-- FPS");
+    if (snap.valid) {
+        if (fg_live) std::snprintf(buf, sizeof buf, "%.0f -> %.0f FPS (FG)", snap.fps, fg.shown_fps);
+        else std::snprintf(buf, sizeof buf, "%.0f FPS", snap.fps);
+    } else {
+        std::snprintf(buf, sizeof buf, "-- FPS");
+    }
     counter_lines[counter_n++] = buf;
     if (detail >= 1) {
         if (snap.valid) std::snprintf(buf, sizeof buf, "%.1f ms", snap.avg_ms);
@@ -1399,15 +1406,18 @@ void Overlay::Impl::draw_perf_hud(const FrameInfo& f, double now_s) {
     const float graph_h = sz * 3.2f;
     const float margin = sz * 0.9f;
     const float box_w = std::round(sz * 21.5f);
+    const extras::FramegenTelemetry fg = extras::framegen_telemetry();
+    const bool fg_live = fg.active && fg.shown_fps > 0.5;
+    const int disp_rows = fg.requested ? 7 : 6;
 
     // Count sections:
-    // 4 hw rows + 1 fps row + graph + 6 timing rows + 6 display rows + 2 hw name rows
+    // 4 hw rows + 1 fps row + graph + 6 timing rows + 6..7 display rows + 2 hw name rows
     const float box_h = pad_y * 2.f +
                         4.f * line_h +          // GPU, VRAM, CPU, RAM
                         1.f * line_h +          // FPS / avg ms / max ms
                         sec_gap * 0.5f + graph_h + sec_gap +
                         6.f * line_h + sec_gap + // GPU prep/busy, pipeline/shader waits, tex uploads/time
-                        6.f * line_h + sec_gap + // Window, Game image, 3D scene, Scaling, Frame limit, Presentation
+                        static_cast<float>(disp_rows) * line_h + sec_gap + // Window, Game image, 3D scene, Scaling, [Frame gen], Frame limit, Presentation
                         2.f * line_h;            // GPU name, CPU name
 
     const int corner = counter_corner.load(std::memory_order_relaxed);
@@ -1499,7 +1509,8 @@ void Overlay::Impl::draw_perf_hud(const FrameInfo& f, double now_s) {
 
     // Row 5: FPS | avg ms | max ms
     if (snap.valid) {
-        std::snprintf(buf1, sizeof buf1, "%.0f FPS", snap.fps);
+        if (fg_live) std::snprintf(buf1, sizeof buf1, "%.0f -> %.0f FPS", snap.fps, fg.shown_fps);
+        else std::snprintf(buf1, sizeof buf1, "%.0f FPS", snap.fps);
         std::snprintf(buf2, sizeof buf2, "%.1f ms", snap.avg_ms);
         std::snprintf(buf3, sizeof buf3, "max %.1f ms", snap.max_ms);
     } else {
@@ -1507,8 +1518,9 @@ void Overlay::Impl::draw_perf_hud(const FrameInfo& f, double now_s) {
         std::snprintf(buf2, sizeof buf2, "-- ms");
         std::snprintf(buf3, sizeof buf3, "max -- ms");
     }
+    const float w1 = font->CalcTextSizeA(sz, FLT_MAX, 0.0f, buf1).x;
     draw_c(xL, y, cWhite, buf1);
-    draw_c(col1 + sz * 1.1f, y, cWhite, buf2);
+    draw_c(std::max(col1 + sz * 1.1f, xL + w1 + sz * 0.8f), y, cWhite, buf2);
     draw_r(y, cMuted, buf3);
     y += line_h + sec_gap * 0.5f;
 
@@ -1583,6 +1595,15 @@ void Overlay::Impl::draw_perf_hud(const FrameInfo& f, double now_s) {
         scale_str = "bilinear";
     }
     draw_kv(y, cCyan, zh ? "超分 / 缩放" : "Scaling", scale_str.c_str()); y += line_h;
+
+    if (fg.requested) {
+        const char* fg_kind = fg.mode == 3 ? "FSR 3 FG" : "DLSS FG";
+        if (fg_live) std::snprintf(buf1, sizeof buf1, zh ? "%s (%.0f 帧)" : "%s (%.0f FPS)", fg_kind, fg.shown_fps);
+        else if (fg.active) std::snprintf(buf1, sizeof buf1, zh ? "%s (已开启)" : "%s (On)", fg_kind);
+        else if (fg.available) std::snprintf(buf1, sizeof buf1, zh ? "%s (待机)" : "%s (Standby)", fg_kind);
+        else std::snprintf(buf1, sizeof buf1, zh ? "%s (不可用)" : "%s (Unavailable)", fg_kind);
+        draw_kv(y, cCyan, zh ? "帧生成" : "Frame gen", buf1); y += line_h;
+    }
 
     const double cap = ctx.limiter ? ctx.limiter->target_fps() : 0.0;
     if (cap > 0.5) std::snprintf(buf1, sizeof buf1, "%.0f FPS", std::round(cap));

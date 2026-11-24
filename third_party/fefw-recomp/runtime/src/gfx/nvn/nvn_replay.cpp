@@ -3662,7 +3662,7 @@ bool earlyz_mask_init() {
     ci.stage.module = g_ezm.module;
     ci.stage.pName = "main";
     ci.layout = g_ezm.layout;
-    if (vkCreateComputePipelines(d, pipeline_cache_handle(), 1, &ci, nullptr, &g_ezm.pipe) != VK_SUCCESS) return fail("compute pipeline");
+    if (create_compute_pipeline_tracked(d, pipeline_cache_handle(), &ci, &g_ezm.pipe) != VK_SUCCESS) return fail("compute pipeline");
     g_ezm.ok = true;
     NXLOG_I(kTag, "earlyz_mask: the registration mask is rebuilt from the list after every list draw (the black rectangle's cause)");
     return true;

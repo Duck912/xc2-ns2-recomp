@@ -7,6 +7,8 @@
 
 #include "extras/framegen.h"
 #include "nxrt/config.h"
+#include "nxrt/extras.h"
+#include "nxrt/game.h"
 #include "nxrt/log.h"
 
 namespace nxrt::nvn::be::gpu {
@@ -37,6 +39,15 @@ VkFormat unorm_of(VkFormat f) {
         case VK_FORMAT_R8G8B8A8_SRGB: return VK_FORMAT_R8G8B8A8_UNORM;
         case VK_FORMAT_B8G8R8A8_SRGB: return VK_FORMAT_B8G8R8A8_UNORM;
         case VK_FORMAT_A8B8G8R8_SRGB_PACK32: return VK_FORMAT_A8B8G8R8_UNORM_PACK32;
+        default: return f;
+    }
+}
+
+VkFormat srgb_of(VkFormat f) {
+    switch (f) {
+        case VK_FORMAT_R8G8B8A8_UNORM: return VK_FORMAT_R8G8B8A8_SRGB;
+        case VK_FORMAT_B8G8R8A8_UNORM: return VK_FORMAT_B8G8R8A8_SRGB;
+        case VK_FORMAT_A8B8G8R8_UNORM_PACK32: return VK_FORMAT_A8B8G8R8_SRGB_PACK32;
         default: return f;
     }
 }
@@ -78,8 +89,9 @@ bool is_window_texture(const State& s, Texture* t) {
 bool copy_texture(State& s, Frame& f, Texture* t) {
     if (!tex_gpu(t) || tex_is_depth(t)) return false;
     const VkExtent3D e = tex_image_extent(t, 0);
+    const VkFormat fmt = hudless_copy_format(tex_vk_format(t), extras::hdr_state().scene_hdr);
     Img& c = s.copy[s.cur];
-    if (!ensure(c, VkExtent2D{e.width, e.height}, unorm_of(tex_vk_format(t)),
+    if (!ensure(c, VkExtent2D{e.width, e.height}, fmt,
                 VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, "framegen hudless copy"))
         return false;
     tex_transition(t, f, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
@@ -94,8 +106,14 @@ bool copy_texture(State& s, Frame& f, Texture* t) {
 
 }  // namespace
 
+VkFormat hudless_copy_format(VkFormat tex_fmt, bool scene_hdr) {
+    // Match nvn_present's view choice: SDR passes UNORM bytes as-is; HDR output decodes 8-bit display-referred buffers through their sRGB view.
+    return scene_hdr ? srgb_of(tex_fmt) : unorm_of(tex_fmt);
+}
+
 bool fg_hudless_on() {
-    static const bool v = extras::framegen_requested() && config_get_bool("dlss", "frame_gen_hudless", false);
+    static const bool v = extras::framegen_requested() &&
+                          config_get_bool("dlss", "frame_gen_hudless", nxrt::game::info().frame_gen_hudless_default);
     return v;
 }
 
@@ -147,7 +165,7 @@ void fg_hudless_present(Window* w, Texture* presented, Frame& f, VkExtent2D bb, 
     draw(c.img.view, b.img.view);
     to(f.cb, b, VK_IMAGE_LAYOUT_GENERAL);
     extras::framegen_hudless(f.cb, b.img.image, b.img.view, bb_format, bb);
-    if (++s.frames % 1800 == 0)
+    if (s.frames++ == 0 || s.frames % 1800 == 0)
         NXLOG_I(kTag, "HUD-less colour: %llu frames, %llu captured before the UI, %llu with no capture", static_cast<unsigned long long>(s.frames),
                 static_cast<unsigned long long>(s.captures), static_cast<unsigned long long>(s.whole));
 }

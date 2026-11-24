@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -75,6 +76,8 @@ std::map<std::pair<const ShaderInfo*, VkPipelineLayout>, VkPipeline> g_compute;
 VkPipelineCache g_cache = VK_NULL_HANDLE;
 bool g_cache_tried = false;
 std::string g_cache_path;
+VkPipelineCache g_gpl_cache = VK_NULL_HANDLE;
+bool g_gpl_cache_tried = false;
 nxrt::GaugeCounter g_pipeline_count{"nvn.pipelines"};   // live VkPipelines (graphics and compute, linked ones included); render thread
 std::unordered_map<const ShaderInfo*, std::pair<gfx::Buffer, VkDeviceSize>> g_const_bufs;
 gfx::Buffer g_driver_const;
@@ -100,6 +103,21 @@ VkShaderStageFlagBits stage_bit(ShaderStage s) {
 
 std::mutex g_cache_mu;
 std::atomic<bool> g_cache_ready{false};
+std::atomic<bool> g_gpl_cache_ready{false};
+std::atomic<bool> g_cache_save_on{true};
+std::shared_mutex g_cache_rw_mu;   // shared by pipeline compiles, exclusive for vkGetPipelineCacheData & shutdown
+std::mutex g_save_mu;              // serialises writing pipeline_cache.bin.tmp -> pipeline_cache.bin
+
+std::string trim_lower(std::string s) {
+    auto not_ws = [](unsigned char c) { return !std::isspace(c); };
+    s.erase(s.begin(), std::find_if(s.begin(), s.end(), not_ws));
+    s.erase(std::find_if(s.rbegin(), s.rend(), not_ws).base(), s.end());
+    for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+}
+
+bool is_explicit_save_on(const std::string& m) { return m == "1" || m == "true" || m == "on" || m == "yes"; }
+bool is_explicit_save_off(const std::string& m) { return m == "0" || m == "false" || m == "off" || m == "no"; }
 
 void ensure_cache() {
     if (g_cache_ready.load(std::memory_order_acquire)) return;
@@ -107,6 +125,19 @@ void ensure_cache() {
     if (g_cache_tried) return;
     g_cache_tried = true;
     g_cache_path = config_get_str("nvn", "pipeline_cache", "pipeline_cache.bin");
+    const std::string raw_save = config_get_str("nvn", "pipeline_cache_save", "auto");
+    const std::string norm_save = trim_lower(raw_save);
+    if (!norm_save.empty() && norm_save != "auto" && !is_explicit_save_on(norm_save) && !is_explicit_save_off(norm_save))
+        NXLOG_W(kTag, "[nvn] pipeline_cache_save = %s is not known: using auto", raw_save.c_str());
+    const uint32_t vendor_id = device().gpu().vendor_id;
+    const bool save_on = should_save_pipeline_cache(norm_save, vendor_id);
+    g_cache_save_on.store(save_on, std::memory_order_relaxed);
+    if (!g_cache_path.empty() && !save_on) {
+        if (!is_explicit_save_off(norm_save) && vendor_id == 0x8086u)
+            NXLOG_I(kTag, "pipeline cache disk save off by default on Intel GPU (vendor 0x8086, #49 workaround; set [nvn] pipeline_cache_save = true to override)");
+        else
+            NXLOG_I(kTag, "pipeline cache disk save off ([nvn] pipeline_cache_save = %s)", raw_save.c_str());
+    }
     std::vector<char> data;
     if (!g_cache_path.empty()) {
         if (FILE* f = std::fopen(g_cache_path.c_str(), "rb")) {          // one read: the file can be hundreds of MB after a shader preparation
@@ -134,17 +165,37 @@ void ensure_cache() {
     g_cache_ready.store(true, std::memory_order_release);
 }
 
+// Separate in-memory cache for runtime GPL shader parts and linked pipelines: keeps library blobs out of the persisted
+// pipeline cache (and out of vkGetPipelineCacheData on drivers where serialising GPL parts crashes, issue #49).
+void ensure_gpl_cache() {
+    if (g_gpl_cache_ready.load(std::memory_order_acquire)) return;
+    std::lock_guard<std::mutex> lk(g_cache_mu);
+    if (g_gpl_cache_tried) return;
+    g_gpl_cache_tried = true;
+    VkPipelineCacheCreateInfo ci = {VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+    vkCreatePipelineCache(vkdev(), &ci, nullptr, &g_gpl_cache);
+    g_gpl_cache_ready.store(true, std::memory_order_release);
+}
+
 void save_cache() {
-    if (!g_cache || g_cache_path.empty()) return;
+    if (!g_cache_save_on.load(std::memory_order_relaxed) || g_cache_path.empty()) return;
     NXFT("pipe.cache.save");
-    g_cache_dirty.store(false);
-    g_new_since_save.store(0);
+    std::vector<char> data;
     size_t n = 0;
-    if (vkGetPipelineCacheData(vkdev(), g_cache, &n, nullptr) != VK_SUCCESS || !n) return;
-    std::vector<char> data(n);
-    if (vkGetPipelineCacheData(vkdev(), g_cache, &n, data.data()) != VK_SUCCESS) return;
+    std::string path;
+    {
+        std::unique_lock<std::shared_mutex> lk(g_cache_rw_mu);
+        if (!g_cache || g_cache_path.empty() || !g_cache_save_on.load(std::memory_order_relaxed)) return;
+        g_cache_dirty.store(false);
+        g_new_since_save.store(0);
+        if (vkGetPipelineCacheData(vkdev(), g_cache, &n, nullptr) != VK_SUCCESS || !n) return;
+        data.resize(n);
+        if (vkGetPipelineCacheData(vkdev(), g_cache, &n, data.data()) != VK_SUCCESS || !n) return;
+        path = g_cache_path;
+    }
+    std::lock_guard<std::mutex> save_lk(g_save_mu);
     // written to a temporary file and renamed, so a process that ends in the middle of it leaves the old cache intact
-    const std::string tmp = g_cache_path + ".tmp";
+    const std::string tmp = path + ".tmp";
     {
         std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
         if (!f) return;
@@ -152,18 +203,26 @@ void save_cache() {
         if (!f) return;
     }
     std::error_code ec;
-    std::filesystem::rename(tmp, g_cache_path, ec);
+    std::filesystem::rename(tmp, path, ec);
     if (ec) {
-        std::filesystem::remove(g_cache_path, ec);
-        std::filesystem::rename(tmp, g_cache_path, ec);
+        std::filesystem::remove(path, ec);
+        std::filesystem::rename(tmp, path, ec);
     }
 }
 
 }  // namespace
 
+bool should_save_pipeline_cache(const std::string& mode, uint32_t vendor_id) {
+    const std::string m = trim_lower(mode);
+    if (is_explicit_save_on(m)) return true;
+    if (is_explicit_save_off(m)) return false;
+    return vendor_id != 0x8086u;
+}
+
 // A cache of hundreds of MB (the shader preparation's) is rewritten only after thousands of new pipelines: the new ones are few next to it and
 // the write takes seconds. The ordinary small cache is written whenever something new appeared, as before.
 bool pipeline_cache_dirty() {
+    if (!g_cache_save_on.load(std::memory_order_relaxed)) return false;
     if (!g_cache_dirty.load(std::memory_order_relaxed)) return false;
     return !g_cache_big || g_new_since_save.load(std::memory_order_relaxed) >= 3000;
 }
@@ -808,12 +867,48 @@ VkPipelineCache pipeline_cache_handle() {
     return g_cache;
 }
 
-void note_pipeline_created(double ms, const char* what) {
+VkPipelineCache pipeline_library_cache_handle() {
+    ensure_gpl_cache();
+    return g_gpl_cache;
+}
+
+void note_pipeline_created(double ms, const char* what, bool persisted) {
     counters().pipelines_created.fetch_add(1);
     g_pipes_created.add(1);
-    g_cache_dirty.store(true, std::memory_order_relaxed);
-    if (ms >= 2.0) g_new_since_save.fetch_add(1, std::memory_order_relaxed);      // a part the cache already had comes back in well under that
+    if (persisted) {
+        g_cache_dirty.store(true, std::memory_order_relaxed);
+        if (ms >= 2.0) g_new_since_save.fetch_add(1, std::memory_order_relaxed);      // a part the cache already had comes back in well under that
+    }
     NXLOG_D(kTag, "%s created in %.1f ms", what, ms);
+}
+
+VkResult create_graphics_pipeline_tracked(VkDevice dev, VkPipelineCache cache, const VkGraphicsPipelineCreateInfo* gi, VkPipeline* out) {
+    compiles_in_flight().fetch_add(1, std::memory_order_relaxed);
+    const uint64_t t0 = nxrt::hitch_ticks();
+    // Centralised here so whole pipelines, GPL parts and prewarm workers agree.
+    auto info = *gi;
+    std::vector<VkPipelineShaderStageCreateInfo> stages;
+    std::vector<VkPipelineShaderStageRequiredSubgroupSizeCreateInfo> sizes(gi->stageCount);
+    if (gi->stageCount) stages.assign(gi->pStages, gi->pStages + gi->stageCount);
+    for (size_t i = 0; i < stages.size(); ++i) configure_guest_subgroup(stages[i], sizes[i]);
+    info.pStages = stages.data();
+    std::shared_lock<std::shared_mutex> cache_lk(g_cache_rw_mu, std::defer_lock);
+    if (cache != VK_NULL_HANDLE) cache_lk.lock();
+    const VkResult r = vkCreateGraphicsPipelines(dev, cache, 1, &info, nullptr, out);
+    if (nxrt::hitch_on_render_thread()) nxrt::hitch_phase_add(nxrt::kHpRenderPipeline, nxrt::hitch_ticks() - t0);
+    compiles_in_flight().fetch_sub(1, std::memory_order_relaxed);
+    return r;
+}
+
+VkResult create_compute_pipeline_tracked(VkDevice dev, VkPipelineCache cache, const VkComputePipelineCreateInfo* ci, VkPipeline* out) {
+    compiles_in_flight().fetch_add(1, std::memory_order_relaxed);
+    const uint64_t t0 = nxrt::hitch_ticks();
+    std::shared_lock<std::shared_mutex> cache_lk(g_cache_rw_mu, std::defer_lock);
+    if (cache != VK_NULL_HANDLE) cache_lk.lock();
+    const VkResult r = vkCreateComputePipelines(dev, cache, 1, ci, nullptr, out);
+    if (nxrt::hitch_on_render_thread()) nxrt::hitch_phase_add(nxrt::kHpRenderPipeline, nxrt::hitch_ticks() - t0);
+    compiles_in_flight().fetch_sub(1, std::memory_order_relaxed);
+    return r;
 }
 
 void configure_guest_subgroup(VkPipelineShaderStageCreateInfo& stage,
@@ -1028,9 +1123,7 @@ VkPipeline compute_pipeline(const ShaderInfo* cs, const ProgLayout& layout) {
         VkPipelineShaderStageRequiredSubgroupSizeCreateInfo subgroup_size{};
         configure_guest_subgroup(ci.stage, subgroup_size);
         ci.layout = layout.layout;
-        const uint64_t tp0 = nxrt::hitch_ticks();
-        const VkResult cr = vkCreateComputePipelines(vkdev(), g_cache, 1, &ci, nullptr, &pipe);
-        if (nxrt::hitch_on_render_thread()) nxrt::hitch_phase_add(nxrt::kHpRenderPipeline, nxrt::hitch_ticks() - tp0);
+        const VkResult cr = create_compute_pipeline_tracked(vkdev(), g_cache, &ci, &pipe);
         if (cr != VK_SUCCESS) {
             NXLOG_E(kTag, "compute pipeline failed for %s", cs->hash.c_str());
             pipe = VK_NULL_HANDLE;
@@ -1784,11 +1877,21 @@ void pipeline_shutdown() {
     g_const_bytes.sub(g_const_bytes.get());
     if (g_driver_const_made) device().destroy_buffer(g_driver_const);
     g_driver_const_made = false;
-    if (g_cache) vkDestroyPipelineCache(d, g_cache, nullptr);
-    g_cache = VK_NULL_HANDLE;
-    g_cache_tried = false;
-    g_cache_ready.store(false);
-    g_cache_dirty.store(false);
+    {
+        std::unique_lock<std::shared_mutex> lk(g_cache_rw_mu);
+        if (g_cache) vkDestroyPipelineCache(d, g_cache, nullptr);
+        if (g_gpl_cache) vkDestroyPipelineCache(d, g_gpl_cache, nullptr);
+        g_cache = VK_NULL_HANDLE;
+        g_gpl_cache = VK_NULL_HANDLE;
+        g_cache_tried = false;
+        g_gpl_cache_tried = false;
+        g_cache_ready.store(false);
+        g_gpl_cache_ready.store(false);
+        g_cache_save_on.store(true);
+        g_cache_dirty.store(false);
+        g_new_since_save.store(0);
+        g_cache_path.clear();
+    }
     g_pipeline_count.sub(g_pipeline_count.get());
 }
 

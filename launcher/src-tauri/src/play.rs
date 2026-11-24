@@ -267,9 +267,13 @@ fn package_command(dir: &Path, exe: &Path) -> Command {
     c.env("NXRT_INI", dir.join("nxrt.ini"));
     // The runtime's own lookup ends up answering AmericanEnglish for [system] language a moment after it read the
     // file correctly (measured 2026-11-18), so the choice is handed over as the environment value, which wins.
-    if let Some(lang) = ini_system_language(dir) {
+    if let Some(lang) = ini_value(dir, "system", "language") {
         c.env("NXRT_SYSTEM_LANGUAGE", lang);
     }
+    // launch.env locks NXRT_XC2_FPS=60 and NXRT_NVN_PRESENT_INTERVAL_HZ=60 by default; let [xc2] fps = 0/30 win here.
+    let (xc2_fps, present_hz) = fps_env_for_dir(dir);
+    c.env("NXRT_XC2_FPS", xc2_fps)
+        .env("NXRT_NVN_PRESENT_INTERVAL_HZ", present_hz);
     c.env("NXRT_FS_ROMFS", dir.join("game").join("romfs-301"))
         .env("NXRT_FS_SAVE_DIR", dir.join("save"))
         .env("NXRT_NVN_SHADER_CACHE", dir.join("shader_cache").join("spirv"))
@@ -308,10 +312,11 @@ pub fn start(app: &AppHandle, p: &crate::setup::Paths, launcher_dir: &Path, mini
         // leading NAME=value words are environment variables, as in a shell (there is none in between here)
         let n = runner.iter().take_while(|w| w.split_once('=').is_some_and(|(k, _)| !k.is_empty() && !k.contains('/'))).count();
         let (assign, _words) = runner.split_at(n);
+            let fps_flag = if fps_env_for_dir(&dir).1 == "30" { "-30" } else { "-60" };
         let mut cmd = match &script {
             Some(script) => {
                 let mut c = Command::new("cmd.exe");
-                c.args(["/d", "/c"]).arg(script).arg("-60");
+                c.args(["/d", "/c"]).arg(script).arg(fps_flag);
                 c
             }
             None => package_command(&dir, &exe),
@@ -407,28 +412,20 @@ pub fn start(app: &AppHandle, p: &crate::setup::Paths, launcher_dir: &Path, mini
     Ok(())
 }
 
-/// `[system] language` from <install>\nxrt.ini: the game language the settings page writes.
-fn ini_system_language(dir: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(dir.join("nxrt.ini")).ok()?;
-    let mut in_system = false;
-    for line in text.lines() {
-        let l = line.trim();
-        if l.starts_with('[') {
-            in_system = l == "[system]";
-            continue;
-        }
-        if in_system {
-            if let Some((k, v)) = l.split_once('=') {
-                if k.trim() == "language" {
-                    let v = v.trim();
-                    if !v.is_empty() {
-                        return Some(v.to_string());
-                    }
-                }
-            }
-        }
+/// Reads a trimmed non-empty key from <install>\nxrt.ini.
+fn ini_value(dir: &Path, section: &str, key: &str) -> Option<String> {
+    let text = std::fs::read_to_string(dir.join(crate::settings::GAME_INI)).ok()?;
+    let val = crate::ini::Ini::parse(&text).get(section, key)?;
+    let trimmed = val.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+/// Maps [xc2] fps in nxrt.ini to (NXRT_XC2_FPS, NXRT_NVN_PRESENT_INTERVAL_HZ); retail 3.0.1 tops at 60 Hz.
+fn fps_env_for_dir(dir: &Path) -> (&'static str, &'static str) {
+    match ini_value(dir, "xc2", "fps").as_deref() {
+        Some("0") | Some("30") => ("0", "30"),
+        _ => ("60", "60"),
     }
-    None
 }
 
 /// Translate the shader blocks the game dumped because the cache had none (`[nvn] dump_missing`). Idempotent: blocks
@@ -586,5 +583,21 @@ mod tests {
             assert_eq!(vdf_values(vdf, "path"), ["/mnt/a b"]);
             assert_eq!(vdf_values(vdf, "require_tool_appid"), ["1628350"]);
         }
+    }
+
+    #[test]
+    fn ini_fps_maps_to_30_or_60_hz() {
+        let dir = std::env::temp_dir().join(format!("xc2-play-fps-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ini = dir.join(crate::settings::GAME_INI);
+        assert_eq!(fps_env_for_dir(&dir), ("60", "60"));
+        std::fs::write(&ini, "[xc2]\nfps = 0\n").unwrap();
+        assert_eq!(fps_env_for_dir(&dir), ("0", "30"));
+        std::fs::write(&ini, "[xc2]\nfps = 30\n").unwrap();
+        assert_eq!(fps_env_for_dir(&dir), ("0", "30"));
+        std::fs::write(&ini, "[xc2]\nfps = 120\n").unwrap();
+        assert_eq!(fps_env_for_dir(&dir), ("60", "60"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

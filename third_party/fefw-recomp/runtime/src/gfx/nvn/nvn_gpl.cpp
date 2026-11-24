@@ -202,13 +202,16 @@ VkPipeline create_part(VkGraphicsPipelineCreateInfo& gi, const char* what) {
     if (g_retain) gi.flags |= VK_PIPELINE_CREATE_RETAIN_LINK_TIME_OPTIMIZATION_INFO_BIT_EXT;
     VkPipeline p = VK_NULL_HANDLE;
     const auto t0 = Clock::now();
-    // shader preparation keeps nothing in the app cache file (it would grow to hundreds of MB); the driver's own cache holds the result
-    const VkResult r = create_graphics_pipeline_tracked(vkdev(), (g_discard.load(std::memory_order_relaxed) && !g_prepare_cache.load(std::memory_order_relaxed)) ? VK_NULL_HANDLE : pipeline_cache_handle(), &gi, &p);
+    const bool prepare_to_disk = g_discard.load(std::memory_order_relaxed) && g_prepare_cache.load(std::memory_order_relaxed);
+    const VkPipelineCache cache = g_discard.load(std::memory_order_relaxed)
+                                      ? (prepare_to_disk ? pipeline_cache_handle() : VK_NULL_HANDLE)
+                                      : pipeline_library_cache_handle();
+    const VkResult r = create_graphics_pipeline_tracked(vkdev(), cache, &gi, &p);
     if (r != VK_SUCCESS) {
         NXLOG_E(kTag, "pipeline part (%s) failed (%d)", what, static_cast<int>(r));
         return VK_NULL_HANDLE;
     }
-    note_pipeline_created(ms_since(t0), what);
+    note_pipeline_created(ms_since(t0), what, prepare_to_disk);
     return p;
 }
 
@@ -565,8 +568,8 @@ void upgrade_main() {
                 if (device().features().attachment_feedback_loop_layout)
                     gi.flags |= VK_PIPELINE_CREATE_COLOR_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT;
                 gi.layout = j.layout->layout;
-                if (create_graphics_pipeline_tracked(vkdev(), pipeline_cache_handle(), &gi, &p) != VK_SUCCESS) p = VK_NULL_HANDLE;
-                else note_pipeline_created(ms_since(t0), "optimised link");
+                if (create_graphics_pipeline_tracked(vkdev(), pipeline_library_cache_handle(), &gi, &p) != VK_SUCCESS) p = VK_NULL_HANDLE;
+                else note_pipeline_created(ms_since(t0), "optimised link", false);
             } else {
                 p = build_graphics_pipeline(j.key, *j.layout);
             }
@@ -804,7 +807,7 @@ VkPipeline gpl_link(const GraphicsKey& key, const ProgLayout& layout, std::share
         if (device().features().attachment_feedback_loop_layout)
             gi.flags |= VK_PIPELINE_CREATE_COLOR_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT;
         gi.layout = layout.layout;
-        const VkResult res = create_graphics_pipeline_tracked(vkdev(), pipeline_cache_handle(), &gi, &pipe);
+        const VkResult res = create_graphics_pipeline_tracked(vkdev(), pipeline_library_cache_handle(), &gi, &pipe);
         if (res != VK_SUCCESS) {
             pipe = VK_NULL_HANDLE;
             ok = false;
@@ -824,7 +827,7 @@ VkPipeline gpl_link(const GraphicsKey& key, const ProgLayout& layout, std::share
     g_fail_streak = 0;
     ++g_stats.linked;
     g_stats.link_ms += ms;
-    note_pipeline_created(ms, "linked pipeline");
+    note_pipeline_created(ms, "linked pipeline", false);
     if (up && g_up_mode != UpMode::Off && !g_stop) {
         UpJob j;
         j.key = key;

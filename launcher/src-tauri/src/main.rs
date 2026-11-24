@@ -83,8 +83,10 @@ fn is_repo(dir: &Path) -> bool {
 /// The checkout the launcher runs in: the configured one, else the first parent of the launcher's exe that is one.
 fn repo_of(cfg: &Config) -> Option<PathBuf> {
     if package_tools().is_some() {
-        // the release package: the install folder plays the checkout's part
-        return Some(if cfg.game_dir.trim().is_empty() { exe_dir() } else { PathBuf::from(cfg.game_dir.trim()) });
+        // the release package: the launcher's folder holds tools/, runtime/xc2_rt.lib and xc2/sites even when the
+        // player installs game data into a separate folder (cfg.game_dir); passing cfg.game_dir as --repo would
+        // send xc2_setup.py into checkout mode instead of package mode (#58).
+        return Some(exe_dir());
     }
     if !cfg.repo_dir.trim().is_empty() {
         let p = PathBuf::from(cfg.repo_dir.trim());
@@ -338,10 +340,9 @@ struct UpscalerFiles {
     fsr_framegen: FeatureFiles,
     dlss: FeatureFiles,
     dlss_framegen: FeatureFiles,
-    xess: FeatureFiles,
 }
 
-/// The folders the game searches (runtime/src/gfx/extras/ffx_files.cpp, temporal_dlss.cpp, temporal_xess.cpp): the setting's folder (a file in it counts), then
+/// The folders the game searches (temporal_ffx.cpp, temporal_dlss.cpp, framegen_ffx.cpp): the setting's folder (a file in it counts), then
 /// `upscalers/<sub>` next to the game, next to the launcher and in the run folder.
 fn upscaler_dirs(setting: &str, sub: &str, game: &Path, exe: &Path) -> Vec<PathBuf> {
     let mut v: Vec<PathBuf> = Vec::new();
@@ -380,7 +381,7 @@ fn files_in(dirs: &[PathBuf], sets: &[&[&str]], what: &str) -> FeatureFiles {
 }
 
 #[tauri::command]
-fn upscaler_files(app: AppHandle, fsr_dir: String, dlss_dir: String, xess_dir: Option<String>) -> Result<UpscalerFiles, String> {
+fn upscaler_files(app: AppHandle, fsr_dir: String, dlss_dir: String) -> Result<UpscalerFiles, String> {
     let cfg = load_config(&app);
     let repo = need_repo(&cfg)?;
     let game = game_dir_of(&cfg, &repo);
@@ -398,11 +399,6 @@ fn upscaler_files(app: AppHandle, fsr_dir: String, dlss_dir: String, xess_dir: O
     } else {
         sl.iter().find(|d| d.join("sl.interposer.dll").is_file()).cloned().map(|d| vec![d]).unwrap_or(sl.clone())
     };
-    // XeSS (runtime/src/gfx/extras/temporal_xess.cpp): libxess.dll in the setting's folder, upscalers/xess, else next to the game
-    let mut xess = upscaler_dirs(xess_dir.as_deref().unwrap_or(""), "xess", &game, &exe);
-    if let Some(d) = exe.parent() {
-        xess.push(d.to_path_buf());
-    }
     const DLSS: [&str; 4] = ["sl.interposer.dll", "sl.common.dll", "sl.dlss.dll", "nvngx_dlss.dll"];
     const DLSS_G: [&str; 9] =
         ["sl.interposer.dll", "sl.common.dll", "sl.dlss.dll", "nvngx_dlss.dll", "sl.dlss_g.dll", "sl.reflex.dll", "sl.pcl.dll", "nvngx_dlssg.dll", "NvLowLatencyVk.dll"];
@@ -411,7 +407,6 @@ fn upscaler_files(app: AppHandle, fsr_dir: String, dlss_dir: String, xess_dir: O
         fsr_framegen: files_in(&fsr, &[&["amd_fidelityfx_vk.dll"]], "amd_fidelityfx_vk.dll (FidelityFX SDK v1.1.4)"),
         dlss: files_in(&sl_pick, &[&DLSS], "the Streamline files"),
         dlss_framegen: files_in(&sl_pick, &[&DLSS_G], "the Streamline frame generation files"),
-        xess: files_in(&xess, &[&["libxess.dll"]], "libxess.dll"),
     })
 }
 
@@ -649,8 +644,8 @@ fn start_report(app: AppHandle) -> Result<String, String> {
     let cfg = load_config(&app);
     let repo = need_repo(&cfg)?;
     let dir = game_dir_of(&cfg, &repo);
-    let (py, script) = if package_tools().is_some() {
-        (dir.join("tools").join("python").join("python.exe"), dir.join("tools").join("report.py"))
+    let (py, script) = if let Some(tools) = package_tools() {
+        (tools.join("python").join("python.exe"), tools.join("report.py"))
     } else {
         let py = std::env::var_os("XC2_PYTHON").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("python"));
         (py, repo.join("tools").join("report.py"))
@@ -755,6 +750,29 @@ fn game_run_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(exe.parent().map(|d| d.to_path_buf()).unwrap_or(game))
 }
 
+#[derive(Serialize)]
+struct UpscalerDownloadInfo {
+    #[serde(flatten)]
+    manifest: streamline::DownloadManifest,
+    dest: String,
+}
+
+#[tauri::command]
+fn upscaler_download_manifest(app: AppHandle, kind: String) -> Result<UpscalerDownloadInfo, String> {
+    let game_dir = game_run_dir(&app)?;
+    match kind.as_str() {
+        "dlss" => Ok(UpscalerDownloadInfo {
+            manifest: streamline::manifest(),
+            dest: dump::fwd(&streamline::dest(&game_dir)),
+        }),
+        "fsr" => Ok(UpscalerDownloadInfo {
+            manifest: fsr::manifest(),
+            dest: dump::fwd(&fsr::dest(&game_dir)),
+        }),
+        _ => Err(format!("unknown upscaler download kind: {kind}")),
+    }
+}
+
 #[tauri::command]
 fn dlss_download_status(state: State<Arc<streamline::Shared>>) -> streamline::Status {
     let mut s = state.status.lock().unwrap().clone();
@@ -766,7 +784,10 @@ fn dlss_download_status(state: State<Arc<streamline::Shared>>) -> streamline::St
 
 /// Downloads NVIDIA's Streamline SDK release and installs the DLSS files (streamline.rs); progress through dlss_download_status.
 #[tauri::command]
-fn start_dlss_download(app: AppHandle, state: State<Arc<streamline::Shared>>, play_state: State<play::PlayState>) -> Result<(), String> {
+fn start_dlss_download(app: AppHandle, state: State<Arc<streamline::Shared>>, play_state: State<play::PlayState>, confirmed: bool) -> Result<(), String> {
+    if !confirmed {
+        return Err("Download requires explicit user confirmation.".into());
+    }
     if play_state.0.lock().unwrap().state == "running" {
         return Err("The game is running. Close it first: it keeps the DLSS files open.".into());
     }
@@ -807,7 +828,10 @@ fn fsr_download_status(state: State<'_, Arc<fsr::Shared>>) -> streamline::Status
 
 /// Downloads AMD's signed FidelityFX SDK DLLs (v2.4.0 + v1.1.4) directly from GPUOpen's official GitHub tags.
 #[tauri::command]
-fn start_fsr_download(app: AppHandle, state: State<'_, Arc<fsr::Shared>>, play_state: State<play::PlayState>) -> Result<(), String> {
+fn start_fsr_download(app: AppHandle, state: State<'_, Arc<fsr::Shared>>, play_state: State<play::PlayState>, confirmed: bool) -> Result<(), String> {
+    if !confirmed {
+        return Err("Download requires explicit user confirmation.".into());
+    }
     if play_state.0.lock().unwrap().state == "running" {
         return Err("The game is running. Close it first: it keeps the FSR files open.".into());
     }
@@ -904,6 +928,7 @@ fn main() {
             update_status,
             start_update,
             cancel_update,
+            upscaler_download_manifest,
             dlss_download_status,
             start_dlss_download,
             cancel_dlss_download,

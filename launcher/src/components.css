@@ -227,3 +227,47 @@ progress::-webkit-progress-value { background: var(--color-accent); }
 .mod-cheat-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: 4px 0; }
 .mod-conflicts { margin: 0; padding-left: var(--space-4); display: flex; flex-direction: column; gap: 4px; font-size: var(--font-size-sm); color: var(--color-text-dim); }
 .mod-conflicts code { font-family: var(--font-mono); font-size: var(--font-size-xs); }
+
+/* confirmation modal for third-party DLL downloads */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-5);
+  background: rgba(12, 43, 64, 0.55);
+}
+.modal-card {
+  width: 100%;
+  max-width: 680px;
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  box-shadow: var(--shadow-pop);
+  overflow: hidden;
+}
+.modal-head { display: flex; align-items: center; gap: var(--space-2); }
+.modal-head [data-lucide], .modal-head svg { color: var(--color-accent); width: 22px; height: 22px; }
+.modal-body { overflow-y: auto; display: flex; flex-direction: column; gap: var(--space-3); min-height: 0; padding-right: var(--space-1); }
+.modal-note { font-size: var(--font-size-sm); color: var(--color-text); line-height: var(--line-height); }
+.modal-files { display: flex; flex-direction: column; gap: var(--space-2); }
+.modal-file {
+  background: var(--color-surface-sunken);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.modal-file-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-2); font-size: var(--font-size-sm); font-weight: var(--font-weight-medium); }
+.modal-kv { font-size: var(--font-size-xs); color: var(--color-text-dim); word-break: break-all; user-select: text; }
+.modal-kv code { font-size: var(--font-size-xs); color: var(--color-text); user-select: text; }
+.modal-foot { display: flex; justify-content: flex-end; gap: var(--space-2); padding-top: var(--space-3); border-top: 1px solid var(--color-border); }

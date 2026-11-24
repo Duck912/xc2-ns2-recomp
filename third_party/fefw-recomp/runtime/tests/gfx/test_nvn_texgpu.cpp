@@ -25,6 +25,7 @@
 #include "nvn_format.h"
 #include "nvn_gpu.h"
 #include "nvn_gpu_internal.h"
+#include "nvn_framegen.h"
 #include "nvn_texdata.h"
 #include "nvn_texprep.h"
 #include "nvn_texture_layout.h"
@@ -1406,4 +1407,14 @@ NXTEST(scale_viewport_info_for_overlay) {
     auto vcon = nxrt::nvn::scale_viewport_info(gvi, 1.0f, 1.0f, 0);
     CHECK_EQ(vcon.render_w, 1280u);
     CHECK_EQ(vcon.base_w, 3840u);
+}
+
+// Regression guard for #53: HUD-less copy format must track present's UNORM (SDR) vs sRGB (HDR) view selection.
+NXTEST(hudless_copy_format_matches_hdr_and_sdr) {
+    CHECK_EQ(gpu::hudless_copy_format(VK_FORMAT_R8G8B8A8_UNORM, false), VK_FORMAT_R8G8B8A8_UNORM);
+    CHECK_EQ(gpu::hudless_copy_format(VK_FORMAT_R8G8B8A8_SRGB, false), VK_FORMAT_R8G8B8A8_UNORM);
+    CHECK_EQ(gpu::hudless_copy_format(VK_FORMAT_B8G8R8A8_SRGB, false), VK_FORMAT_B8G8R8A8_UNORM);
+    CHECK_EQ(gpu::hudless_copy_format(VK_FORMAT_R8G8B8A8_UNORM, true), VK_FORMAT_R8G8B8A8_SRGB);
+    CHECK_EQ(gpu::hudless_copy_format(VK_FORMAT_B8G8R8A8_UNORM, true), VK_FORMAT_B8G8R8A8_SRGB);
+    CHECK_EQ(gpu::hudless_copy_format(VK_FORMAT_R16G16B16A16_SFLOAT, true), VK_FORMAT_R16G16B16A16_SFLOAT);
 }

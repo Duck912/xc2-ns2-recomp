@@ -119,7 +119,9 @@ const VkPipelineDynamicStateCreateInfo* pipeline_dynamic_state();
 // The pNext of every translated shader stage: robust uniform buffer access ([nvn] robust_ubo), or null when off or not supported.
 const void* ubo_robustness();
 VkPipelineCache pipeline_cache_handle();
-void note_pipeline_created(double ms, const char* what);   // counters and the dirty flag of the cache file
+VkPipelineCache pipeline_library_cache_handle();
+void note_pipeline_created(double ms, const char* what, bool persisted = true);   // counters and the dirty flag of the cache file
+bool should_save_pipeline_cache(const std::string& mode, uint32_t vendor_id);
 
 // Pipeline cache on disk ([nvn] pipeline_cache): written by a background thread while new pipelines appear and at shutdown.
 bool pipeline_cache_dirty();
@@ -248,20 +250,7 @@ inline std::atomic<int>& compiles_in_flight() {
 void configure_guest_subgroup(VkPipelineShaderStageCreateInfo& stage,
                               VkPipelineShaderStageRequiredSubgroupSizeCreateInfo& size);
 
-inline VkResult create_graphics_pipeline_tracked(VkDevice dev, VkPipelineCache cache, const VkGraphicsPipelineCreateInfo* gi, VkPipeline* out) {
-    compiles_in_flight().fetch_add(1, std::memory_order_relaxed);
-    const uint64_t t0 = nxrt::hitch_ticks();
-    // Centralised here so whole pipelines, GPL parts and prewarm workers agree.
-    auto info = *gi;
-    std::vector<VkPipelineShaderStageCreateInfo> stages;
-    std::vector<VkPipelineShaderStageRequiredSubgroupSizeCreateInfo> sizes(gi->stageCount);
-    if (gi->stageCount) stages.assign(gi->pStages, gi->pStages + gi->stageCount);
-    for (size_t i = 0; i < stages.size(); ++i) configure_guest_subgroup(stages[i], sizes[i]);
-    info.pStages = stages.data();
-    const VkResult r = vkCreateGraphicsPipelines(dev, cache, 1, &info, nullptr, out);
-    if (nxrt::hitch_on_render_thread()) nxrt::hitch_phase_add(nxrt::kHpRenderPipeline, nxrt::hitch_ticks() - t0);
-    compiles_in_flight().fetch_sub(1, std::memory_order_relaxed);
-    return r;
-}
+VkResult create_graphics_pipeline_tracked(VkDevice dev, VkPipelineCache cache, const VkGraphicsPipelineCreateInfo* gi, VkPipeline* out);
+VkResult create_compute_pipeline_tracked(VkDevice dev, VkPipelineCache cache, const VkComputePipelineCreateInfo* ci, VkPipeline* out);
 
 }  // namespace nxrt::nvn::be::gpu
