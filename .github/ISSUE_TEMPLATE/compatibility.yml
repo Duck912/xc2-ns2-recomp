@@ -5,11 +5,12 @@ body:
   - type: markdown
     attributes:
       value: |
-        **If you are on an older build, update first.** Releases before 0.2.0 have problems that are already fixed
-        (720p internal render, the add-on `0/romfs` layout, the film hand-back, F1 not opening the settings page).
-        Latest: <https://github.com/weile10000/xc2-ns2-recomp/releases/latest>
+        **If you are on an older build, update first.** Releases before **0.2.4** have known issues already fixed
+        (flicker, cutscene freezes, 4K dynres blur, `FORCE_UNORM` black bands, Intel pipeline cache crash).
+        Use **About → Check now** in `xc2-launcher.exe` or download the latest release:
+        <https://github.com/weile10000/xc2-ns2-recomp/releases/latest>
 
-        **报 issue 前请先确认版本是 0.2.0 或更新**，旧版本的问题有几条已经修掉了。
+        **报 issue 前请先确认版本是 0.2.4 或更新**，此前版本的大量渲染与过场问题已经修复（可在启动器「关于 → 检查更新」一键升级）。
   - type: input
     id: area
     attributes:
@@ -21,18 +22,19 @@ body:
     id: build
     attributes:
       label: Build
+      placeholder: 0.2.4
     validations:
       required: true
   - type: dropdown
     id: os
     attributes:
       label: Operating System
-      description: Initial releases only officially support native Windows 11 x64. Future platform support is not ruled out, and forks adapting Windows 10 / Linux / Wine are welcome.
+      description: Native Windows 11 x64 is the primary target covered by release testing. Windows 10 x64 and Linux / SteamOS (Proton / Wine) receive best-effort compatibility without guaranteed full regression support — community PRs and forks are welcome.
       options:
-        - "Windows 11 x64"
-        - "Windows 10 x64 (unsupported in initial phase)"
-        - "Linux / SteamOS / Wine / Proton (unsupported in initial phase)"
-        - "Other (unsupported)"
+        - "Windows 11 x64 (primary target)"
+        - "Windows 10 x64 (best-effort compatibility)"
+        - "Linux / SteamOS / Proton / Wine (best-effort compatibility)"
+        - "Other (community / fork)"
     validations:
       required: true
   - type: input

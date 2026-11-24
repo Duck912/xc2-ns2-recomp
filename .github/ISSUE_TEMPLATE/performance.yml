@@ -5,12 +5,12 @@ body:
   - type: markdown
     attributes:
       value: |
-        **If you are on an older build, update first.** Releases before 0.2.0 have problems that are already fixed
-        (720p internal render, the add-on `0/romfs` layout, the film hand-back, F1 not opening the settings page); a
-        report from one of them costs a round trip. Latest: <https://github.com/weile10000/xc2-ns2-recomp/releases/latest>
+        **If you are on an older build, update first.** Releases before **0.2.4** have known issues already fixed
+        (including `v0.2.3` dynamic-resolution / render-scale regressions and cutscene sync hitches).
+        Use **About → Check now** in `xc2-launcher.exe` or grab the latest build:
+        <https://github.com/weile10000/xc2-ns2-recomp/releases/latest>
 
-        **请先确认版本是 0.2.0 或更新。** 0.2.0 之前有已修掉的问题（内部 720p 渲染、附加内容 `0/romfs` 布局、影片交还、
-        F1 打不开设置页），旧版本的报告会白跑一轮。最新版本见上面的链接。
+        **请先确认版本是 0.2.4 或更新。** `0.2.4` 已修复动态分辨率与渲染缩放回归及过场卡顿等问题，建议先通过启动器 **关于 → 检查更新** 升级再测。
 
         Three things and you are done - the log below carries the rest.
 
@@ -20,12 +20,12 @@ body:
     id: os
     attributes:
       label: Operating System
-      description: Initial releases only officially support native Windows 11 x64. Future platform support is not ruled out, and forks adapting Windows 10 / Linux / Wine are welcome.
+      description: Native Windows 11 x64 is the primary target covered by release testing. Windows 10 x64 and Linux / SteamOS (Proton / Wine) receive best-effort compatibility without guaranteed full regression support — community PRs and forks are welcome.
       options:
-        - "Windows 11 x64"
-        - "Windows 10 x64 (unsupported in initial phase)"
-        - "Linux / SteamOS / Wine / Proton (unsupported in initial phase)"
-        - "Other (unsupported)"
+        - "Windows 11 x64 (primary target)"
+        - "Windows 10 x64 (best-effort compatibility)"
+        - "Linux / SteamOS / Proton / Wine (best-effort compatibility)"
+        - "Other (community / fork)"
     validations:
       required: true
   - type: input
@@ -49,7 +49,7 @@ body:
 
         Play until it goes slow, keep going for a few seconds of the slow part, then close the game. It writes
         `work\reports\report-<stamp>.zip` - attach that file. Nothing in it is game data.
-      placeholder: report-20261121-120000.zip
+      placeholder: report-20261124-120000.zip
     validations:
       required: true
   - type: dropdown
@@ -68,7 +68,7 @@ body:
     attributes:
       label: Build (optional)
       description: The report zip already says it; fill this in if you know it.
-      placeholder: 0.1.4
+      placeholder: 0.2.4
   - type: textarea
     id: notes
     attributes:

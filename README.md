@@ -92,7 +92,7 @@ The underlying Switch/NVN layer lives in `third_party/fefw-recomp/`, while every
 
 ## Build from Source
 
-Requirements: **Native Windows 11 x64** *(initial target; future support for other platforms is not ruled out and community forks are welcome)*, **Vulkan 1.3 GPU**, **16 GB+ RAM**, **~60 GB free disk** (for source checkout + lifted C++ + objects), and the dev toolchain (VS Build Tools, LLVM/`clang-cl`, CMake + Ninja, .NET 10 SDK, Vulkan SDK, Python 3.12+, PowerShell 7). Full steps: [docs/BUILD.md](docs/BUILD.md) & [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md).
+Requirements: **Native Windows 11 x64** *(primary target covered by release testing; Windows 10 x64 and Linux / SteamOS / Proton / Wine receive best-effort compatibility without guaranteed full regression support — community PRs and forks are welcome)*, **Vulkan 1.3 GPU**, **16 GB+ RAM**, **~60 GB free disk** (for source checkout + lifted C++ + objects), and the dev toolchain (VS Build Tools, LLVM/`clang-cl`, CMake + Ninja, .NET 10 SDK, Vulkan SDK, Python 3.12+, PowerShell 7). Full steps: [docs/BUILD.md](docs/BUILD.md) & [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md).
 
 ```powershell
 # Place your 3.0.1 ExeFS modules in xc2\game\xc2ns301\
@@ -240,7 +240,7 @@ ExeFS (NSO) ──nxrecomp 举升──▶ C++ ──Zig / clang-cl──▶ 模
 
 ## 从源码构建
 
-环境要求：**Windows 10/11 x64**、**支持 Vulkan 1.3 的显卡**、**16 GB+ 内存**、**约 60 GB 可用磁盘空间**，以及全套构建工具链（VS Build Tools、LLVM/`clang-cl`、CMake + Ninja、.NET 10 SDK、Vulkan SDK、Python 3.12+、PowerShell 7）。完整步骤请查阅 [docs/BUILD.md](docs/BUILD.md) 与 [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md)。
+环境要求：**原生 Windows 11 x64**（主要测试与官方支持目标；Windows 10 x64 与 Linux / SteamOS (Proton / Wine) 仅提供尽力适配，暂不保证完整回归测试，欢迎社区 PR 或 Fork）、**支持 Vulkan 1.3 的显卡**、**16 GB+ 内存**、**约 60 GB 可用磁盘空间**，以及全套构建工具链（VS Build Tools、LLVM/`clang-cl`、CMake + Ninja、.NET 10 SDK、Vulkan SDK、Python 3.12+、PowerShell 7）。完整步骤请查阅 [docs/BUILD.md](docs/BUILD.md) 与 [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md)。
 
 ```powershell
 # 先将 3.0.1 的 ExeFS 模块放入 xc2\game\xc2ns301\
