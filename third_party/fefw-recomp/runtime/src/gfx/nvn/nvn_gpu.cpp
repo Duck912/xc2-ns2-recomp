@@ -808,11 +808,14 @@ uint64_t submit_on_render_thread(const std::function<void(Frame&)>& record, uint
     {
         nxrt::HitchTimer ht(nxrt::kHpRenderSubmit);
         const uint64_t tl = nxrt::hitch_ticks();
-        std::lock_guard<std::mutex> lk(g->dev->queue_mutex());
+        std::unique_lock<std::mutex> lk(g->dev->queue_mutex());
         nxrt::hitch_phase_add(nxrt::kHpRenderLockWait, nxrt::hitch_ticks() - tl);
         r = g->dev->device_lost() ? VK_ERROR_DEVICE_LOST : vkQueueSubmit2(g->dev->queue(), 1, &si, VK_NULL_HANDLE);
         if (r == VK_SUCCESS) vkQueueWaitIdle(g->dev->queue());   // nothing else tells when it is done
-        else g->dev->note_device_lost(r, "nvn sync submit(vkQueueSubmit2)");
+        else {
+            lk.unlock();
+            g->dev->note_device_lost(r, "nvn sync submit(vkQueueSubmit2)");
+        }
     }
     g->recording = 0;
     s.serial = 0;

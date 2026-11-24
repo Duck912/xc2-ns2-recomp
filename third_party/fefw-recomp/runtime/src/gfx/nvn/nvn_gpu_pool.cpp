@@ -1026,6 +1026,8 @@ void mirror_capture_update(VkCommandBuffer cb, uint64_t gpu_address, const void*
     vkCmdUpdateBuffer(cb, m.chunks[0].buffer, poff, size, data);
 }
 
+uint64_t mirror_capture_no_chunk_escapes() { return static_cast<uint64_t>(g_cap_esc[kEscNoChunk]); }
+
 // ---- the capture itself ------------------------------------------------------------------------------------------------------------
 // [nvn] mirror_capture_at = submit (default) | replay. submit: the game's submit call (its own thread, in queue order, before it can
 // write the next frame) polls the write tracking and copies the written pages into host-visible arenas the submission owns; the replay

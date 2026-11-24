@@ -707,11 +707,27 @@ bool Renderer::begin_frame(FrameInfo* out) {
     if (s.headless) {
         idx = static_cast<uint32_t>(s.frame_number % s.targets.size());
     } else {
+        const auto t0 = std::chrono::steady_clock::now();
+        uint64_t timeouts = 0;
         VkResult r = VK_TIMEOUT;
         for (;;) {
             if (s.dev->device_lost()) { s.st.skipped++; return false; }
             r = vkAcquireNextImageKHR(s.vk(), s.swapchain, 2000000000ull, slot.acquire, VK_NULL_HANDLE, &idx);
             if (r != VK_TIMEOUT) break;
+            ++timeouts;
+        }
+        const double acq_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        if (timeouts > 0 || acq_ms >= 100.0) {
+            static auto last_warn = std::chrono::steady_clock::time_point{};
+            const auto now = std::chrono::steady_clock::now();
+            if (now - last_warn >= std::chrono::seconds(2)) {
+                last_warn = now;
+                NXLOG_W(kTag,
+                        "slow vkAcquireNextImageKHR: %.1f ms (timeouts %llu, rc %d, present_mode %s, frames_in_flight %u, low_latency %d)",
+                        acq_ms, static_cast<unsigned long long>(timeouts), static_cast<int>(r),
+                        present_mode_name(s.active), static_cast<unsigned>(s.desc.frames_in_flight),
+                        (s.latency && s.latency->enabled()) ? 1 : 0);
+            }
         }
         if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_ERROR_SURFACE_LOST_KHR) {
             s.dirty = true;
@@ -798,6 +814,7 @@ void Renderer::end_frame(SubmitPrefix* prefix) {
         vkCmdWriteTimestamp2(slot.cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, slot.queries, 1);
         slot.ts_pending = true;
     }
+    s.dev->cmd_checkpoint(slot.cmd, "present_end");
     vkEndCommandBuffer(slot.cmd);
 
     VkSemaphoreSubmitInfo waits[2] = {};
@@ -842,7 +859,18 @@ void Renderer::end_frame(SubmitPrefix* prefix) {
     uint64_t present_id = 0;
     uint64_t probe_value = 0;
     if (!s.headless && s.latency) {
+        const auto pt0 = std::chrono::steady_clock::now();
         const uint64_t id = s.latency->present_begin();
+        const double pms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - pt0).count();
+        if (pms >= 100.0) {
+            static auto last_pwarn = std::chrono::steady_clock::time_point{};
+            const auto now = std::chrono::steady_clock::now();
+            if (now - last_pwarn >= std::chrono::seconds(2)) {
+                last_pwarn = now;
+                NXLOG_W(kTag, "slow present_begin (low_latency): %.1f ms (present_id %llu)",
+                        pms, static_cast<unsigned long long>(id));
+            }
+        }
         if (s.latency->enabled() && s.latency->backend() == extras::LowLatency::Backend::Reflex) present_id = id;
         s.probe_init();
         if (s.probe_sem) {

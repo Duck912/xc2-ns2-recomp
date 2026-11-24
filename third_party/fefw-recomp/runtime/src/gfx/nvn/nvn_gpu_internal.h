@@ -172,6 +172,7 @@ void mirror_capture_begin(Frame& f);
 std::shared_ptr<void> mirror_capture_take();          // game thread, in the submit call (null: no submit-time capture)
 void mirror_capture_set(std::shared_ptr<void> cap);   // render thread: the capture of the submission about to start
 void mirror_capture_end(VkCommandBuffer cb);
+uint64_t mirror_capture_no_chunk_escapes();           // render thread: cumulative kEscNoChunk escape counter
 void vram_log_periodic();                             // thread-safe: periodic VRAM + pool copy usage log line
 
 // ---- compute results held in the pool copy (nvn_gpu_pool.cpp, "compute out") ----------------------------------------------------

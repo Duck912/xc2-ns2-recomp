@@ -393,8 +393,19 @@ struct PaneState {
     float bottom_reserve = 0.0f;
     bool held = false;
     bool focus_first = false;
+    bool focus_last = false;
+    bool focus_header = false;
+    bool focus_footer = false;
     bool rows_focused = false;
+    bool header_focused = false;
+    bool footer_focused = false;
     ImGuiID rows_step_owner = 0;
+    ImGuiID first_card_id = 0;
+    ImGuiID last_card_id = 0;
+    ImGuiID prev_first_card_id = 0;
+    ImGuiID prev_last_card_id = 0;
+    ImGuiID header_focus_id = 0;
+    ImGuiID footer_focus_id = 0;
 };
 
 PaneState g_pane;
@@ -404,6 +415,26 @@ constexpr ImGuiKey kCardStepKeys[] = {
     ImGuiKey_GamepadDpadLeft, ImGuiKey_GamepadDpadRight,
     ImGuiKey_GamepadLStickLeft, ImGuiKey_GamepadLStickRight,
 };
+
+bool any_dir_pressed(bool up) {
+    return up ? (ImGui::IsKeyPressed(ImGuiKey_UpArrow, false) ||
+                 ImGui::IsKeyPressed(ImGuiKey_GamepadDpadUp, false) ||
+                 ImGui::IsKeyPressed(ImGuiKey_GamepadLStickUp, false))
+              : (ImGui::IsKeyPressed(ImGuiKey_DownArrow, false) ||
+                 ImGui::IsKeyPressed(ImGuiKey_GamepadDpadDown, false) ||
+                 ImGui::IsKeyPressed(ImGuiKey_GamepadLStickDown, false));
+}
+
+void focus_widget(ImGuiID id, ImGuiWindow* win) {
+    if (!id || !win) return;
+    ImGui::FocusWindow(win);
+    ImGui::SetFocusID(id, win);
+    if (ImGuiContext* ctx = ImGui::GetCurrentContext()) {
+        ctx->NavCursorVisible = true;
+        ctx->NavInitRequest = false;
+        ctx->NavInitResult.ID = 0;
+    }
+}
 
 void lock_rows_step_keys(ImGuiID owner_id) {
     if (owner_id == 0) return;
@@ -430,6 +461,10 @@ void pane_begin(const char* id, float bottom_reserve) {
     g_pane.focus.valid = false;
     g_pane.first.valid = false;
     g_pane.rows_focused = false;
+    g_pane.prev_first_card_id = g_pane.first_card_id;
+    g_pane.prev_last_card_id = g_pane.last_card_id;
+    g_pane.first_card_id = 0;
+    g_pane.last_card_id = 0;
     ImVec2 avail = ImGui::GetContentRegionAvail();
     avail.y = std::max(px(120.0f), avail.y - bottom_reserve);
     ImGui::PushID(id);
@@ -441,6 +476,14 @@ void pane_begin(const char* id, float bottom_reserve) {
 }
 
 void pane_end(const LiveStatus& live) {
+    if (g_pane.focus_last && g_pane.last_card_id) {
+        focus_widget(g_pane.last_card_id, ImGui::GetCurrentWindow());
+        ImGui::SetScrollHereY(1.0f);
+        g_pane.focus_last = false;
+        g_pane.rows_focused = true;
+    } else if (g_pane.focus_last) {
+        g_pane.focus_last = false;
+    }
     ImGui::PopStyleVar();
     ImGui::EndChild();
 
@@ -580,16 +623,14 @@ int draw_card_raw(const char* id, const char* label, const char* value, const ch
     bool foc = ImGui::IsItemFocused();
     ImGui::PopID();
 
+    if (!disabled) {
+        if (!g_pane.first_card_id) g_pane.first_card_id = item_id;
+        g_pane.last_card_id = item_id;
+    }
+
     if (g_pane.focus_first && !disabled) {
-        ImGuiWindow* win = ImGui::GetCurrentWindow();
-        ImGui::FocusWindow(win);
-        ImGui::SetFocusID(item_id, win);
+        focus_widget(item_id, ImGui::GetCurrentWindow());
         ImGui::SetScrollHereY(0.0f);
-        if (ImGuiContext* ctx = ImGui::GetCurrentContext()) {
-            ctx->NavCursorVisible = true;
-            ctx->NavInitRequest = false;
-            ctx->NavInitResult.ID = 0;
-        }
         g_pane.focus_first = false;
         foc = true;
     } else if (clicked && !disabled) {
@@ -616,6 +657,15 @@ int draw_card_raw(const char* id, const char* label, const char* value, const ch
                 ImGui::IsKeyPressed(ImGuiKey_GamepadLStickRight, ImGuiInputFlags_Repeat, owner_id))
                 step = 1;
             if (step == -1 || step == 1) ImGui::NavMoveRequestCancel();
+        }
+        if (step == 0 && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopup)) {
+            if (item_id == g_pane.prev_first_card_id && any_dir_pressed(true)) {
+                g_pane.focus_header = true;
+                ImGui::NavMoveRequestCancel();
+            } else if (item_id == g_pane.prev_last_card_id && any_dir_pressed(false)) {
+                g_pane.focus_footer = true;
+                ImGui::NavMoveRequestCancel();
+            }
         }
     }
 
@@ -1521,12 +1571,28 @@ void draw_settings_page(UiHost& host) {
     if (ImGui::Button(tr("应用并保存", "Apply & Save"), ImVec2(px(138.0f), px(34.0f))) ||
         (!host.capturing() && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopup) && ImGui::IsKeyPressed(ImGuiKey_GamepadR2, false)))
         apply_now(host, p);
+    const ImGuiID apply_id = ImGui::GetItemID();
+    const bool apply_foc = ImGui::IsItemFocused();
     if (was_dirty) ImGui::PopStyleColor(2);
 
     ImGui::SameLine();
     if (ImGui::Button(tr("放弃修改", "Revert"), ImVec2(px(108.0f), px(34.0f)))) revert_to_saved(host, p);
+    const bool revert_foc = ImGui::IsItemFocused();
     ImGui::SameLine();
     if (ImGui::Button(tr("恢复默认", "Defaults"), ImVec2(px(108.0f), px(34.0f)))) load_factory(host, p);
+    const bool defaults_foc = ImGui::IsItemFocused();
+    bool ftr_foc = apply_foc || revert_foc || defaults_foc;
+    if (g_pane.focus_footer && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopup)) {
+        focus_widget(apply_id, ImGui::GetCurrentWindow());
+        g_pane.focus_footer = false;
+        g_pane.rows_focused = false;
+        ftr_foc = true;
+    }
+    g_pane.footer_focused = ftr_foc;
+    if (ftr_foc && !host.capturing() && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopup) && any_dir_pressed(true)) {
+        g_pane.focus_last = true;
+        ImGui::NavMoveRequestCancel();
+    }
 
     ImGui::SameLine(0.0f, px(16.0f));
     if (host.capturing()) {
@@ -1556,7 +1622,14 @@ void draw_settings_menu(UiHost& host, gfx::Overlay& ov) {
     last_frame = frame;
     if (opened) {
         g_pane.rows_focused = false;
-    } else if (g_pane.rows_focused) {
+        g_pane.focus_header = false;
+        g_pane.focus_footer = false;
+        g_pane.header_focused = false;
+        g_pane.footer_focused = false;
+        g_pane.prev_first_card_id = 0;
+        g_pane.prev_last_card_id = 0;
+    } else if (g_pane.rows_focused && !g_pane.focus_header && !g_pane.header_focused && !g_pane.footer_focused &&
+               !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopup)) {
         // Keep Left/Right/Stick-X adjusting left-pane option cards instead of triggering horizontal ImGui nav moves.
         lock_rows_step_keys(g_pane.rows_step_owner);
         if (ImGuiContext* ctx = ImGui::GetCurrentContext()) {
@@ -1595,6 +1668,8 @@ void draw_settings_menu(UiHost& host, gfx::Overlay& ov) {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.46f, 0.14f, 0.16f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.62f, 0.20f, 0.22f, 1.0f));
         if (ImGui::Button(tr("退出游戏", "Quit game"), ImVec2(quit_w, 0.0f))) ImGui::OpenPopup("##quit_confirm");
+        const ImGuiID quit_id = ImGui::GetItemID();
+        const bool quit_foc = ImGui::IsItemFocused();
         ImGui::PopStyleColor(2);
         if (ImGui::BeginPopupModal("##quit_confirm", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar)) {
             ImGui::TextUnformatted(tr("退出游戏？上次存档之后的进度将会丢失。", "Quit the game? Progress since your last save is lost."));
@@ -1623,8 +1698,22 @@ void draw_settings_menu(UiHost& host, gfx::Overlay& ov) {
             f.menu_lang = g_zh ? "zh" : "en";
             set_fps_live(host, f);
         }
+        const bool lang_foc = ImGui::IsItemFocused();
         ImGui::SameLine();
         if (ImGui::Button(tr("关闭 (F1)", "Close (F1)"), ImVec2(close_w, 0.0f))) ov.request_hide();
+        const bool close_foc = ImGui::IsItemFocused();
+        bool hdr_foc = quit_foc || lang_foc || close_foc;
+        if (g_pane.focus_header && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopup)) {
+            focus_widget(quit_id, ImGui::GetCurrentWindow());
+            g_pane.focus_header = false;
+            g_pane.rows_focused = false;
+            hdr_foc = true;
+        }
+        g_pane.header_focused = hdr_foc;
+        if (hdr_foc && !host.capturing() && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopup) && any_dir_pressed(false)) {
+            g_pane.focus_first = true;
+            ImGui::NavMoveRequestCancel();
+        }
 
         ImGui::Dummy(ImVec2(0.0f, px(4.0f)));
         draw_settings_page(host);
