@@ -1549,9 +1549,9 @@ VkDescriptorSet pool_set(TexturePool* tp, SamplerPool* sp, Frame& f) {
         const PoolCopy& c = pp->copies[static_cast<size_t>(pp->cur)];
         if (c.written && c.tex_version == tv && c.smp_version == sv && !pending_ready(c, tp)) return bind(pp->cur);
     }
-    // a set no submission in flight reads: the current one when only this submission has bound it, else the most up to date idle one
+    // a set no submission in flight (nor this open recording) reads: prefer the current idle copy if valid, else any idle copy
     const uint64_t done = poll_completed();
-    auto idle = [&](const PoolCopy& c) { return (c.used == f.serial ? c.used_before : c.used) <= done; };
+    auto idle = [&](const PoolCopy& c) { return c.used != f.serial && c.used <= done; };
     int pick = pp->cur >= 0 && idle(pp->copies[static_cast<size_t>(pp->cur)]) ? pp->cur : -1;
     for (size_t i = 0; pick < 0 && i < pp->copies.size(); ++i)
         if (idle(pp->copies[i]) && pp->copies[i].written) pick = static_cast<int>(i);
@@ -1569,16 +1569,29 @@ VkDescriptorSet pool_set(TexturePool* tp, SamplerPool* sp, Frame& f) {
         }
     }
     if (pick < 0) {
-        // every set is being read by submissions in flight: wait for the one bound longest ago
-        size_t oldest = 0;
-        for (size_t i = 1; i < pp->copies.size(); ++i)
-            if (pp->copies[i].used < pp->copies[oldest].used) oldest = i;
-        static int logged = 0;
-        if (logged++ < 10) NXLOG_W(kTag, "pool arrays: all %zu sets of a pool pair are in flight; waiting for submission %llu", pp->copies.size(),
-                                   static_cast<unsigned long long>(pp->copies[oldest].used));
-        submit_recorded();
-        while (poll_completed() < pp->copies[oldest].used) std::this_thread::yield();
-        pick = static_cast<int>(oldest);
+        // every copy is in flight or bound in this recording: wait for the oldest prior submission (never wait on f.serial itself, which is still recording!)
+        size_t oldest = pp->copies.size();
+        for (size_t i = 0; i < pp->copies.size(); ++i) {
+            if (pp->copies[i].used == f.serial) continue;
+            if (oldest == pp->copies.size() || pp->copies[i].used < pp->copies[oldest].used) oldest = i;
+        }
+        if (oldest < pp->copies.size()) {
+            static int logged = 0;
+            if (logged++ < 10) NXLOG_W(kTag, "pool arrays: all %zu sets of a pool pair are in flight; waiting for submission %llu", pp->copies.size(),
+                                       static_cast<unsigned long long>(pp->copies[oldest].used));
+            submit_recorded();
+            while (!device().device_lost() && poll_completed() < pp->copies[oldest].used) std::this_thread::yield();
+            if (device().device_lost())
+                return pp->cur >= 0 ? pp->copies[static_cast<size_t>(pp->cur)].set : pp->copies[oldest].set;
+            pick = static_cast<int>(oldest);
+        } else {
+            // Every copy was bound earlier inside this unsubmitted recording; waiting on f.serial would deadlock.
+            static int logged_same = 0;
+            if (logged_same++ < 10)
+                NXLOG_W(kTag, "pool arrays: all %zu sets bound in open submission %llu; updating update-after-bind copy",
+                        pp->copies.size(), static_cast<unsigned long long>(f.serial));
+            pick = (pp->cur == 0 && pp->copies.size() > 1) ? 1 : 0;
+        }
     }
     update_copy(pp->copies[static_cast<size_t>(pick)], tp, sp);
     return bind(pick);

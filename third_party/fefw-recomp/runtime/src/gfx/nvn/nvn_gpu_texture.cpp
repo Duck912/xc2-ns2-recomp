@@ -1638,8 +1638,11 @@ bool tex_rescale(Texture* t, Frame& f, float to, const char* why) {
             r.dstOffsets[1] = {static_cast<int32_t>(b.width), static_cast<int32_t>(b.height), 1};
             regions.push_back(r);
         }
+        const VkFilter filter = (!g->depth && (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT))
+                                    ? VK_FILTER_LINEAR
+                                    : VK_FILTER_NEAREST;
         vkCmdBlitImage(f.cb, g->img.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, ni.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, static_cast<uint32_t>(regions.size()),
-                       regions.data(), g->depth ? VK_FILTER_NEAREST : VK_FILTER_LINEAR);
+                       regions.data(), filter);
         nl = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     }
     gfx::Image old = g->img;

@@ -144,6 +144,7 @@ struct DeviceFeatures {
     bool low_latency2 = false;            // VK_NV_low_latency2 (NVIDIA Reflex)
     bool anti_lag = false;                // VK_AMD_anti_lag (AMD Anti-Lag 2)
     bool memory_budget = false;           // VK_EXT_memory_budget
+    bool device_fault = false;            // VK_EXT_device_fault
 };
 
 struct DeviceLimitsExt {
@@ -204,6 +205,11 @@ public:
     // Runs fn on a command buffer of a transient pool, submits it and waits for it (uploads, tests).
     bool submit_once(const std::function<void(VkCommandBuffer)>& fn);
     void wait_idle();
+
+    // Sticky device-lost state shared across NVN and Renderer. The first VK_ERROR_DEVICE_LOST logs fault info (if VK_EXT_device_fault is enabled).
+    bool device_lost() const;
+    bool note_device_lost(VkResult r, const char* where);
+    std::string query_device_fault() const;
 
     void set_name(VkObjectType type, uint64_t handle, const char* name);     // VK_EXT_debug_utils, no-op without it
 

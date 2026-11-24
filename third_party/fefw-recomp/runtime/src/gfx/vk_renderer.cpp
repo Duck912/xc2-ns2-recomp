@@ -665,6 +665,10 @@ Renderer::~Renderer() {
 bool Renderer::begin_frame(FrameInfo* out) {
     Impl& s = *impl_;
     if (s.in_frame) end_frame();   // a forgotten end_frame must not wedge the slot
+    if (s.dev->device_lost()) {
+        s.st.skipped++;
+        return false;
+    }
     int pw = static_cast<int>(s.headless_w), ph = static_cast<int>(s.headless_h);
     if (!s.headless) platform::pixel_size(&pw, &ph);
     if (!s.headless && (pw == 0 || ph == 0)) {
@@ -688,14 +692,27 @@ bool Renderer::begin_frame(FrameInfo* out) {
     if (s.kind != extras::OutputKind::Sdr8 && extras::hdr_state().metadata_serial != s.md_serial) s.apply_hdr_metadata();   // the game declared new levels
 
     Impl::Slot& slot = s.slots[s.cur_slot];
-    vkWaitForFences(s.vk(), 1, &slot.fence, VK_TRUE, UINT64_MAX);
+    for (;;) {
+        if (s.dev->device_lost()) { s.st.skipped++; return false; }
+        const VkResult fr = vkWaitForFences(s.vk(), 1, &slot.fence, VK_TRUE, 2000000000ull);
+        if (fr == VK_SUCCESS) break;
+        if (fr == VK_TIMEOUT) continue;
+        s.dev->note_device_lost(fr, "Renderer::begin_frame(vkWaitForFences)");
+        s.st.skipped++;
+        return false;
+    }
     s.read_timestamps(slot);
 
     uint32_t idx = 0;
     if (s.headless) {
         idx = static_cast<uint32_t>(s.frame_number % s.targets.size());
     } else {
-        VkResult r = vkAcquireNextImageKHR(s.vk(), s.swapchain, UINT64_MAX, slot.acquire, VK_NULL_HANDLE, &idx);
+        VkResult r = VK_TIMEOUT;
+        for (;;) {
+            if (s.dev->device_lost()) { s.st.skipped++; return false; }
+            r = vkAcquireNextImageKHR(s.vk(), s.swapchain, 2000000000ull, slot.acquire, VK_NULL_HANDLE, &idx);
+            if (r != VK_TIMEOUT) break;
+        }
         if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_ERROR_SURFACE_LOST_KHR) {
             s.dirty = true;
             s.st.out_of_date++;
@@ -706,6 +723,7 @@ bool Renderer::begin_frame(FrameInfo* out) {
             s.dirty = true;     // finish this frame, rebuild before the next
             s.st.out_of_date++;
         } else if (r != VK_SUCCESS) {
+            s.dev->note_device_lost(r, "Renderer::begin_frame(vkAcquireNextImageKHR)");
             NXLOG_E(kTag, "vkAcquireNextImageKHR failed (%d)", static_cast<int>(r));
             s.st.skipped++;
             return false;
@@ -837,19 +855,32 @@ void Renderer::end_frame(SubmitPrefix* prefix) {
             pr.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
         }
     }
+    VkResult submit_r = VK_ERROR_DEVICE_LOST;
     {
-        std::lock_guard<std::mutex> lk(s.dev->queue_mutex());
-        VkResult r = vkQueueSubmit2(s.dev->queue(), 1, &si, slot.fence);
-        if (r != VK_SUCCESS) {
+        bool skip_submit = s.dev->device_lost();
+        if (!skip_submit && prefix && prefix->wait) {
+            uint64_t tv = 0;
+            const VkResult tr = vkGetSemaphoreCounterValue(s.vk(), prefix->wait, &tv);
+            if (tr == VK_ERROR_DEVICE_LOST || (tr == VK_SUCCESS && tv == UINT64_MAX && prefix->wait_value < UINT64_MAX - 1024)) {
+                s.dev->note_device_lost(VK_ERROR_DEVICE_LOST, "Renderer::end_frame(timeline check)");
+                skip_submit = true;
+            }
+        }
+        if (!skip_submit) {
+            std::lock_guard<std::mutex> lk(s.dev->queue_mutex());
+            submit_r = vkQueueSubmit2(s.dev->queue(), 1, &si, slot.fence);
+        }
+        if (submit_r != VK_SUCCESS) {
+            s.dev->note_device_lost(submit_r, "Renderer::end_frame(vkQueueSubmit2)");
             // once, for the same reason as the NVN submit path: one lost device produced 21,872 identical lines
             static std::atomic<bool> told{false};
             if (!told.exchange(true))
                 NXLOG_E(kTag, "vkQueueSubmit2 failed (%d) - further present-path submit failures are not logged",
-                        static_cast<int>(r));
+                        static_cast<int>(submit_r));
         }
         else if (probe_value) s.probe_published.store(probe_value);
-        if (prefix) prefix->submitted = r == VK_SUCCESS;
-        if (!s.headless) {
+        if (prefix) prefix->submitted = submit_r == VK_SUCCESS;
+        if (submit_r == VK_SUCCESS && !s.headless) {
             VkPresentInfoKHR pi = {VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
             pi.waitSemaphoreCount = 1;
             pi.pWaitSemaphores = &t.render_done;
@@ -862,13 +893,14 @@ void Renderer::end_frame(SubmitPrefix* prefix) {
                 pid.pPresentIds = &present_id;
                 pi.pNext = &pid;
             }
-            r = vkQueuePresentKHR(s.dev->queue(), &pi);
+            const VkResult pr = vkQueuePresentKHR(s.dev->queue(), &pi);
             s.st.presents++;
-            if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR || r == VK_ERROR_SURFACE_LOST_KHR) {
+            if (pr == VK_ERROR_OUT_OF_DATE_KHR || pr == VK_SUBOPTIMAL_KHR || pr == VK_ERROR_SURFACE_LOST_KHR) {
                 s.dirty = true;
                 s.st.out_of_date++;
-            } else if (r != VK_SUCCESS) {
-                NXLOG_E(kTag, "vkQueuePresentKHR failed (%d)", static_cast<int>(r));
+            } else if (pr != VK_SUCCESS) {
+                s.dev->note_device_lost(pr, "Renderer::end_frame(vkQueuePresentKHR)");
+                NXLOG_E(kTag, "vkQueuePresentKHR failed (%d)", static_cast<int>(pr));
             }
         }
     }
@@ -890,7 +922,20 @@ void Renderer::end_frame(SubmitPrefix* prefix) {
     s.cur_slot = (s.cur_slot + 1) % static_cast<uint32_t>(s.slots.size());
 
     if (cap) {
-        vkWaitForFences(s.vk(), 1, &slot.fence, VK_TRUE, UINT64_MAX);
+        bool cap_ok = (submit_r == VK_SUCCESS) && !s.dev->device_lost();
+        while (cap_ok) {
+            const VkResult wr = vkWaitForFences(s.vk(), 1, &slot.fence, VK_TRUE, 2000000000ull);
+            if (wr == VK_SUCCESS) break;
+            if (wr == VK_TIMEOUT && !s.dev->device_lost()) continue;
+            s.dev->note_device_lost(wr, "Renderer::end_frame(capture vkWaitForFences)");
+            cap_ok = false;
+        }
+        if (!cap_ok) {
+            s.dev->destroy_buffer(cap);
+            if (!s.cap_path.empty()) g_png_writes.fetch_sub(1);
+            s.cap_pending.store(false, std::memory_order_relaxed);
+            return;
+        }
         std::vector<uint8_t> raw(static_cast<size_t>(w) * h * bpp);
         s.dev->invalidate_buffer(cap);
         std::memcpy(raw.data(), cap.mapped, raw.size());

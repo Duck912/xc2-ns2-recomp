@@ -2453,8 +2453,8 @@ VkDescriptorSet build_set(const ProgLayout& pl, uint32_t set) {
                         } else if (br.ok && (br.offset % align) == 0) {
                             bi = {br.buffer, br.offset, std::min<VkDeviceSize>({want, br.avail, 65536})};
                         } else if (br.ok) {
-                            // unaligned binding: copy into the upload ring
-                            const VkDeviceSize n = std::min<VkDeviceSize>(want, 65536);
+                            // unaligned binding: copy into the upload ring (clamped to br.avail like the patched/aligned paths)
+                            const VkDeviceSize n = std::min<VkDeviceSize>({want, br.avail, 65536});
                             UploadAlloc u = F->upload(n, std::max<VkDeviceSize>(align, 256));
                             if (u) {
                                 std::memcpy(u.ptr, host_ptr(bind.addr), n);
@@ -5419,8 +5419,9 @@ bool try_bypass_upscaled_output_compute(const ShaderInfo& cs, const ProgLayout& 
         b.dstSubresource = {tex_aspect(dst), 0, 0, 1};
         b.srcOffsets[1] = {static_cast<int32_t>(se.width), static_cast<int32_t>(se.height), 1};
         b.dstOffsets[1] = {static_cast<int32_t>(de.width), static_cast<int32_t>(de.height), 1};
+        const VkFilter filter = (!tex_is_depth(src) && !vk_format_is_integer(tex_vk_format(src))) ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
         vkCmdBlitImage(F->cb, tex_image(src), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, tex_image(dst), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &b,
-                       VK_FILTER_LINEAR);
+                       filter);
     }
     memory_barrier(F->cb);
     if (gpass_on()) gstamp("cs 0794->copy");
@@ -5851,7 +5852,8 @@ void do_copy_texture_texture(const P_CopyTexTex& p) {
         if (mirror & NVN_COPY_FLAGS_MIRROR_X_BIT) std::swap(b.dstOffsets[0].x, b.dstOffsets[1].x);
         if (mirror & NVN_COPY_FLAGS_MIRROR_Y_BIT) std::swap(b.dstOffsets[0].y, b.dstOffsets[1].y);
         if (mirror & NVN_COPY_FLAGS_MIRROR_Z_BIT) std::swap(b.dstOffsets[0].z, b.dstOffsets[1].z);
-        const bool linear = (p.flags & NVN_COPY_FLAGS_LINEAR_FILTER_BIT) || (tex_scale(s) != tex_scale(d) && !tex_is_depth(s) && !tex_is_depth(d));
+        const bool linear = ((p.flags & NVN_COPY_FLAGS_LINEAR_FILTER_BIT) || tex_scale(s) != tex_scale(d)) &&
+                            !tex_is_depth(s) && !tex_is_depth(d) && !vk_format_is_integer(tex_vk_format(s)) && !vk_format_is_integer(tex_vk_format(d));
         vkCmdBlitImage(F->cb, tex_image(s), sl, tex_image(d), dl, 1, &b, linear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
     }
     memory_barrier(F->cb);

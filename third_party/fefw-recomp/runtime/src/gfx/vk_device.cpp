@@ -230,6 +230,12 @@ struct Device::Impl {
     std::mutex first_error_mu;
     std::string first_error;
 
+    // sticky device-lost latch + cached VK_EXT_device_fault string
+    std::atomic<bool> device_lost{false};
+    std::mutex fault_mu;
+    std::string fault_text;
+    bool fault_queried = false;
+
     // image-format cache
     struct Key {
         VkFormat format; VkImageType type; VkImageTiling tiling; VkImageUsageFlags usage; VkImageCreateFlags flags;
@@ -822,6 +828,7 @@ bool Device::init(const DeviceDesc& desc, std::string* error) {
     features_.present_id = x_pid && apid.presentId;
     features_.low_latency2 = x_ll2 && features_.present_id;
     features_.anti_lag = x_aal && aal.antiLag;
+    features_.device_fault = adf.deviceFault == VK_TRUE;
     features_.ubo_robustness = (x_prb && aprb.pipelineRobustness) ? (rba2 ? 2 : 1) : 0;   // robustBufferAccess itself is a required feature
     NXLOG_I(kTag, "texture compression on this GPU: BC %s, ASTC-LDR %s, ETC2 %s", features_.bc ? "yes" : "no",
             features_.astc_ldr ? "yes" : "no", features_.etc2 ? "yes" : "no");
@@ -1192,6 +1199,7 @@ void Device::invalidate_buffer(const Buffer& b) {
 
 // ---- one-shot submit, idle, stats -------------------------------------------------------------------------------------
 bool Device::submit_once(const std::function<void(VkCommandBuffer)>& fn) {
+    if (!device_ || device_lost()) return false;
     std::lock_guard<std::mutex> lk(impl_->once_mu);
     VkCommandBufferAllocateInfo ai = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
     ai.commandPool = impl_->once_pool;
@@ -1208,21 +1216,90 @@ bool Device::submit_once(const std::function<void(VkCommandBuffer)>& fn) {
     VkSubmitInfo si = {VK_STRUCTURE_TYPE_SUBMIT_INFO};
     si.commandBufferCount = 1;
     si.pCommandBuffers = &cmd;
-    bool ok;
+    VkResult sr = VK_ERROR_UNKNOWN;
     {
         std::lock_guard<std::mutex> ql(queue_mutex_);
-        ok = vkQueueSubmit(queue_, 1, &si, impl_->once_fence) == VK_SUCCESS;
+        sr = vkQueueSubmit(queue_, 1, &si, impl_->once_fence);
     }
-    if (ok) ok = vkWaitForFences(device_, 1, &impl_->once_fence, VK_TRUE, UINT64_MAX) == VK_SUCCESS;
-    vkResetFences(device_, 1, &impl_->once_fence);
+    bool ok = (sr == VK_SUCCESS);
+    if (!ok) note_device_lost(sr, "Device::submit_once(vkQueueSubmit)");
+    if (ok) {
+        for (;;) {
+            const VkResult wr = vkWaitForFences(device_, 1, &impl_->once_fence, VK_TRUE, 2000000000ull);
+            if (wr == VK_SUCCESS) break;
+            if (wr == VK_TIMEOUT && !device_lost()) continue;
+            note_device_lost(wr, "Device::submit_once(vkWaitForFences)");
+            ok = false;
+            break;
+        }
+    }
+    if (ok && !device_lost()) vkResetFences(device_, 1, &impl_->once_fence);
     vkFreeCommandBuffers(device_, impl_->once_pool, 1, &cmd);
     vk_gauge_command_buffers().sub(1);
     return ok;
 }
 
 void Device::wait_idle() {
+    if (!device_ || device_lost()) return;
     std::lock_guard<std::mutex> ql(queue_mutex_);
-    vkDeviceWaitIdle(device_);
+    const VkResult r = vkDeviceWaitIdle(device_);
+    note_device_lost(r, "Device::wait_idle");
+}
+
+bool Device::device_lost() const {
+    return impl_ && impl_->device_lost.load(std::memory_order_acquire);
+}
+
+bool Device::note_device_lost(VkResult r, const char* where) {
+    if (!impl_) return r == VK_ERROR_DEVICE_LOST;
+    if (r != VK_ERROR_DEVICE_LOST) return impl_->device_lost.load(std::memory_order_acquire);
+    if (!impl_->device_lost.exchange(true, std::memory_order_acq_rel)) {
+        const std::string why = query_device_fault();
+        NXLOG_E(kTag, "VK_ERROR_DEVICE_LOST observed at %s%s%s", where ? where : "(unknown)",
+                why.empty() ? "" : "; device fault: ", why.empty() ? "" : why.c_str());
+    }
+    return true;
+}
+
+std::string Device::query_device_fault() const {
+    if (!impl_ || !features_.device_fault || !device_) return {};
+    std::lock_guard<std::mutex> lk(impl_->fault_mu);
+    if (impl_->fault_queried && !impl_->fault_text.empty()) return impl_->fault_text;
+    auto pfn = reinterpret_cast<PFN_vkGetDeviceFaultInfoEXT>(vkGetDeviceProcAddr(device_, "vkGetDeviceFaultInfoEXT"));
+    if (!pfn) {
+        impl_->fault_queried = true;
+        return {};
+    }
+    VkDeviceFaultCountsEXT counts = {VK_STRUCTURE_TYPE_DEVICE_FAULT_COUNTS_EXT};
+    const VkResult cr = pfn(device_, &counts, nullptr);
+    if (cr != VK_SUCCESS && cr != VK_INCOMPLETE) return {};
+    std::vector<VkDeviceFaultAddressInfoEXT> addrs(counts.addressInfoCount);
+    std::vector<VkDeviceFaultVendorInfoEXT> vendors(counts.vendorInfoCount);
+    VkDeviceFaultInfoEXT info = {VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_EXT};
+    info.pAddressInfos = addrs.empty() ? nullptr : addrs.data();
+    info.pVendorInfos = vendors.empty() ? nullptr : vendors.data();
+    const VkResult ir = pfn(device_, &counts, &info);
+    if (ir != VK_SUCCESS && ir != VK_INCOMPLETE) return {};
+    impl_->fault_queried = true;
+    char buf[400];
+    std::string out;
+    std::snprintf(buf, sizeof buf, "description '%s'", info.description[0] ? info.description : "(none)");
+    out = buf;
+    for (size_t i = 0; i < counts.addressInfoCount && i < addrs.size(); ++i) {
+        const VkDeviceFaultAddressInfoEXT& a = addrs[i];
+        std::snprintf(buf, sizeof buf, "; address 0x%llx (type %d, precision 0x%llx)",
+                      static_cast<unsigned long long>(a.reportedAddress), static_cast<int>(a.addressType),
+                      static_cast<unsigned long long>(a.addressPrecision));
+        out += buf;
+    }
+    for (size_t i = 0; i < counts.vendorInfoCount && i < vendors.size(); ++i) {
+        const VkDeviceFaultVendorInfoEXT& v = vendors[i];
+        std::snprintf(buf, sizeof buf, "; vendor '%s' code 0x%llx data 0x%llx", v.description,
+                      static_cast<unsigned long long>(v.vendorFaultCode), static_cast<unsigned long long>(v.vendorFaultData));
+        out += buf;
+    }
+    impl_->fault_text = std::move(out);
+    return impl_->fault_text;
 }
 
 Device::MemoryStats Device::memory_stats() {

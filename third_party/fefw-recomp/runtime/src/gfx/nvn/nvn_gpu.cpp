@@ -145,8 +145,22 @@ void flush_batch();   // [nvn] submit_batch, below
 std::mutex g_install_mu;
 
 uint64_t read_completed() {
+    if (!g) return 0;
+    if (g->dev->device_lost()) return g->completed.load();
     uint64_t v = 0;
-    if (g && g->timeline) vkGetSemaphoreCounterValue(g->dev->device(), g->timeline, &v);
+    if (g->timeline) {
+        const VkResult r = vkGetSemaphoreCounterValue(g->dev->device(), g->timeline, &v);
+        if (r == VK_ERROR_DEVICE_LOST) {
+            g->dev->note_device_lost(r, "vkGetSemaphoreCounterValue(nvn timeline)");
+            return g->completed.load();
+        }
+        if (r != VK_SUCCESS) return g->completed.load();
+        // Drivers have been observed returning VK_SUCCESS with UINT64_MAX on a lost/poisoned timeline: never let that corrupt g->completed.
+        if (v == UINT64_MAX && g->last_submitted.load() < UINT64_MAX - 1024) {
+            g->dev->note_device_lost(VK_ERROR_DEVICE_LOST, "vkGetSemaphoreCounterValue returned UINT64_MAX");
+            return g->completed.load();
+        }
+    }
     if (v > g->completed.load()) g->completed.store(v);
     return g->completed.load();
 }
@@ -274,37 +288,9 @@ VkDescriptorPool new_dpool() {
     return p;
 }
 
-// VK_EXT_device_fault (enabled in vk_device.cpp): the reason the driver gives when it drops the device, instead of only the
-// -4 vkQueueSubmit2 returned. Empty when the extension is not there, which is the case for every driver that has no support -
-// the entry point is only resolvable on a device that enabled it. Called once, from the first failed submit. Issue 10 and
-// issue 4 both end here with nothing but "-4", and the N card reports have cost three rounds of guessing.
-static std::string device_fault_text(VkDevice dev) {
-    auto pfn = reinterpret_cast<PFN_vkGetDeviceFaultInfoEXT>(vkGetDeviceProcAddr(dev, "vkGetDeviceFaultInfoEXT"));
-    if (!pfn) return {};
-    VkDeviceFaultCountsEXT counts = {VK_STRUCTURE_TYPE_DEVICE_FAULT_COUNTS_EXT};
-    if (pfn(dev, &counts, nullptr) != VK_SUCCESS) return {};
-    std::vector<VkDeviceFaultAddressInfoEXT> addrs(counts.addressInfoCount);
-    std::vector<VkDeviceFaultVendorInfoEXT> vendors(counts.vendorInfoCount);
-    VkDeviceFaultInfoEXT info = {VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_EXT};
-    info.pAddressInfos = addrs.empty() ? nullptr : addrs.data();
-    info.pVendorInfos = vendors.empty() ? nullptr : vendors.data();
-    if (pfn(dev, &counts, &info) != VK_SUCCESS) return {};
-    char buf[400];
-    std::string out;
-    std::snprintf(buf, sizeof buf, "description '%s'", info.description[0] ? info.description : "(none)");
-    out = buf;
-    for (const VkDeviceFaultAddressInfoEXT& a : addrs) {
-        std::snprintf(buf, sizeof buf, "; address 0x%llx (type %d, precision 0x%llx)",
-                      static_cast<unsigned long long>(a.reportedAddress), static_cast<int>(a.addressType),
-                      static_cast<unsigned long long>(a.addressPrecision));
-        out += buf;
-    }
-    for (const VkDeviceFaultVendorInfoEXT& v : vendors) {
-        std::snprintf(buf, sizeof buf, "; vendor '%s' code 0x%llx data 0x%llx", v.description,
-                      static_cast<unsigned long long>(v.vendorFaultCode), static_cast<unsigned long long>(v.vendorFaultData));
-        out += buf;
-    }
-    return out;
+// VK_EXT_device_fault (enabled in vk_device.cpp): delegated to Device::query_device_fault so both NVN and Renderer share the latch/cache.
+static std::string device_fault_text(gfx::Device* dev) {
+    return dev ? dev->query_device_fault() : std::string{};
 }
 
 // Hands the recorded submissions of the batch to the GPU in one vkQueueSubmit2, in recording order, signalling the timeline with the last
@@ -340,8 +326,8 @@ void flush_batch() {
     si.pCommandBufferInfos = cbi.data();
     si.signalSemaphoreInfoCount = 1;
     si.pSignalSemaphoreInfos = &sig;
-    VkResult r;
-    {
+    VkResult r = g->dev->device_lost() ? VK_ERROR_DEVICE_LOST : VK_SUCCESS;
+    if (!g->dev->device_lost()) {
         nxrt::HitchTimer ht(nxrt::kHpRenderSubmit);
         const uint64_t tl = nxrt::hitch_ticks();
         std::lock_guard<std::mutex> lk(g->dev->queue_mutex());
@@ -349,20 +335,15 @@ void flush_batch() {
         r = vkQueueSubmit2(g->dev->queue(), 1, &si, VK_NULL_HANDLE);
     }
     if (r != VK_SUCCESS) {
+        g->dev->note_device_lost(r, "nvn flush_batch(vkQueueSubmit2)");
         // ONCE, not once per frame. A lost device makes every submit fail identically, and the retail log of one
         // session with a lost device held 21,872 copies of this line over 556 seconds - which buries the frames that
-        // came BEFORE the loss, the ones that would say why it happened. The submit itself is still attempted: the
-        // game keeps running and can be played blind, and stopping here would change behaviour this change is not
-        // meant to touch.
+        // came BEFORE the loss, the ones that would say why it happened.
         static std::atomic<bool> told{false};
         if (!told.exchange(true)) {
             NXLOG_E(kTag, "vkQueueSubmit2 failed (%d): the device is lost or out of memory", static_cast<int>(r));
-            if (const std::string why = device_fault_text(g->dev->device()); !why.empty())
+            if (const std::string why = device_fault_text(g->dev); !why.empty())
                 NXLOG_E(kTag, "device fault: %s", why.c_str());
-            // A host signal used to "keep the timeline moving" here. It cannot: once the device is lost the semaphore
-            // belongs to it, the signal fails too, and the attempt is a spec violation anyway - the value being
-            // signalled is still pending on the queue (VUID-VkSemaphoreSignalInfo-value-03259). Report it once and
-            // leave the timeline alone.
             NXLOG_E(kTag, "the GPU timeline can no longer be signalled: the device is gone. Restart the game.");
             NXLOG_E(kTag, "nothing will be drawn again; the game keeps running (sound and logic are unaffected), so "
                           "this is not a hang. Further submit failures are not logged.");
@@ -386,15 +367,23 @@ void want_flush(uint64_t serial) {
 }
 
 void wait_serial_blocking(uint64_t serial) {
-    if (!serial || read_completed() >= serial) return;
+    if (!serial || !g || g->dev->device_lost() || read_completed() >= serial) return;
     if (serial > g->flushed && on_render_thread()) flush_batch();     // a serial still in the batch would never signal
+    if (g->dev->device_lost()) return;
     NXFT("gpu.wait");
     VkSemaphoreWaitInfo wi = {VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
     wi.semaphoreCount = 1;
     wi.pSemaphores = &g->timeline;
     wi.pValues = &serial;
-    VkResult r = vkWaitSemaphores(g->dev->device(), &wi, UINT64_MAX);
-    if (r != VK_SUCCESS) NXLOG_E(kTag, "vkWaitSemaphores failed (%d)", static_cast<int>(r));
+    for (;;) {
+        if (g->dev->device_lost() || read_completed() >= serial) break;
+        const VkResult r = vkWaitSemaphores(g->dev->device(), &wi, 2000000000ull);
+        if (r == VK_SUCCESS) break;
+        if (r == VK_TIMEOUT) continue;
+        if (!g->dev->note_device_lost(r, "nvn wait_serial_blocking(vkWaitSemaphores)"))
+            NXLOG_E(kTag, "vkWaitSemaphores failed (%d)", static_cast<int>(r));
+        break;
+    }
     read_completed();
 }
 
@@ -821,8 +810,9 @@ uint64_t submit_on_render_thread(const std::function<void(Frame&)>& record, uint
         const uint64_t tl = nxrt::hitch_ticks();
         std::lock_guard<std::mutex> lk(g->dev->queue_mutex());
         nxrt::hitch_phase_add(nxrt::kHpRenderLockWait, nxrt::hitch_ticks() - tl);
-        r = vkQueueSubmit2(g->dev->queue(), 1, &si, VK_NULL_HANDLE);
+        r = g->dev->device_lost() ? VK_ERROR_DEVICE_LOST : vkQueueSubmit2(g->dev->queue(), 1, &si, VK_NULL_HANDLE);
         if (r == VK_SUCCESS) vkQueueWaitIdle(g->dev->queue());   // nothing else tells when it is done
+        else g->dev->note_device_lost(r, "nvn sync submit(vkQueueSubmit2)");
     }
     g->recording = 0;
     s.serial = 0;
@@ -835,9 +825,10 @@ uint64_t submit_on_render_thread(const std::function<void(Frame&)>& record, uint
 // recorded. The command buffer recorded so far goes to the queue on its own (no signal: the frame's serial is signalled by its last part),
 // and the recording continues in a fresh one that starts with a full memory barrier, so everything the earlier part wrote is visible to it.
 bool split_flush(Frame& f) {
-    if (!g || !f.slot || f.cb == VK_NULL_HANDLE) return false;
+    if (!g || !f.slot || f.cb == VK_NULL_HANDLE || g->dev->device_lost()) return false;
     Slot* s = static_cast<Slot*>(f.slot);
     flush_batch();                          // anything queued before this goes first (one queue: submission order is the order here)
+    if (g->dev->device_lost()) return false;
     VkCommandBuffer old = f.cb;
     if (vkEndCommandBuffer(old) != VK_SUCCESS) return false;
     const VkCommandBuffer pro = end_prologue(*s);   // [nvn] tex_prologue: the uploads recorded for this part go right before it
@@ -855,6 +846,7 @@ bool split_flush(Frame& f) {
         r = vkQueueSubmit2(g->dev->queue(), 1, &si, VK_NULL_HANDLE);
     }
     if (r != VK_SUCCESS) {
+        g->dev->note_device_lost(r, "nvn split_flush(vkQueueSubmit2)");
         NXLOG_E(kTag, "split submit failed (%d): the frame stays in one command buffer", static_cast<int>(r));
         return false;
     }
@@ -908,11 +900,12 @@ bool take_batch_for_present(std::vector<VkCommandBuffer>* cmds, gfx::Renderer::S
 }
 
 void present_batch_done(const gfx::Renderer::SubmitPrefix& p) {
-    if (!p.submitted) {   // as flush_batch: keep the timeline moving so waiters do not hang
+    if (!p.submitted && !g->dev->device_lost()) {   // keep the timeline moving if submit failed transiently without device loss
         VkSemaphoreSignalInfo ssi = {VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
         ssi.semaphore = g->timeline;
         ssi.value = p.value;
-        vkSignalSemaphore(g->dev->device(), &ssi);
+        const VkResult sr = vkSignalSemaphore(g->dev->device(), &ssi);
+        g->dev->note_device_lost(sr, "nvn present_batch_done(vkSignalSemaphore)");
     }
     g->flushed = p.value;
     g->flushed_pub.store(p.value);
@@ -1021,16 +1014,24 @@ std::atomic<uint64_t> g_wait_serial{0}, g_wait_timeout{0};   // the latest wait:
 std::string gpu_report() {
     if (!g) return {};
     uint64_t v = 0;
-    if (g->timeline) vkGetSemaphoreCounterValue(g->dev->device(), g->timeline, &v);
-    char b[400];
+    VkResult sr = VK_SUCCESS;
+    if (g->timeline) sr = vkGetSemaphoreCounterValue(g->dev->device(), g->timeline, &v);
+    const bool poisoned = (sr == VK_ERROR_DEVICE_LOST) || (sr == VK_SUCCESS && v == UINT64_MAX && g->last_submitted.load() < UINT64_MAX - 1024);
+    const bool lost = g->dev->device_lost() || poisoned;
+    std::string fault;
+    if (g->dev->features().device_fault) fault = g->dev->query_device_fault();
+    char b[512];
     size_t q = 0;
     bool got = false;
     if (g->qmu.try_lock()) { q = g->queue.size(); got = true; g->qmu.unlock(); }
-    std::snprintf(b, sizeof b, "NVN back end: last submitted serial %llu, timeline value %llu, %d game thread(s) in a sync wait (latest wait: serial %llu, timeout %llu ns), sync waits begun %llu done %llu, submits %llu, presents %llu, render queue %s%zu\n",
-                  static_cast<unsigned long long>(g->last_submitted.load()), static_cast<unsigned long long>(v), g_waiters.load(),
+    std::snprintf(b, sizeof b, "NVN back end: %slast submitted serial %llu, timeline value %llu (rc %d), %d game thread(s) in a sync wait (latest wait: serial %llu, timeout %llu ns), sync waits begun %llu done %llu, submits %llu, presents %llu, render queue %s%zu%s%s\n",
+                  lost ? "[DEVICE LOST] " : "",
+                  static_cast<unsigned long long>(g->last_submitted.load()), static_cast<unsigned long long>(v), static_cast<int>(sr),
+                  g_waiters.load(),
                   static_cast<unsigned long long>(g_wait_serial.load()), static_cast<unsigned long long>(g_wait_timeout.load()),
                   static_cast<unsigned long long>(g_waits_begun.load()), static_cast<unsigned long long>(g_waits_done.load()),
-                  static_cast<unsigned long long>(g->ctr.submits.load()), static_cast<unsigned long long>(g->ctr.presents.load()), got ? "" : "(busy) ", q);
+                  static_cast<unsigned long long>(g->ctr.submits.load()), static_cast<unsigned long long>(g->ctr.presents.load()), got ? "" : "(busy) ", q,
+                  fault.empty() ? "" : "; device fault: ", fault.empty() ? "" : fault.c_str());
     return b;
 }
 }  // namespace
@@ -1038,8 +1039,7 @@ std::string gpu_report() {
 int presents_since(uint64_t serial);   // below, beside the frame history
 
 bool wait_serial(uint64_t serial, uint64_t timeout_ns) {
-    if (!g || !serial) return true;
-    if (serial_done(serial)) return true;
+    if (!g || !serial || g->dev->device_lost() || serial_done(serial)) return true;
     if (timeout_ns == 0) return false;
     want_flush(serial);
     NXFT("sync.wait");
@@ -1060,6 +1060,7 @@ bool wait_serial(uint64_t serial, uint64_t timeout_ns) {
     wi.pSemaphores = &g->timeline;
     wi.pValues = &serial;
     const VkResult r = vkWaitSemaphores(g->dev->device(), &wi, timeout_ns);
+    if (r == VK_ERROR_DEVICE_LOST) g->dev->note_device_lost(r, "nvn wait_serial(vkWaitSemaphores)");
     read_completed();
     const auto tw1 = std::chrono::steady_clock::now();
     w_n[kind].fetch_add(1, std::memory_order_relaxed);
