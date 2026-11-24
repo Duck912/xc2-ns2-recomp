@@ -12,6 +12,7 @@ This release ships all fixes verified after `v0.2.3`, including **#53 AMD FSR 3 
 | file | what it is | do I need it? | SHA-256 |
 |---|---|---|---|
 | `XC2-package-dist-0.2.4.zip` | full player package: `0.2.4` launcher, updated `xc2_rt.dll`, `xc2_setup.py`, and toolchain | **yes** — new installs, manual upgrades, or `v0.2.2`/`v0.2.3` one-click **About → Updates** | `6a8529207f139521132c4a06184af261b4956f17bc8d41dccdc492c5f13798c1` |
+| `XC2-hotfix-v0.2.4-tdr-rt.zip` | optional runtime hotfix (`xc2_rt.dll` from `010fc5e`): device-lost / `VK_EXT_device_fault` logging, descriptor `pool_set` deadlock fix, integer blit filter & UBO bounds | **optional (NVIDIA TDR #32/#41/#59 testers)** — extract over an existing `v0.2.4` install folder; does not affect launcher settings/saves | `eccd56cb71d4972f0e7d5a8ebedce37ed9c0566287c87d26f0a1e81727dd8cb6` |
 | `xc2-launcher-0.2.4-src.zip` | launcher source code | no | `4d64c7a9205ca31dc89d72fc4118abd7acaecf64b1ec80cc0d947a370af5c57c` |
 
 ## What's new
@@ -74,6 +75,7 @@ This release ships all fixes verified after `v0.2.3`, including **#53 AMD FSR 3 
 | 文件 | 是什么 | 需要吗 | SHA-256 |
 |---|---|---|---|
 | `XC2-package-dist-0.2.4.zip` | 完整玩家包：`0.2.4` 启动器、新版 `xc2_rt.dll`、`xc2_setup.py` 与完整工具链 | **要** —— 全新安装、手动覆盖升级，或 `v0.2.2`/`v0.2.3` 启动器内一键更新 | `6a8529207f139521132c4a06184af261b4956f17bc8d41dccdc492c5f13798c1` |
+| `XC2-hotfix-v0.2.4-tdr-rt.zip` | 可选运行时热修复补丁（`010fc5e` `xc2_rt.dll`）：`device-lost` / `VK_EXT_device_fault` 诊断、描述符 `pool_set` 死锁修复、整数 blit 滤镜与 UBO 边界钳位 | **可选（针对 NVIDIA TDR `#32`/`#41`/`#59` 复测）** —— 直接覆盖解压到 `v0.2.4` 安装目录；不影响配置、存档与着色器缓存 | `eccd56cb71d4972f0e7d5a8ebedce37ed9c0566287c87d26f0a1e81727dd8cb6` |
 | `xc2-launcher-0.2.4-src.zip` | 启动器源码 | 不用 | `4d64c7a9205ca31dc89d72fc4118abd7acaecf64b1ec80cc0d947a370af5c57c` |
 
 ## 本版变化
