@@ -22,6 +22,7 @@ struct EncodePush {
     float p[4];       // x = mode, y = paper white nits, z = peak nits, w = 1: apply the picture controls
     float adj[4];     // picture controls: contrast, saturation, black, gamma
     float scn[4];     // the picture in the scene / final copies' UV: x, y, w, h
+    float ui[4];      // x = the UI's brightness over paper white
 };
 VkShaderModule make_module(VkDevice d, const uint32_t* code, size_t bytes) {
     VkShaderModuleCreateInfo mi = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
@@ -194,7 +195,7 @@ VkPipeline OutputPass::encode_pipeline(VkFormat fmt) {
 
 void OutputPass::encode(VkCommandBuffer cb, VkImageView dst_view, VkFormat dst_format, VkExtent2D dst_extent, VkImageView src, VkExtent2D src_extent, const int32_t crop_in[4],
                         bool keep_aspect, bool flip_y, int mode, float paper, float peak, float expand_ratio, VkImageLayout src_layout, const float* pic,
-                        VkImageView scene, VkImageView fin, const float* scn) {
+                        VkImageView scene, VkImageView fin, const float* scn, float ui_scale) {
     VkPipeline pipe = encode_pipeline(dst_format);
     if (!pipe) return;
     const int32_t sw = static_cast<int32_t>(src_extent.width), sh = static_cast<int32_t>(src_extent.height);
@@ -243,6 +244,7 @@ void OutputPass::encode(VkCommandBuffer cb, VkImageView dst_view, VkFormat dst_f
     for (int i = 0; i < 4; ++i) pc.adj[i] = pic ? pic[i] : (i == 2 ? 0.0f : 1.0f);
     const float own[4] = {static_cast<float>(cx / sw), static_cast<float>(cy / sh), static_cast<float>(cw / sw), static_cast<float>(ch / sh)};
     for (int i = 0; i < 4; ++i) pc.scn[i] = scn ? scn[i] : own[i];
+    pc.ui[0] = ui_scale;
     if (!fin) fin = src;
     if (!scene) scene = fin;
 
@@ -324,12 +326,12 @@ int OutputPass::record(VkCommandBuffer cb, VkImageView dst_view, VkFormat dst_fo
             const int32_t whole[4] = {0, 0, 0, 0};
             const float scn[4] = {0.0f, 0.0f, static_cast<float>(cw / sw), static_cast<float>(ch / sh)};
             encode(cb, dst_view, dst_format, dst_extent, up, VkExtent2D{upw, uph}, whole, p.keep_aspect, p.flip_y, mode, p.paper_white_nits, p.peak_nits, p.expand_ratio, VK_IMAGE_LAYOUT_GENERAL, pic,
-                   p.scene, p.src, scn);
+                   p.scene, p.src, scn, p.ui_scale);
             return mode;
         }
     }
     encode(cb, dst_view, dst_format, dst_extent, p.src, p.src_extent, p.crop, p.keep_aspect, p.flip_y, mode, p.paper_white_nits, p.peak_nits, p.expand_ratio, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, pic,
-           p.scene, p.src, nullptr);
+           p.scene, p.src, nullptr, p.ui_scale);
     return mode;
 }
 

@@ -35,6 +35,7 @@ struct OutputParams {
     float paper_white_nits = 203, peak_nits = 1000;
     float expand_ratio = 1.0f;               // > 1.0: expand display-referred [0,1] highlights toward peak_nits in HDR modes
     VkImageView scene = VK_NULL_HANDLE;      // src before the UI was drawn (same size, SHADER_READ_ONLY_OPTIMAL): the UI is not expanded
+    float ui_scale = 1.0f;                   // HDR: the UI's brightness over paper white (needs scene)
     bool fsr1 = false;                       // upscale with FSR 1 when the picture is larger than the source
     bool nis = false;                        // upscale with NVIDIA Image Scaling instead (FSR 1 when the scale is beyond 2x)
     float sharpness = 0.8f;                  // 0..1 (RCAS / NIS)
@@ -66,7 +67,7 @@ private:
     VkPipeline encode_pipeline(VkFormat fmt);
     void encode(VkCommandBuffer cb, VkImageView dst_view, VkFormat dst_format, VkExtent2D dst_extent, VkImageView src, VkExtent2D src_extent, const int32_t crop[4],
                 bool keep_aspect, bool flip_y, int mode, float paper, float peak, float expand_ratio, VkImageLayout src_layout, const float* pic,
-                VkImageView scene, VkImageView fin, const float* scn);
+                VkImageView scene, VkImageView fin, const float* scn, float ui_scale);
 
     gfx::Device* dev_ = nullptr;
     VkSampler linear_ = VK_NULL_HANDLE, nearest_ = VK_NULL_HANDLE;

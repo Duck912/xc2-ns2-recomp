@@ -15,9 +15,9 @@ void fg_note_eval();       // replay: this frame's DLSS evaluation fed frame gen
 // replay, before a draw into colour target t (blended: blending on target 0): true = call fg_hudless_capture now, with no pass open
 bool fg_hudless_candidate(Texture* t, bool blended);
 void fg_hudless_capture(Frame& f, Texture* t);
-// present, before the picture is recorded: the window texture before the UI when [hdr] ui_split applies to this frame (else null), in
-// SHADER_READ_ONLY_OPTIMAL; the HDR highlight expansion leaves the UI out with it
-VkImageView hdr_scene_view(Texture* presented, Frame& f, bool again);
+// present, before the picture is recorded: the window texture before the UI when [hdr] ui_split is on and wanted (HDR output with the
+// highlight expansion or a UI white of its own) and this frame has one (else null), in SHADER_READ_ONLY_OPTIMAL
+VkImageView hdr_scene_view(Texture* presented, Frame& f, bool again, bool wanted);
 // present, after the picture is recorded: draw(src, dst) records the picture from src (a view in SHADER_READ_ONLY_OPTIMAL of an image the
 // size of the presented texture) into dst (COLOR_ATTACHMENT_OPTIMAL, the backbuffer's size and format) as the present does
 void fg_hudless_present(Window* w, Texture* presented, Frame& f, VkExtent2D bb, VkFormat bb_format, bool again,

@@ -142,11 +142,10 @@ void fg_hudless_capture(Frame& f, Texture* t) {
     }
 }
 
-VkImageView hdr_scene_view(Texture* presented, Frame& f, bool again) {
+VkImageView hdr_scene_view(Texture* presented, Frame& f, bool again, bool wanted) {
     State& s = st();
     static const bool on = config_get_bool("hdr", "ui_split", true);
-    const extras::HdrState hs = extras::hdr_state();
-    s.split = on && hs.scene_hdr && hs.output != extras::OutputKind::Sdr8 && hs.peak_ratio > 1.001f;
+    s.split = on && wanted;
     if (!again) {
         s.shown = (s.split && presented && s.captured == presented) ? &s.copy[s.cur] : nullptr;
         if (s.split) {

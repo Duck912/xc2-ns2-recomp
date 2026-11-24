@@ -950,3 +950,57 @@ NXTEST(ui_split_without_ui_changes_nothing) {
         CHECK_EQ(diff, 0ull);
     }
 }
+
+// The UI brightness: UI pixels go to ui_scale x paper white, scene pixels keep the expansion (or stay at 1 with no expansion). Without
+// a copy before the UI, ui_scale changes nothing.
+NXTEST(hdr10_ui_brightness) {
+    Rig r;
+    Teardown td{r};
+    if (!make_device(r)) {
+        nxtest::skip("no headless Vulkan device");
+        return;
+    }
+    if (!formats_supported(*r.dev, VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_A2B10G10R10_UNORM_PACK32)) {
+        nxtest::skip("needed format not supported");
+        return;
+    }
+    std::vector<uint8_t> fin(8 * 8 * 4, 255), scene(8 * 8 * 4, 255);
+    for (uint32_t y = 0; y < 8; ++y)
+        for (uint32_t x = 4; x < 8; ++x) {
+            const size_t o = (static_cast<size_t>(y) * 8 + x) * 4;
+            scene[o + 0] = scene[o + 1] = scene[o + 2] = 128;
+        }
+    REQUIRE(upload_source(r, VK_FORMAT_R8G8B8A8_SRGB, 8, 8, scene));
+    r.scene = r.src;
+    r.src = gfx::Image();
+    REQUIRE(upload_source(r, VK_FORMAT_R8G8B8A8_SRGB, 8, 8, fin));
+    REQUIRE(make_dst(r, VK_FORMAT_A2B10G10R10_UNORM_PACK32, 8, 8, 4));
+    struct Case {
+        float expand, ui;
+        bool copy;
+        double want_scene, want_ui;
+    };
+    const Case cases[] = {{1200.0f / 230.0f, 0.7f, true, 5.217, 0.7},
+                          {1.0f, 1.5f, true, 1.0, 1.5},
+                          {1.0f, 1.5f, false, 1.0, 1.0},
+                          {1200.0f / 230.0f, 0.7f, false, 5.217, 5.217}};
+    for (const Case& c : cases) {
+        hdr::OutputParams p = base_params(r, 8, 8);
+        p.out = hdr::OutputKind::Hdr10;
+        p.src_linear = true;
+        p.paper_white_nits = 230.0f;
+        p.peak_nits = 1200.0f;
+        p.expand_ratio = c.expand;
+        p.ui_scale = c.ui;
+        p.scene = c.copy ? r.scene.view : VK_NULL_HANDLE;
+        std::vector<uint8_t> got;
+        CHECK_EQ(run_pass(r, p, &got), 2);
+        std::vector<float> lin;
+        REQUIRE(hdr::decode_hdr_capture(hdr::CaptureFormat::A2B10G10R10, got.data(), 8, 8, 230.0f, &lin, nullptr, nullptr, nullptr));
+        const double sp = lin[(1 * 8 + 1) * 3], up = lin[(1 * 8 + 6) * 3];
+        std::printf("    expand %.2f, ui %.2f, copy %d: scene %.4f (want %.3f), UI %.4f (want %.3f)\n", c.expand, c.ui, c.copy ? 1 : 0, sp,
+                    c.want_scene, up, c.want_ui);
+        CHECK(close_to(sp, c.want_scene, 0.03, 0.01));
+        CHECK(close_to(up, c.want_ui, 0.03, 0.01));
+    }
+}

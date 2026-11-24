@@ -258,6 +258,7 @@ void sanitize(Settings& s) {
     h.peak_nits = h.peak_nits <= 0 ? 0 : std::clamp(h.peak_nits, 200.0, 10000.0);
     h.paper_white_nits = h.paper_white_nits <= 0 ? 0 : std::clamp(h.paper_white_nits, 80.0, 500.0);
     h.highlight_boost = std::clamp(h.highlight_boost, 0.0, 2.0);
+    h.ui_white_nits = h.ui_white_nits <= 0 ? 0 : std::clamp(h.ui_white_nits, 80.0, 500.0);
     s.extras.upscale.sharpness = std::clamp(s.extras.upscale.sharpness, 0.0, 1.0);
     s.extras.picture = extras::picture_clamped(s.extras.picture);
     s.audio.volume = std::clamp(s.audio.volume, 0.0, 1.0);
@@ -1162,6 +1163,14 @@ void tab_graphics(const LiveStatus& live, Page& p, float bottom_h) {
                       "控制高光向峰值亮度扩展的幅度，0.00 接近 SDR，1.00 标准 HDR。",
                       "Expands highlights toward peak brightness.",
                       &hdr.highlight_boost, 0.0, 2.0, 0.10, "%.2f", false, true)) {
+        mark(p);
+    }
+    int ui_white = static_cast<int>(std::lround(hdr.ui_white_nits));
+    if (card_slider_i("hdr_ui", "HDR 界面亮度", "HDR UI brightness",
+                      "游戏菜单、HUD 与字幕的亮度（尼特），自动则与纸白亮度相同。",
+                      "Brightness of the game's menus, HUD and subtitles in nits (Auto matches paper white).",
+                      &ui_white, 0, 500, 10, "%d nits", false, false, tr("自动", "Auto"), 80)) {
+        hdr.ui_white_nits = ui_white;
         mark(p);
     }
 

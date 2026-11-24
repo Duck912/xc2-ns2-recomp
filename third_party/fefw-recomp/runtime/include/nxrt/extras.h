@@ -43,6 +43,7 @@ struct HdrSettings {
     double peak_nits = 0;            // 0 = the display's reported peak (1000 when it reports none), else 200..10000
     double paper_white_nits = 0;     // 0 = Windows' SDR content brightness when HDR is on there (203 otherwise), else 80..500
     double highlight_boost = 1.0;    // 0 = the game's SDR look up to its own white, 1 = highlights reach the peak (0 .. 2)
+    double ui_white_nits = 0;        // the game UI's white: 0 = paper white, else 80..500 (needs the UI split, [hdr] ui_split)
 };
 
 // Nis: NVIDIA Image Scaling v1.0.3 (spatial, any GPU). Fsr3, Dlss, Dlaa: temporal (Dlaa = DLSS at the input size).
