@@ -6,7 +6,7 @@ You need your own dump: the ExeFS of the 3.0.1 program and its romfs. No game da
 
 ## Requirements
 
-- **Native Windows 11 x86-64** with AVX2 *(initial release target — other systems such as Windows 10 or Linux / SteamOS / Wine / Proton are not officially supported yet, though future support is not ruled out and community forks adapting them are welcome)*
+- **Native Windows 11 x86-64** with AVX2 *(primary official release target covered by regression testing — **Windows 10 x64** and **Linux / SteamOS / Proton / Wine** receive best-effort compatibility without guaranteed full regression support; community PRs and forks adapting other environments are welcome)*
 - a GPU with Vulkan 1.3 (`VK_EXT_external_memory_host`)
 - 16 GB of RAM; the 3.0.1 romfs alone is 25.6 GB, and the build needs roughly as much again for the generated
   C++ and objects, so keep about 60 GB free during the build
@@ -17,8 +17,8 @@ You need your own dump: the ExeFS of the 3.0.1 program and its romfs. No game da
 | Hardware / Environment | Coverage | Current Notes & Open Issues |
 |---|---|---|
 | **AMD RDNA 2 / RDNA 4** (RX 6800 XT / 9070 XT) | Primary dev & benchmark | 59–60 fps typical, 43–52 fps open plains (`1440p` HDR10); mirror-capture fixes cloud-sea rim & motion shimmer; `v0.2.3` defers video prewarm (`#42`) and fixes `spirv_uint_samplers` declaration order for `amdvlk64.dll` |
-| **NVIDIA** (RTX series) | Community & partial repro | `#15` blinking/dialogue flicker fixed (`v0.2.3`, requires shader cache rebuild); `#44` RTX 40-series 3D shadow stripes fixed via `VK_EXT_depth_bias_control`; `#47`/`#39` 4K `DLAA`/`Quality` scaling restored; `#32` Tyrannotitan Kurodil freeze (TDR) remains open; see [`tools/shader/PATCHES.md`](../tools/shader/PATCHES.md) for NVIDIA validation state |
-| **Intel GPU / Other environments** | Out of initial scope / best-effort | Initial target is native Windows 11 x64; `#25` / `#33` startup & setup reports, `#45` `<CETCompat>false</CETCompat>` best-effort fix for Win 10 `spirv_harness.exe`; `#35` adds CPU `dav1d` drop recovery & SEH stackwalk guard (Linux/Wine/Proton unsupported initially, forks welcome) |
+| **NVIDIA** (RTX series) | Community & partial repro | `#15` blinking/dialogue flicker fixed (`v0.2.3`, requires shader cache rebuild); `#44` RTX 40-series 3D shadow stripes fixed via `[nvn] depth_bias_force_unorm` (`#51`/`#54` opt-in since `v0.2.4`); `#47`/`#39` 4K `DLAA`/`Quality` scaling restored; `#32` Tyrannotitan Kurodil freeze (TDR) remains open; see [`tools/shader/PATCHES.md`](../tools/shader/PATCHES.md) for NVIDIA validation state |
+| **Intel GPU / Other environments** | Best-effort compatibility | Primary target is native Windows 11 x64; `#49` fixes Intel `igvk64.dll` `vkGetPipelineCacheData` crash (`v0.2.4`); `#25` / `#33` startup & setup fixes, `#45` `<CETCompat>false</CETCompat>` and `#58` PowerShell 5.1 fallback for Win 10; `#35` adds CPU `dav1d` drop recovery & SEH stackwalk guard (Windows 10 & Linux/SteamOS/Proton/Wine best-effort, community PRs/forks welcome) |
 
 ## Measured frame rate
 
