@@ -282,6 +282,7 @@ VkExtent3D tex_extent(Texture* t, uint32_t level = 0);
 uint32_t tex_levels(Texture* t);
 uint32_t tex_layers(Texture* t);
 bool tex_is_depth(Texture* t);
+bool tex_copy_source_ok(Texture* t);   // the image exists, holds content, is single-sampled and can be a copy source
 // Sampled image view for a binding (cached). Null when impossible (the caller binds the dummy view).
 VkImageView tex_sampled_view(Texture* t, const ViewRequest& req);
 // Single-level, single-layer (or all layers when layer_count > 1) view for use as an attachment.

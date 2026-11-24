@@ -122,7 +122,7 @@ void cpu_hdr10_roundtrip(const float in[3], float out[3]) {
 struct Rig {
     std::unique_ptr<gfx::Device> dev;
     hdr::OutputPass pass;
-    gfx::Image src, dst;
+    gfx::Image src, dst, scene;      // scene: the picture before the UI (only the UI split case makes it)
     gfx::Buffer rb;                  // readback of the destination
     VkFormat dst_fmt = VK_FORMAT_UNDEFINED;
     uint32_t w = 0, h = 0, bpp = 0;  // destination size and bytes per texel
@@ -136,6 +136,7 @@ void teardown(Rig& r) {
     if (r.rb) r.dev->destroy_buffer(r.rb);
     if (r.dst) r.dev->destroy_image(r.dst);
     if (r.src) r.dev->destroy_image(r.src);
+    if (r.scene) r.dev->destroy_image(r.scene);
     const gfx::ValidationStats v = r.dev->validation_stats();
     std::printf("    validation: %llu errors, %llu warnings\n", static_cast<unsigned long long>(v.errors), static_cast<unsigned long long>(v.warnings));
     if (!v.first_error.empty()) std::printf("      first error: %s\n", v.first_error.c_str());
@@ -657,4 +658,295 @@ NXTEST(hdr10_highlight_expansion_lifts_display_white) {
     std::printf("    hdr10 expand: sRGB 128 -> %.4f (expected ~0.216), sRGB 255 -> %.4f (expected ~5.217 = 1200 nits)\n", mid, peak_hi);
     CHECK(mid > 0.19 && mid < 0.25);
     CHECK(peak_hi > 5.0 && peak_hi < 5.35);
+}
+
+// The UI split: where the copy before the UI differs from the presented picture, the pixel stays at paper white. Both the plain encode
+// and the FSR 1 path (2x, the copies read at the source size).
+NXTEST(hdr10_highlight_expansion_skips_ui) {
+    Rig r;
+    Teardown td{r};
+    if (!make_device(r)) {
+        nxtest::skip("no headless Vulkan device");
+        return;
+    }
+    if (!formats_supported(*r.dev, VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_A2B10G10R10_UNORM_PACK32)) {
+        nxtest::skip("needed format not supported");
+        return;
+    }
+    // presented: white everywhere; before the UI: white for x < 4, grey for x >= 4 (the UI drew white there)
+    std::vector<uint8_t> fin(8 * 8 * 4, 255), scene(8 * 8 * 4, 255);
+    for (uint32_t y = 0; y < 8; ++y)
+        for (uint32_t x = 4; x < 8; ++x) {
+            const size_t o = (static_cast<size_t>(y) * 8 + x) * 4;
+            scene[o + 0] = scene[o + 1] = scene[o + 2] = 128;
+        }
+    REQUIRE(upload_source(r, VK_FORMAT_R8G8B8A8_SRGB, 8, 8, scene));
+    r.scene = r.src;
+    r.src = gfx::Image();
+    REQUIRE(upload_source(r, VK_FORMAT_R8G8B8A8_SRGB, 8, 8, fin));
+    for (const uint32_t scale : {1u, 2u}) {
+        const uint32_t w = 8 * scale;
+        if (r.rb) r.dev->destroy_buffer(r.rb);
+        if (r.dst) r.dev->destroy_image(r.dst);
+        r.rb = gfx::Buffer();
+        r.dst = gfx::Image();
+        REQUIRE(make_dst(r, VK_FORMAT_A2B10G10R10_UNORM_PACK32, w, w, 4));
+        hdr::OutputParams p = base_params(r, 8, 8);
+        p.out = hdr::OutputKind::Hdr10;
+        p.src_linear = true;
+        p.paper_white_nits = 230.0f;
+        p.peak_nits = 1200.0f;
+        p.expand_ratio = 1200.0f / 230.0f;
+        p.scene = r.scene.view;
+        p.fsr1 = scale > 1;
+        std::vector<uint8_t> got;
+        CHECK_EQ(run_pass(r, p, &got), 2);
+        std::vector<float> lin;
+        REQUIRE(hdr::decode_hdr_capture(hdr::CaptureFormat::A2B10G10R10, got.data(), w, w, 230.0f, &lin, nullptr, nullptr, nullptr));
+        const double scene_px = lin[(1 * w + 1 * scale) * 3];
+        const double ui_px = lin[(1 * w + 6 * scale) * 3];
+        std::printf("    scale %u: scene white -> %.4f (expected ~5.217), UI white -> %.4f (expected ~1.0)\n", scale, scene_px, ui_px);
+        CHECK(scene_px > 5.0 && scene_px < 5.35);
+        CHECK(ui_px > 0.95 && ui_px < 1.05);
+    }
+}
+
+// ---- the highlight expansion and the picture controls (CPU reference of the encode shader) --------------------------------------------
+
+namespace {
+
+// 8x8 RGBA8 grey levels: column x has v[x] in all three channels, alpha 255.
+std::vector<uint8_t> grey_columns(const uint8_t v[8]) {
+    std::vector<uint8_t> s(8 * 8 * 4);
+    for (uint32_t y = 0; y < 8; ++y)
+        for (uint32_t x = 0; x < 8; ++x) {
+            const size_t o = (static_cast<size_t>(y) * 8 + x) * 4;
+            s[o + 0] = s[o + 1] = s[o + 2] = v[x];
+            s[o + 3] = 255;
+        }
+    return s;
+}
+
+// The shader's picture controls on one grey channel (the luma of a grey is the grey, so saturation does not move it).
+double cpu_picture(double c, const float adj[4]) {
+    const double b = adj[2];
+    c = b < 0.0 ? (c + b) / (1.0 + b) : b + c * (1.0 - b);
+    c = (c - 0.5) * adj[0] + 0.5;
+    return std::pow(std::max(c, 0.0), 1.0 / adj[3]);
+}
+
+// The shader's HDR path for a grey sRGB byte, in paper-white units before the peak limit: sRGB decode, the picture controls (when adj is
+// set) on rgb^(1/2.2), then the highlight expansion toward ratio.
+double cpu_hdr_grey(uint8_t v, const float* adj, double ratio) {
+    double l = hdr::srgb_eotf(v / 255.0f);
+    if (adj) l = std::pow(cpu_picture(std::pow(l, 1.0 / 2.2), adj), 2.2);
+    if (ratio > 1.001) {
+        const double u = std::clamp((l - 0.25) / 0.75, 0.0, 1.0);
+        l *= 1.0 + (ratio - 1.0) * std::pow(u, 2.2);
+    }
+    return l;
+}
+
+}  // namespace
+
+// The expansion through the FSR 1 path (2x): white still reaches the peak, mid grey stays at its level.
+NXTEST(hdr10_highlight_expansion_through_fsr1) {
+    Rig r;
+    Teardown td{r};
+    if (!make_device(r)) {
+        nxtest::skip("no headless Vulkan device");
+        return;
+    }
+    if (!formats_supported(*r.dev, VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_A2B10G10R10_UNORM_PACK32)) {
+        nxtest::skip("needed format not supported");
+        return;
+    }
+    const uint8_t v[8] = {128, 128, 128, 128, 255, 255, 255, 255};
+    REQUIRE(upload_source(r, VK_FORMAT_R8G8B8A8_SRGB, 8, 8, grey_columns(v)));
+    REQUIRE(make_dst(r, VK_FORMAT_A2B10G10R10_UNORM_PACK32, 16, 16, 4));
+    hdr::OutputParams p = base_params(r, 8, 8);
+    p.out = hdr::OutputKind::Hdr10;
+    p.src_linear = true;
+    p.paper_white_nits = 230.0f;
+    p.peak_nits = 1200.0f;
+    p.expand_ratio = 1200.0f / 230.0f;
+    p.fsr1 = true;
+    std::vector<uint8_t> got;
+    CHECK_EQ(run_pass(r, p, &got), 2);
+    CHECK_EQ(r.pass.fsr_frames(), 1u);
+    std::vector<float> lin;
+    REQUIRE(hdr::decode_hdr_capture(hdr::CaptureFormat::A2B10G10R10, got.data(), 16, 16, 230.0f, &lin, nullptr, nullptr, nullptr));
+    const double mid = lin[(4 * 16 + 2) * 3], hi = lin[(4 * 16 + 13) * 3];
+    std::printf("    fsr1 expand: sRGB 128 -> %.4f (expected ~0.216), sRGB 255 -> %.4f (expected ~5.217)\n", mid, hi);
+    CHECK(mid > 0.19 && mid < 0.25);
+    CHECK(hi > 5.0 && hi < 5.35);
+}
+
+// The expansion on scRGB: the levels of the formula, limited by the peak.
+NXTEST(scrgb_highlight_expansion) {
+    Rig r;
+    Teardown td{r};
+    if (!make_device(r)) {
+        nxtest::skip("no headless Vulkan device");
+        return;
+    }
+    if (!formats_supported(*r.dev, VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_R16G16B16A16_SFLOAT)) {
+        nxtest::skip("needed format not supported");
+        return;
+    }
+    const uint8_t v[8] = {0, 64, 128, 180, 210, 235, 250, 255};
+    REQUIRE(upload_source(r, VK_FORMAT_R8G8B8A8_SRGB, 8, 8, grey_columns(v)));
+    REQUIRE(make_dst(r, VK_FORMAT_R16G16B16A16_SFLOAT, 8, 8, 8));
+    hdr::OutputParams p = base_params(r, 8, 8);
+    p.out = hdr::OutputKind::ScRgb;
+    p.src_linear = true;
+    p.expand_ratio = 1.0f + 0.4f * (kPeak / kPaper - 1.0f);
+    std::vector<uint8_t> got;
+    CHECK_EQ(run_pass(r, p, &got), 3);
+    std::vector<float> lin;
+    REQUIRE(hdr::decode_hdr_capture(hdr::CaptureFormat::Rgba16F, got.data(), 8, 8, kPaper, &lin, nullptr, nullptr, nullptr));
+    size_t bad = 0;
+    for (uint32_t x = 0; x < 8; ++x) {
+        const double want = std::min(cpu_hdr_grey(v[x], nullptr, p.expand_ratio), static_cast<double>(kPeakRatio));
+        const double g = lin[(3 * 8 + x) * 3];
+        if (!close_to(g, want, 0.01, 0.002)) {
+            ++bad;
+            std::printf("    column %u: got %.4f, expected %.4f\n", x, g, want);
+        }
+    }
+    CHECK_EQ(bad, 0ull);
+}
+
+// The picture controls in the SDR copy mode, against the formula.
+NXTEST(picture_controls_sdr) {
+    Rig r;
+    Teardown td{r};
+    if (!make_device(r)) {
+        nxtest::skip("no headless Vulkan device");
+        return;
+    }
+    if (!formats_supported(*r.dev, VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8G8B8A8_UNORM)) {
+        nxtest::skip("needed format not supported");
+        return;
+    }
+    const uint8_t v[8] = {0, 16, 64, 100, 128, 180, 230, 255};
+    REQUIRE(upload_source(r, VK_FORMAT_R8G8B8A8_UNORM, 8, 8, grey_columns(v)));
+    REQUIRE(make_dst(r, VK_FORMAT_R8G8B8A8_UNORM, 8, 8, 4));
+    hdr::OutputParams p = base_params(r, 8, 8);
+    p.out = hdr::OutputKind::Sdr8;
+    p.picture = true;
+    const float adj[4] = {1.1f, 1.15f, -0.03f, 1.2f};
+    for (int i = 0; i < 4; ++i) p.pic[i] = adj[i];
+    std::vector<uint8_t> got;
+    CHECK_EQ(run_pass(r, p, &got), 0);
+    size_t bad = 0;
+    for (uint32_t x = 0; x < 8; ++x) {
+        const double want = std::clamp(cpu_picture(v[x] / 255.0, adj), 0.0, 1.0) * 255.0;
+        const int g = got[(3 * 8 + x) * 4];
+        if (std::fabs(g - want) > 1.01) {
+            ++bad;
+            std::printf("    column %u: got %d, expected %.2f\n", x, g, want);
+        }
+    }
+    CHECK_EQ(bad, 0ull);
+}
+
+// The picture controls and the expansion together on HDR10, against the formula.
+NXTEST(picture_controls_hdr10_with_expansion) {
+    Rig r;
+    Teardown td{r};
+    if (!make_device(r)) {
+        nxtest::skip("no headless Vulkan device");
+        return;
+    }
+    if (!formats_supported(*r.dev, VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_A2B10G10R10_UNORM_PACK32)) {
+        nxtest::skip("needed format not supported");
+        return;
+    }
+    const uint8_t v[8] = {16, 64, 100, 128, 180, 210, 235, 255};
+    REQUIRE(upload_source(r, VK_FORMAT_R8G8B8A8_SRGB, 8, 8, grey_columns(v)));
+    REQUIRE(make_dst(r, VK_FORMAT_A2B10G10R10_UNORM_PACK32, 8, 8, 4));
+    hdr::OutputParams p = base_params(r, 8, 8);
+    p.out = hdr::OutputKind::Hdr10;
+    p.src_linear = true;
+    p.expand_ratio = 1.0f + 0.4f * (kPeak / kPaper - 1.0f);
+    p.picture = true;
+    const float adj[4] = {1.03f, 1.15f, -0.02f, 1.0f};
+    for (int i = 0; i < 4; ++i) p.pic[i] = adj[i];
+    std::vector<uint8_t> got;
+    CHECK_EQ(run_pass(r, p, &got), 2);
+    std::vector<float> lin;
+    REQUIRE(hdr::decode_hdr_capture(hdr::CaptureFormat::A2B10G10R10, got.data(), 8, 8, kPaper, &lin, nullptr, nullptr, nullptr));
+    size_t bad = 0;
+    for (uint32_t x = 0; x < 8; ++x) {
+        const double want = std::min(cpu_hdr_grey(v[x], adj, p.expand_ratio), static_cast<double>(kPeakRatio));
+        const double g = lin[(3 * 8 + x) * 3];
+        if (!close_to(g, want, 0.02, 0.01)) {
+            ++bad;
+            std::printf("    column %u: got %.4f, expected %.4f\n", x, g, want);
+        }
+    }
+    CHECK_EQ(bad, 0ull);
+}
+
+// A copy before the UI that equals the presented picture (no UI drawn) gives exactly the picture of no copy at all, with the picture
+// controls on, in both HDR formats and through FSR 1.
+NXTEST(ui_split_without_ui_changes_nothing) {
+    Rig r;
+    Teardown td{r};
+    if (!make_device(r)) {
+        nxtest::skip("no headless Vulkan device");
+        return;
+    }
+    if (!formats_supported(*r.dev, VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_A2B10G10R10_UNORM_PACK32) ||
+        !formats_supported(*r.dev, VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_R16G16B16A16_SFLOAT)) {
+        nxtest::skip("needed format not supported");
+        return;
+    }
+    std::vector<uint8_t> src(8 * 8 * 4);
+    uint32_t s = 777u;
+    for (size_t i = 0; i < src.size(); i += 4) {
+        for (int c = 0; c < 3; ++c) {
+            s = s * 1664525u + 1013904223u;
+            src[i + c] = static_cast<uint8_t>(s >> 24);
+        }
+        src[i + 3] = 255;
+    }
+    REQUIRE(upload_source(r, VK_FORMAT_R8G8B8A8_SRGB, 8, 8, src));
+    r.scene = r.src;
+    r.src = gfx::Image();
+    REQUIRE(upload_source(r, VK_FORMAT_R8G8B8A8_SRGB, 8, 8, src));
+    struct Case {
+        VkFormat fmt;
+        uint32_t bpp;
+        hdr::OutputKind out;
+        uint32_t size;
+    };
+    const Case cases[] = {{VK_FORMAT_A2B10G10R10_UNORM_PACK32, 4, hdr::OutputKind::Hdr10, 8},
+                          {VK_FORMAT_R16G16B16A16_SFLOAT, 8, hdr::OutputKind::ScRgb, 8},
+                          {VK_FORMAT_A2B10G10R10_UNORM_PACK32, 4, hdr::OutputKind::Hdr10, 16}};
+    for (const Case& c : cases) {
+        if (r.rb) r.dev->destroy_buffer(r.rb);
+        if (r.dst) r.dev->destroy_image(r.dst);
+        r.rb = gfx::Buffer();
+        r.dst = gfx::Image();
+        REQUIRE(make_dst(r, c.fmt, c.size, c.size, c.bpp));
+        hdr::OutputParams p = base_params(r, 8, 8);
+        p.out = c.out;
+        p.src_linear = true;
+        p.expand_ratio = 1.0f + 0.8f * (kPeak / kPaper - 1.0f);
+        p.fsr1 = c.size > 8;
+        p.picture = true;
+        const float adj[4] = {1.1f, 1.15f, -0.03f, 1.0f};
+        for (int i = 0; i < 4; ++i) p.pic[i] = adj[i];
+        std::vector<uint8_t> plain, split;
+        REQUIRE(run_pass(r, p, &plain) >= 0);
+        p.scene = r.scene.view;
+        REQUIRE(run_pass(r, p, &split) >= 0);
+        size_t diff = 0;
+        for (size_t i = 0; i < plain.size(); ++i)
+            if (plain[i] != split[i]) ++diff;
+        std::printf("    format %d, %ux%u: %zu of %zu bytes differ\n", static_cast<int>(c.fmt), c.size, c.size, diff, plain.size());
+        CHECK_EQ(diff, 0ull);
+    }
 }

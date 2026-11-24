@@ -28,6 +28,10 @@ struct State {
     Img copy[2], bb[2];
     uint32_t cur = 0;
     uint64_t frames = 0, captures = 0, whole = 0;
+    bool split = false;              // [hdr] ui_split is in use: capture every frame, not only after a DLSS evaluation
+    bool copy_failed = false;        // the copy image could not be made: no more captures (logged once)
+    Img* shown = nullptr;            // the copy the last present used for the HDR UI split (kept for repeated presents)
+    uint64_t split_frames = 0, split_used = 0;
 };
 State& st() {
     static State s;
@@ -87,13 +91,15 @@ bool is_window_texture(const State& s, Texture* t) {
 
 // The texture's level 0 into copy[cur] (TRANSFER_DST layout afterwards). No pass open.
 bool copy_texture(State& s, Frame& f, Texture* t) {
-    if (!tex_gpu(t) || tex_is_depth(t)) return false;
+    if (!tex_gpu(t) || tex_is_depth(t) || !tex_copy_source_ok(t)) return false;
     const VkExtent3D e = tex_image_extent(t, 0);
     const VkFormat fmt = hudless_copy_format(tex_vk_format(t), extras::hdr_state().scene_hdr);
     Img& c = s.copy[s.cur];
     if (!ensure(c, VkExtent2D{e.width, e.height}, fmt,
-                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, "framegen hudless copy"))
+                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, "framegen hudless copy")) {
+        s.copy_failed = true;
         return false;
+    }
     tex_transition(t, f, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
     to(f.cb, c, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     VkImageCopy r = {};
@@ -123,7 +129,7 @@ void fg_note_eval() {
 
 bool fg_hudless_candidate(Texture* t, bool blended) {
     State& s = st();
-    return blended && s.after_eval && !s.captured && t && is_window_texture(s, t);
+    return blended && !s.copy_failed && (s.after_eval || (s.split && !fg_hudless_on())) && !s.captured && t && is_window_texture(s, t);
 }
 
 void fg_hudless_capture(Frame& f, Texture* t) {
@@ -136,10 +142,29 @@ void fg_hudless_capture(Frame& f, Texture* t) {
     }
 }
 
+VkImageView hdr_scene_view(Texture* presented, Frame& f, bool again) {
+    State& s = st();
+    static const bool on = config_get_bool("hdr", "ui_split", true);
+    const extras::HdrState hs = extras::hdr_state();
+    s.split = on && hs.scene_hdr && hs.output != extras::OutputKind::Sdr8 && hs.peak_ratio > 1.001f;
+    if (!again) {
+        s.shown = (s.split && presented && s.captured == presented) ? &s.copy[s.cur] : nullptr;
+        if (s.split) {
+            s.split_used += s.shown ? 1 : 0;
+            if (s.split_frames++ % 3600 == 0)
+                NXLOG_I(kTag, "HDR UI split: %llu of %llu frames had a copy before the UI (the others expand the whole picture)",
+                        static_cast<unsigned long long>(s.split_used), static_cast<unsigned long long>(s.split_frames));
+        }
+    }
+    if (!s.split || !s.shown || !s.shown->img.image) return VK_NULL_HANDLE;
+    to(f.cb, *s.shown, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    return s.shown->img.view;
+}
+
 void fg_hudless_present(Window* w, Texture* presented, Frame& f, VkExtent2D bb, VkFormat bb_format, bool again,
                         const std::function<void(VkImageView, VkImageView)>& draw) {
-    if (!fg_hudless_on()) return;
     State& s = st();
+    if (!fg_hudless_on() && !s.split) return;
     if (w) {
         s.window.clear();
         for (const auto& t : w->textures) s.window.push_back(t.get());
@@ -148,6 +173,10 @@ void fg_hudless_present(Window* w, Texture* presented, Frame& f, VkExtent2D bb, 
     Texture* cap = s.captured;
     s.after_eval = false;
     s.captured = nullptr;
+    if (!fg_hudless_on()) {
+        if (cap && !again) s.cur ^= 1u;   // keep the copy just presented while the next frame fills the other one
+        return;
+    }
     if (again || !eval || !presented || !extras::framegen_running()) return;
     if (cap != presented) {   // no blended draw into the window texture after the scene: nothing known about the UI
         ++s.whole;

@@ -21,6 +21,7 @@ struct EncodePush {
     float src[4];     // whole source size, z = flip
     float p[4];       // x = mode, y = paper white nits, z = peak nits, w = 1: apply the picture controls
     float adj[4];     // picture controls: contrast, saturation, black, gamma
+    float scn[4];     // the picture in the scene / final copies' UV: x, y, w, h
 };
 VkShaderModule make_module(VkDevice d, const uint32_t* code, size_t bytes) {
     VkShaderModuleCreateInfo mi = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
@@ -75,10 +76,14 @@ bool OutputPass::init(gfx::Device& dev) {
         if (ok) vk_gauge_pipeline_layouts().add(1);
         return ok;
     };
-    if (!set_layout({{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}}, &enc_set_layout_)) return fail("encode set layout");
+    if (!set_layout({{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+                     {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+                     {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}},
+                    &enc_set_layout_))
+        return fail("encode set layout");
     if (!pipe_layout(enc_set_layout_, VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(EncodePush), &enc_layout_)) return fail("encode pipeline layout");
 
-    const VkDescriptorPoolSize ps = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kSetRing};
+    const VkDescriptorPoolSize ps = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3 * kSetRing};
     VkDescriptorPoolCreateInfo dpi = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     dpi.maxSets = kSetRing;
     dpi.poolSizeCount = 1;
@@ -188,7 +193,8 @@ VkPipeline OutputPass::encode_pipeline(VkFormat fmt) {
 }
 
 void OutputPass::encode(VkCommandBuffer cb, VkImageView dst_view, VkFormat dst_format, VkExtent2D dst_extent, VkImageView src, VkExtent2D src_extent, const int32_t crop_in[4],
-                        bool keep_aspect, bool flip_y, int mode, float paper, float peak, float expand_ratio, VkImageLayout src_layout, const float* pic) {
+                        bool keep_aspect, bool flip_y, int mode, float paper, float peak, float expand_ratio, VkImageLayout src_layout, const float* pic,
+                        VkImageView scene, VkImageView fin, const float* scn) {
     VkPipeline pipe = encode_pipeline(dst_format);
     if (!pipe) return;
     const int32_t sw = static_cast<int32_t>(src_extent.width), sh = static_cast<int32_t>(src_extent.height);
@@ -235,16 +241,27 @@ void OutputPass::encode(VkCommandBuffer cb, VkImageView dst_view, VkFormat dst_f
     pc.p[2] = peak;
     pc.p[3] = pic ? 1.0f : 0.0f;
     for (int i = 0; i < 4; ++i) pc.adj[i] = pic ? pic[i] : (i == 2 ? 0.0f : 1.0f);
+    const float own[4] = {static_cast<float>(cx / sw), static_cast<float>(cy / sh), static_cast<float>(cw / sw), static_cast<float>(ch / sh)};
+    for (int i = 0; i < 4; ++i) pc.scn[i] = scn ? scn[i] : own[i];
+    if (!fin) fin = src;
+    if (!scene) scene = fin;
 
     VkDescriptorSet set = enc_sets_[next_enc_];
     next_enc_ = (next_enc_ + 1) % kSetRing;
-    VkDescriptorImageInfo dii = {nearest ? nearest_ : linear_, src, src_layout};
-    VkWriteDescriptorSet w = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    w.dstSet = set;
-    w.descriptorCount = 1;
-    w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    w.pImageInfo = &dii;
-    vkUpdateDescriptorSets(dev_->device(), 1, &w, 0, nullptr);
+    const VkImageLayout fin_layout = fin == src ? src_layout : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    const VkDescriptorImageInfo dii[3] = {{nearest ? nearest_ : linear_, src, src_layout},
+                                          {linear_, scene, scene == fin ? fin_layout : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                                          {linear_, fin, fin_layout}};
+    VkWriteDescriptorSet w[3] = {};
+    for (uint32_t i = 0; i < 3; ++i) {
+        w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[i].dstSet = set;
+        w[i].dstBinding = i;
+        w[i].descriptorCount = 1;
+        w[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w[i].pImageInfo = &dii[i];
+    }
+    vkUpdateDescriptorSets(dev_->device(), 3, w, 0, nullptr);
 
     VkRenderingAttachmentInfo att = {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
     att.imageView = dst_view;
@@ -305,11 +322,14 @@ int OutputPass::record(VkCommandBuffer cb, VkImageView dst_view, VkFormat dst_fo
         // display-referred picture: the HDR window texture is 1.0 = paper white, so no pre-scale; SDR bytes are already [0,1]
         if (VkImageView up = su ? su->upscale(cb, p.src, in_view, p.src_extent, out, p.src_linear, 1.0f, p.sharpness) : VK_NULL_HANDLE) {
             const int32_t whole[4] = {0, 0, 0, 0};
-            encode(cb, dst_view, dst_format, dst_extent, up, VkExtent2D{upw, uph}, whole, p.keep_aspect, p.flip_y, mode, p.paper_white_nits, p.peak_nits, p.expand_ratio, VK_IMAGE_LAYOUT_GENERAL, pic);
+            const float scn[4] = {0.0f, 0.0f, static_cast<float>(cw / sw), static_cast<float>(ch / sh)};
+            encode(cb, dst_view, dst_format, dst_extent, up, VkExtent2D{upw, uph}, whole, p.keep_aspect, p.flip_y, mode, p.paper_white_nits, p.peak_nits, p.expand_ratio, VK_IMAGE_LAYOUT_GENERAL, pic,
+                   p.scene, p.src, scn);
             return mode;
         }
     }
-    encode(cb, dst_view, dst_format, dst_extent, p.src, p.src_extent, p.crop, p.keep_aspect, p.flip_y, mode, p.paper_white_nits, p.peak_nits, p.expand_ratio, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, pic);
+    encode(cb, dst_view, dst_format, dst_extent, p.src, p.src_extent, p.crop, p.keep_aspect, p.flip_y, mode, p.paper_white_nits, p.peak_nits, p.expand_ratio, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, pic,
+           p.scene, p.src, nullptr);
     return mode;
 }
 
