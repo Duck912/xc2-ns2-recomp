@@ -1712,19 +1712,36 @@ void prepare_textures(const ProgLayout& pl) {
                         r.tex->dbg_file[0] ? " from " : "", r.tex->dbg_file);
         }
         if (!tex_gpu(r.tex)) continue;
-        // owned by the pass; a compute dispatch runs outside every pass, so the graphics attachments do not own what it samples
-        if (shares_image(r.tex, S.depth_tex.get()) || (d.nvn_stage != kCompute && is_color_feedback(r.tex))) continue;
+        const bool depth_owned = shares_image(r.tex, S.depth_tex.get());
+        const bool fb_owned = d.nvn_stage != kCompute && is_color_feedback(r.tex);
         if (uint_tex_patch && d.nvn_stage == kFragment && d.index >= 0 && d.index < 64 &&
-            b.image.component == ScalarType::Float && !tex_is_depth(r.tex)) {
-            const VkFormat tf = tex_vk_format(r.tex);
-            if (vk_format_is_integer(tf) && !vk_format_is_signed_int(tf)) {
+            b.image.component == ScalarType::Float && !b.image.depth) {
+            bool want_uint = false;
+            if (!tex_is_depth(r.tex)) {
+                const VkFormat tf = tex_vk_format(r.tex);
+                want_uint = vk_format_is_integer(tf) && !vk_format_is_signed_int(tf);
+            } else if (!fb_owned && tex_aspect(r.tex) == (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) {
+                // Depth-stencil STENCIL plane sampled through a float sampler (#4, #39, #44, #54): rewrite to usampler at runtime
+                // (matching patch_ds_samplers.py) so NVIDIA (where ds_stencil_bits defaults to 0 and float samplers read DEPTH32F,
+                // causing iso-depth stripes in a299a459/292faa92) and AMD both read S8_UINT legally.
+                int dsmode = r.tex->b.depth_stencil_mode;
+                if (r.has_view && r.view.has_depth_stencil_mode) dsmode = r.view.depth_stencil_mode;
+                static const std::string ds_depth_list = nxrt::config_get_str("nvn", "ds_depth_shaders", "");
+                const bool in_ds_depth = !ds_depth_list.empty() && ds_depth_list.find(d.shader->hash) != std::string::npos;
+                want_uint = (dsmode != NVN_TEXTURE_DEPTH_STENCIL_MODE_DEPTH) && !in_ds_depth;
+            }
+            if (want_uint) {
                 uint_samplers |= 1ull << d.index;
                 if (first_time_key("uint-tex-patch " + d.shader->hash + " " + std::to_string(b.set) + " " + std::to_string(b.binding))) {
-                    NXLOG_I(kTag, "uint_tex_patch: fs %s s%ub%u (%s) samples integer texture %u (%s) as usampler",
-                            d.shader->hash.c_str(), b.set, b.binding, b.name.c_str(), r.tex->id, r.tex->fmt ? r.tex->fmt->name : "?");
+                    NXLOG_I(kTag, "uint_tex_patch: fs %s s%ub%u (%s) samples %s texture %u (%s) as usampler",
+                            d.shader->hash.c_str(), b.set, b.binding, b.name.c_str(),
+                            tex_is_depth(r.tex) ? "stencil plane of" : "integer",
+                            r.tex->id, r.tex->fmt ? r.tex->fmt->name : "?");
                 }
             }
         }
+        // owned by the pass; a compute dispatch runs outside every pass, so the graphics attachments do not own what it samples
+        if (depth_owned || fb_owned) continue;
         if (r.tex->cpu_dirty.load() || tex_layout(r.tex) != tex_sampled_layout(r.tex)) {
             need.push_back(r.tex);
             if (r.tex->cpu_dirty.load() && ft::on()) ft::mark(b.nvn.source == NvnSource::SamplerBinding ? "tx.dirty_bind" : "tx.dirty_uniform", r.tex->id);
@@ -2653,9 +2670,10 @@ VkDescriptorSet build_set(const ProgLayout& pl, uint32_t set) {
                             }
                         }
                         const VkFormat ivf = tex_vk_format(r.tex);
-                        if (!tex_is_depth(r.tex) && vk_format_is_integer(ivf)) {
+                        if (vr.component == 2 || vr.component == 3 || (!tex_is_depth(r.tex) && vk_format_is_integer(ivf))) {
                             s.min_filter = NVN_MIN_FILTER_NEAREST;
                             s.mag_filter = NVN_MAG_FILTER_NEAREST;
+                            s.max_anisotropy = 1.0f;
                         }
                         static const bool depth_nearest = nxrt::config_get_bool("nvn", "depth_sampler_nearest", false);
                         if (depth_nearest) {
@@ -6466,8 +6484,16 @@ void run_list(const CmdList& list, int depth) {
                 // VK_KHR_dynamic_rendering_local_read).
                 if (P.open && P.color_feedback != 0 && !P.depth_ro && P.color_general == 0 &&
                     (pb.bits & ~(0x01u | 0x02u | 0x04u | 0x10u)) == 0) {
+                    Texture* fb_color[8] = {};
+                    const uint32_t fb_n = std::min<uint32_t>(P.ncolor, 8u);
+                    for (uint32_t i = 0; i < fb_n; ++i) fb_color[i] = P.color[i].tex;
                     end_pass(true);
-                    g_pending.clear();
+                    // Only clear the current color attachments covered by the narrow color feedback barrier below;
+                    // preserve P.depth and any earlier passes' unflushed entries in g_pending.
+                    g_pending.erase(std::remove_if(g_pending.begin(), g_pending.end(), [&](const PendingWrite& w) {
+                        for (uint32_t i = 0; i < fb_n; ++i) if (fb_color[i] && same_image(w.tex.get(), fb_color[i])) return true;
+                        return false;
+                    }), g_pending.end());
                     VkMemoryBarrier2 mb = {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
                     mb.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
                     mb.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
