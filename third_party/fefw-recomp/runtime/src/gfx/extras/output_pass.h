@@ -64,10 +64,17 @@ public:
     static constexpr uint32_t kSetRing = 16;
 
 private:
+    // The picture one encode draw reads: OutputParams::src, or its upscale (then scn is where the picture sits in OutputParams::src).
+    struct EncodeInput {
+        VkImageView view = VK_NULL_HANDLE;
+        VkExtent2D extent = {};
+        const int32_t* crop = nullptr;   // x, y, w, h in texels (null, or w or h 0: the whole image)
+        VkImageLayout layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        bool upscaled = false;
+        float scn[4] = {};               // upscaled: the picture in OutputParams::src (and its copy before the UI) in UV
+    };
     VkPipeline encode_pipeline(VkFormat fmt);
-    void encode(VkCommandBuffer cb, VkImageView dst_view, VkFormat dst_format, VkExtent2D dst_extent, VkImageView src, VkExtent2D src_extent, const int32_t crop[4],
-                bool keep_aspect, bool flip_y, int mode, float paper, float peak, float expand_ratio, VkImageLayout src_layout, const float* pic,
-                VkImageView scene, VkImageView fin, const float* scn, float ui_scale);
+    void encode(VkCommandBuffer cb, VkImageView dst_view, VkFormat dst_format, VkExtent2D dst_extent, const EncodeInput& in, const OutputParams& p, int mode);
 
     gfx::Device* dev_ = nullptr;
     VkSampler linear_ = VK_NULL_HANDLE, nearest_ = VK_NULL_HANDLE;

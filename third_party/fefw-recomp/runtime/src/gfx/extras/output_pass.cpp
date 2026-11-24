@@ -193,12 +193,14 @@ VkPipeline OutputPass::encode_pipeline(VkFormat fmt) {
     return p;
 }
 
-void OutputPass::encode(VkCommandBuffer cb, VkImageView dst_view, VkFormat dst_format, VkExtent2D dst_extent, VkImageView src, VkExtent2D src_extent, const int32_t crop_in[4],
-                        bool keep_aspect, bool flip_y, int mode, float paper, float peak, float expand_ratio, VkImageLayout src_layout, const float* pic,
-                        VkImageView scene, VkImageView fin, const float* scn, float ui_scale) {
+void OutputPass::encode(VkCommandBuffer cb, VkImageView dst_view, VkFormat dst_format, VkExtent2D dst_extent, const EncodeInput& in, const OutputParams& p,
+                        int mode) {
     VkPipeline pipe = encode_pipeline(dst_format);
     if (!pipe) return;
-    const int32_t sw = static_cast<int32_t>(src_extent.width), sh = static_cast<int32_t>(src_extent.height);
+    const int32_t* crop_in = in.crop;
+    const bool keep_aspect = p.keep_aspect;
+    const float* pic = p.picture ? p.pic : nullptr;
+    const int32_t sw = static_cast<int32_t>(in.extent.width), sh = static_cast<int32_t>(in.extent.height);
     double cx = 0, cy = 0, cw = sw, ch = sh;
     if (crop_in && crop_in[2] > 0 && crop_in[3] > 0) {
         const int32_t x0 = std::clamp(crop_in[0], 0, sw - 1), y0 = std::clamp(crop_in[1], 0, sh - 1);
@@ -235,25 +237,25 @@ void OutputPass::encode(VkCommandBuffer cb, VkImageView dst_view, VkFormat dst_f
     pc.crop[3] = static_cast<float>(ch);
     pc.src[0] = static_cast<float>(sw);
     pc.src[1] = static_cast<float>(sh);
-    pc.src[2] = flip_y ? 1.0f : 0.0f;
-    pc.src[3] = expand_ratio;
+    pc.src[2] = p.flip_y ? 1.0f : 0.0f;
+    pc.src[3] = p.expand_ratio;
     pc.p[0] = static_cast<float>(mode);
-    pc.p[1] = paper;
-    pc.p[2] = peak;
+    pc.p[1] = p.paper_white_nits;
+    pc.p[2] = p.peak_nits;
     pc.p[3] = pic ? 1.0f : 0.0f;
     for (int i = 0; i < 4; ++i) pc.adj[i] = pic ? pic[i] : (i == 2 ? 0.0f : 1.0f);
     const float own[4] = {static_cast<float>(cx / sw), static_cast<float>(cy / sh), static_cast<float>(cw / sw), static_cast<float>(ch / sh)};
-    for (int i = 0; i < 4; ++i) pc.scn[i] = scn ? scn[i] : own[i];
-    pc.ui[0] = ui_scale;
-    if (!fin) fin = src;
-    if (!scene) scene = fin;
+    for (int i = 0; i < 4; ++i) pc.scn[i] = in.upscaled ? in.scn[i] : own[i];
+    pc.ui[0] = p.ui_scale;
 
+    // the UI split reads the presented picture and its copy before the UI at the source size; with no copy, the picture twice
+    const VkImageView fin = p.src;
+    const VkImageLayout fin_layout = fin == in.view ? in.layout : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    const VkImageView scene = p.scene ? p.scene : fin;
+    const VkImageLayout scene_layout = p.scene ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : fin_layout;
     VkDescriptorSet set = enc_sets_[next_enc_];
     next_enc_ = (next_enc_ + 1) % kSetRing;
-    const VkImageLayout fin_layout = fin == src ? src_layout : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    const VkDescriptorImageInfo dii[3] = {{nearest ? nearest_ : linear_, src, src_layout},
-                                          {linear_, scene, scene == fin ? fin_layout : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                                          {linear_, fin, fin_layout}};
+    const VkDescriptorImageInfo dii[3] = {{nearest ? nearest_ : linear_, in.view, in.layout}, {linear_, scene, scene_layout}, {linear_, fin, fin_layout}};
     VkWriteDescriptorSet w[3] = {};
     for (uint32_t i = 0; i < 3; ++i) {
         w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -297,8 +299,6 @@ int OutputPass::record(VkCommandBuffer cb, VkImageView dst_view, VkFormat dst_fo
         case OutputKind::ScRgb: mode = 3; break;
     }
 
-    const float* pic = p.picture ? p.pic : nullptr;
-
     // FSR 1: only when the picture on screen is larger than the source crop and the crop starts at the origin
     const int32_t sw = static_cast<int32_t>(p.src_extent.width), sh = static_cast<int32_t>(p.src_extent.height);
     const bool has_crop = p.crop[2] > 0 && p.crop[3] > 0;
@@ -323,15 +323,22 @@ int OutputPass::record(VkCommandBuffer cb, VkImageView dst_view, VkFormat dst_fo
                                                                                      : nullptr;
         // display-referred picture: the HDR window texture is 1.0 = paper white, so no pre-scale; SDR bytes are already [0,1]
         if (VkImageView up = su ? su->upscale(cb, p.src, in_view, p.src_extent, out, p.src_linear, 1.0f, p.sharpness) : VK_NULL_HANDLE) {
-            const int32_t whole[4] = {0, 0, 0, 0};
-            const float scn[4] = {0.0f, 0.0f, static_cast<float>(cw / sw), static_cast<float>(ch / sh)};
-            encode(cb, dst_view, dst_format, dst_extent, up, VkExtent2D{upw, uph}, whole, p.keep_aspect, p.flip_y, mode, p.paper_white_nits, p.peak_nits, p.expand_ratio, VK_IMAGE_LAYOUT_GENERAL, pic,
-                   p.scene, p.src, scn, p.ui_scale);
+            EncodeInput in;
+            in.view = up;
+            in.extent = out;
+            in.layout = VK_IMAGE_LAYOUT_GENERAL;
+            in.upscaled = true;
+            in.scn[2] = static_cast<float>(cw / sw);
+            in.scn[3] = static_cast<float>(ch / sh);
+            encode(cb, dst_view, dst_format, dst_extent, in, p, mode);
             return mode;
         }
     }
-    encode(cb, dst_view, dst_format, dst_extent, p.src, p.src_extent, p.crop, p.keep_aspect, p.flip_y, mode, p.paper_white_nits, p.peak_nits, p.expand_ratio, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, pic,
-           p.scene, p.src, nullptr, p.ui_scale);
+    EncodeInput in;
+    in.view = p.src;
+    in.extent = p.src_extent;
+    in.crop = p.crop;
+    encode(cb, dst_view, dst_format, dst_extent, in, p, mode);
     return mode;
 }
 

@@ -25,7 +25,7 @@
 #include "nvn_format.h"
 #include "nvn_gpu.h"
 #include "nvn_gpu_internal.h"
-#include "nvn_framegen.h"
+#include "nvn_hudless.h"
 #include "nvn_texdata.h"
 #include "nvn_texprep.h"
 #include "nvn_texture_layout.h"

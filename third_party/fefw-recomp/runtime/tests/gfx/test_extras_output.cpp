@@ -308,6 +308,63 @@ int run_pass(Rig& r, const hdr::OutputParams& p, std::vector<uint8_t>* out) {
 // and about 1 percent at 1000 nits, so 2 percent leaves margin.
 bool close_to(double got, double want, double rel, double abs_tol) { return std::fabs(got - want) <= std::max(rel * std::fabs(want), abs_tol); }
 
+// 8x8 RGBA8 grey levels: column x has v[x] in all three channels, alpha 255.
+std::vector<uint8_t> grey_columns(const uint8_t v[8]) {
+    std::vector<uint8_t> s(8 * 8 * 4);
+    for (uint32_t y = 0; y < 8; ++y)
+        for (uint32_t x = 0; x < 8; ++x) {
+            const size_t o = (static_cast<size_t>(y) * 8 + x) * 4;
+            s[o + 0] = s[o + 1] = s[o + 2] = v[x];
+            s[o + 3] = 255;
+        }
+    return s;
+}
+
+// The shader's picture controls on one grey channel (the luma of a grey is the grey, so saturation does not move it).
+double cpu_picture(double c, const float adj[4]) {
+    const double b = adj[2];
+    c = b < 0.0 ? (c + b) / (1.0 + b) : b + c * (1.0 - b);
+    c = (c - 0.5) * adj[0] + 0.5;
+    return std::pow(std::max(c, 0.0), 1.0 / adj[3]);
+}
+
+// The shader's HDR path for a grey sRGB byte, in paper-white units before the peak limit: sRGB decode, the picture controls (when adj is
+// set) on rgb^(1/2.2), then the highlight expansion toward ratio.
+double cpu_hdr_grey(uint8_t v, const float* adj, double ratio) {
+    double l = hdr::srgb_eotf(v / 255.0f);
+    if (adj) l = std::pow(cpu_picture(std::pow(l, 1.0 / 2.2), adj), 2.2);
+    if (ratio > 1.001) {
+        const double u = std::clamp((l - 0.25) / 0.75, 0.0, 1.0);
+        l *= 1.0 + (ratio - 1.0) * std::pow(u, 2.2);
+    }
+    return l;
+}
+
+// The UI split's two pictures, both uploaded: the copy before the UI into r.scene, the presented picture into r.src.
+bool upload_scene_and_final(Rig& r, const std::vector<uint8_t>& scene, const std::vector<uint8_t>& fin) {
+    if (!upload_source(r, VK_FORMAT_R8G8B8A8_SRGB, 8, 8, scene)) return false;
+    r.scene = r.src;
+    r.src = gfx::Image();
+    return upload_source(r, VK_FORMAT_R8G8B8A8_SRGB, 8, 8, fin);
+}
+
+// 8x8 white with UI on the right half: the presented picture is white everywhere, the copy before the UI is grey for x >= 4.
+void white_with_ui_on_the_right(std::vector<uint8_t>* scene, std::vector<uint8_t>* fin) {
+    const uint8_t s[8] = {255, 255, 255, 255, 128, 128, 128, 128}, f[8] = {255, 255, 255, 255, 255, 255, 255, 255};
+    *scene = grey_columns(s);
+    *fin = grey_columns(f);
+}
+
+// A new destination (and readback) of size x size, for a case that changes the destination.
+bool remake_dst(Rig& r, VkFormat fmt, uint32_t size, uint32_t bpp) {
+    if (r.rb) r.dev->destroy_buffer(r.rb);
+    if (r.dst) r.dev->destroy_image(r.dst);
+    r.rb = gfx::Buffer();
+    r.dst = gfx::Image();
+    return make_dst(r, fmt, size, size, bpp);
+}
+
+
 }  // namespace
 
 // ---- 1: HDR10 encode against the CPU reference --------------------------------------------------------------------------------------
@@ -673,24 +730,12 @@ NXTEST(hdr10_highlight_expansion_skips_ui) {
         nxtest::skip("needed format not supported");
         return;
     }
-    // presented: white everywhere; before the UI: white for x < 4, grey for x >= 4 (the UI drew white there)
-    std::vector<uint8_t> fin(8 * 8 * 4, 255), scene(8 * 8 * 4, 255);
-    for (uint32_t y = 0; y < 8; ++y)
-        for (uint32_t x = 4; x < 8; ++x) {
-            const size_t o = (static_cast<size_t>(y) * 8 + x) * 4;
-            scene[o + 0] = scene[o + 1] = scene[o + 2] = 128;
-        }
-    REQUIRE(upload_source(r, VK_FORMAT_R8G8B8A8_SRGB, 8, 8, scene));
-    r.scene = r.src;
-    r.src = gfx::Image();
-    REQUIRE(upload_source(r, VK_FORMAT_R8G8B8A8_SRGB, 8, 8, fin));
+    std::vector<uint8_t> scene, fin;
+    white_with_ui_on_the_right(&scene, &fin);
+    REQUIRE(upload_scene_and_final(r, scene, fin));
     for (const uint32_t scale : {1u, 2u}) {
         const uint32_t w = 8 * scale;
-        if (r.rb) r.dev->destroy_buffer(r.rb);
-        if (r.dst) r.dev->destroy_image(r.dst);
-        r.rb = gfx::Buffer();
-        r.dst = gfx::Image();
-        REQUIRE(make_dst(r, VK_FORMAT_A2B10G10R10_UNORM_PACK32, w, w, 4));
+        REQUIRE(remake_dst(r, VK_FORMAT_A2B10G10R10_UNORM_PACK32, w, 4));
         hdr::OutputParams p = base_params(r, 8, 8);
         p.out = hdr::OutputKind::Hdr10;
         p.src_linear = true;
@@ -713,41 +758,6 @@ NXTEST(hdr10_highlight_expansion_skips_ui) {
 
 // ---- the highlight expansion and the picture controls (CPU reference of the encode shader) --------------------------------------------
 
-namespace {
-
-// 8x8 RGBA8 grey levels: column x has v[x] in all three channels, alpha 255.
-std::vector<uint8_t> grey_columns(const uint8_t v[8]) {
-    std::vector<uint8_t> s(8 * 8 * 4);
-    for (uint32_t y = 0; y < 8; ++y)
-        for (uint32_t x = 0; x < 8; ++x) {
-            const size_t o = (static_cast<size_t>(y) * 8 + x) * 4;
-            s[o + 0] = s[o + 1] = s[o + 2] = v[x];
-            s[o + 3] = 255;
-        }
-    return s;
-}
-
-// The shader's picture controls on one grey channel (the luma of a grey is the grey, so saturation does not move it).
-double cpu_picture(double c, const float adj[4]) {
-    const double b = adj[2];
-    c = b < 0.0 ? (c + b) / (1.0 + b) : b + c * (1.0 - b);
-    c = (c - 0.5) * adj[0] + 0.5;
-    return std::pow(std::max(c, 0.0), 1.0 / adj[3]);
-}
-
-// The shader's HDR path for a grey sRGB byte, in paper-white units before the peak limit: sRGB decode, the picture controls (when adj is
-// set) on rgb^(1/2.2), then the highlight expansion toward ratio.
-double cpu_hdr_grey(uint8_t v, const float* adj, double ratio) {
-    double l = hdr::srgb_eotf(v / 255.0f);
-    if (adj) l = std::pow(cpu_picture(std::pow(l, 1.0 / 2.2), adj), 2.2);
-    if (ratio > 1.001) {
-        const double u = std::clamp((l - 0.25) / 0.75, 0.0, 1.0);
-        l *= 1.0 + (ratio - 1.0) * std::pow(u, 2.2);
-    }
-    return l;
-}
-
-}  // namespace
 
 // The expansion through the FSR 1 path (2x): white still reaches the peak, mid grey stays at its level.
 NXTEST(hdr10_highlight_expansion_through_fsr1) {
@@ -912,10 +922,7 @@ NXTEST(ui_split_without_ui_changes_nothing) {
         }
         src[i + 3] = 255;
     }
-    REQUIRE(upload_source(r, VK_FORMAT_R8G8B8A8_SRGB, 8, 8, src));
-    r.scene = r.src;
-    r.src = gfx::Image();
-    REQUIRE(upload_source(r, VK_FORMAT_R8G8B8A8_SRGB, 8, 8, src));
+    REQUIRE(upload_scene_and_final(r, src, src));
     struct Case {
         VkFormat fmt;
         uint32_t bpp;
@@ -926,11 +933,7 @@ NXTEST(ui_split_without_ui_changes_nothing) {
                           {VK_FORMAT_R16G16B16A16_SFLOAT, 8, hdr::OutputKind::ScRgb, 8},
                           {VK_FORMAT_A2B10G10R10_UNORM_PACK32, 4, hdr::OutputKind::Hdr10, 16}};
     for (const Case& c : cases) {
-        if (r.rb) r.dev->destroy_buffer(r.rb);
-        if (r.dst) r.dev->destroy_image(r.dst);
-        r.rb = gfx::Buffer();
-        r.dst = gfx::Image();
-        REQUIRE(make_dst(r, c.fmt, c.size, c.size, c.bpp));
+        REQUIRE(remake_dst(r, c.fmt, c.size, c.bpp));
         hdr::OutputParams p = base_params(r, 8, 8);
         p.out = c.out;
         p.src_linear = true;
@@ -964,16 +967,9 @@ NXTEST(hdr10_ui_brightness) {
         nxtest::skip("needed format not supported");
         return;
     }
-    std::vector<uint8_t> fin(8 * 8 * 4, 255), scene(8 * 8 * 4, 255);
-    for (uint32_t y = 0; y < 8; ++y)
-        for (uint32_t x = 4; x < 8; ++x) {
-            const size_t o = (static_cast<size_t>(y) * 8 + x) * 4;
-            scene[o + 0] = scene[o + 1] = scene[o + 2] = 128;
-        }
-    REQUIRE(upload_source(r, VK_FORMAT_R8G8B8A8_SRGB, 8, 8, scene));
-    r.scene = r.src;
-    r.src = gfx::Image();
-    REQUIRE(upload_source(r, VK_FORMAT_R8G8B8A8_SRGB, 8, 8, fin));
+    std::vector<uint8_t> scene, fin;
+    white_with_ui_on_the_right(&scene, &fin);
+    REQUIRE(upload_scene_and_final(r, scene, fin));
     REQUIRE(make_dst(r, VK_FORMAT_A2B10G10R10_UNORM_PACK32, 8, 8, 4));
     struct Case {
         float expand, ui;

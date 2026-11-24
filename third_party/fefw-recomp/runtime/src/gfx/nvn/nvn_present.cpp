@@ -17,6 +17,8 @@
 #include "extras/output_pass.h"
 #include "extras/framegen.h"
 #include "nvn_framegen.h"
+#include "nvn_hdr_ui.h"
+#include "nvn_hudless.h"
 #include "nxrt/frame_limiter.h"
 #include "nxrt/gauge.h"
 #include "nxrt/ftrace.h"
@@ -206,12 +208,7 @@ void present_on_render_thread(Window* w, int index, bool again) {
     // HDR scene / HDR swapchain / FSR 1 or NIS / picture controls go through the output pass (S14); everything else is the plain present pass of the SDR path
     const extras::PictureLive pic = extras::picture_live();
     extras::OutputPass* op = output_pass();
-    // HDR: the UI's own white ([hdr] ui_white_nits) and the highlight expansion both need the window texture before the UI
-    const bool hdr_out = decoded && hs.scene_hdr && hs.output != extras::OutputKind::Sdr8;
-    const double ui_nits = extras::settings().hdr.ui_white_nits;
-    const float ui_scale = hdr_out && ui_nits > 0 && hs.paper_white_nits > 0 ? static_cast<float>(ui_nits) / hs.paper_white_nits : 1.0f;
-    const bool split_wanted = hdr_out && (hs.peak_ratio > 1.001f || std::fabs(ui_scale - 1.0f) > 0.001f);
-    const VkImageView scene = decoded ? hdr_scene_view(t, f, again, split_wanted) : VK_NULL_HANDLE;
+    const HdrUiFrame hdr_ui = hdr_ui_frame(t, f, again, hs, decoded);
     auto draw_picture = [&](VkImageView from, VkImageView to) {   // also frame generation's HUD-less colour (nvn_framegen.h)
         if (op && (hs.scene_hdr || hs.output != extras::OutputKind::Sdr8 || extras::upscale_mode() == extras::UpscaleMode::Fsr1 ||
                    extras::upscale_mode() == extras::UpscaleMode::Nis || pic.active)) {
@@ -226,8 +223,8 @@ void present_on_render_thread(Window* w, int index, bool again) {
             prm.paper_white_nits = hs.paper_white_nits;
             prm.peak_nits = hs.peak_nits;
             prm.expand_ratio = (decoded && hs.scene_hdr && hs.output != extras::OutputKind::Sdr8) ? hs.peak_ratio : 1.0f;
-            prm.scene = from == src ? scene : VK_NULL_HANDLE;
-            prm.ui_scale = ui_scale;
+            prm.scene = from == src ? hdr_ui.scene : VK_NULL_HANDLE;
+            prm.ui_scale = hdr_ui.ui_scale;
             prm.fsr1 = extras::upscale_mode() == extras::UpscaleMode::Fsr1;
             prm.nis = extras::upscale_mode() == extras::UpscaleMode::Nis;
             prm.sharpness = extras::upscale_sharpness();
@@ -242,7 +239,8 @@ void present_on_render_thread(Window* w, int index, bool again) {
         }
     };
     draw_picture(src, fi.view);
-    fg_hudless_present(w, t, f, fi.extent, rend->format(), again, draw_picture);
+    fg_hudless_present(t, f, fi.extent, rend->format(), again, draw_picture);
+    hudless_end_present(w, again);
     // the frame's own submissions go first: in the present's submission ([nvn] submit_batch = frame), or on their own before it
     static thread_local std::vector<VkCommandBuffer> cmds;
     gfx::Renderer::SubmitPrefix pre;
