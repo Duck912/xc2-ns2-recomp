@@ -3,7 +3,6 @@
 #include "nvn_hdr_ui.h"
 
 #include "extras/hdr_math.h"
-#include "nvn_framegen.h"
 #include "nvn_hudless.h"
 #include "nxrt/config.h"
 #include "nxrt/log.h"
@@ -28,7 +27,7 @@ HdrUiFrame hdr_ui_frame(Texture* presented, Frame& f, bool again, const extras::
     const bool hdr_output = decoded && hs.scene_hdr && hs.output != extras::OutputKind::Sdr8;
     const extras::HdrUiSplit split = extras::hdr_ui_split(hdr_output, hs.peak_ratio, hs.paper_white_nits, extras::settings().hdr.ui_white_nits);
     const bool wanted = on && split.wanted;
-    hudless_want_every_frame(wanted && !fg_hudless_on());   // frame generation, when on, decides which frame is copied
+    hudless_want_every_frame(wanted);   // also with frame generation on: its copy is only made on frames with a DLSS evaluation
     HdrUiFrame r;
     r.ui_scale = split.ui_scale;
     if (!wanted) return r;

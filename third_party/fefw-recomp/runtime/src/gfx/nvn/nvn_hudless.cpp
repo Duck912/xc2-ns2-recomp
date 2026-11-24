@@ -87,7 +87,12 @@ VkFormat hudless_copy_format(VkFormat tex_fmt, bool scene_hdr) {
     return scene_hdr ? srgb_of(tex_fmt) : unorm_of(tex_fmt);
 }
 
-void hudless_want_this_frame() { st().want_frame = true; }
+void hudless_want_this_frame() {
+    State& s = st();
+    if (!s.want_frame) s.captured = nullptr;   // a copy made before the first ask is redone at the next blended draw
+    s.frame_failed = false;                    // each ask tries again after a failed copy
+    s.want_frame = true;
+}
 
 void hudless_want_every_frame(bool on) { st().want_always = on; }
 
@@ -144,6 +149,13 @@ void hudless_end_present(Window* w, bool again) {
     s.captured = nullptr;
     s.want_frame = false;
     s.frame_failed = false;
+}
+
+void hudless_shutdown() {
+    State& s = st();
+    for (TrackedImage& c : s.copy)
+        if (c.img.image) device().destroy_image(c.img);
+    s = State();
 }
 
 }  // namespace nxrt::nvn::be::gpu

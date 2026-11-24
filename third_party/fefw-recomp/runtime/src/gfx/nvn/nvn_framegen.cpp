@@ -18,7 +18,7 @@ struct State {
     bool after_eval = false;
     TrackedImage bb[2];
     uint32_t cur = 0;
-    uint64_t frames = 0, whole = 0;
+    uint64_t frames = 0, captured = 0, whole = 0;
 };
 State& st() {
     static State s;
@@ -51,6 +51,7 @@ void fg_hudless_present(Texture* presented, Frame& f, VkExtent2D bb, VkFormat bb
         ++s.whole;
         return;
     }
+    ++s.captured;
     TrackedImage& b = s.bb[s.cur];
     s.cur ^= 1u;
     if (!b.ensure(bb, bb_format, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
@@ -63,7 +64,7 @@ void fg_hudless_present(Texture* presented, Frame& f, VkExtent2D bb, VkFormat bb
     extras::framegen_hudless(f.cb, b.img.image, b.img.view, bb_format, bb);
     if (s.frames++ == 0 || s.frames % 1800 == 0)
         NXLOG_I(kTag, "HUD-less colour: %llu frames, %llu captured before the UI, %llu with no capture", static_cast<unsigned long long>(s.frames),
-                static_cast<unsigned long long>(hudless_capture_count()), static_cast<unsigned long long>(s.whole));
+                static_cast<unsigned long long>(s.captured), static_cast<unsigned long long>(s.whole));
 }
 
 }  // namespace nxrt::nvn::be::gpu

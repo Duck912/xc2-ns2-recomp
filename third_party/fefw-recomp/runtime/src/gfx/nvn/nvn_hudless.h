@@ -20,6 +20,7 @@ struct TrackedImage {
 VkFormat hudless_copy_format(VkFormat tex_fmt, bool scene_hdr);   // copy image format matching present's sRGB/UNORM view choice
 
 // Who wants a copy: frame generation for the current frame (after its DLSS evaluation), HDR for every frame while it needs one.
+// The first ask of a frame drops a copy made before it, so frame generation always gets the first blended draw after its evaluation.
 void hudless_want_this_frame();
 void hudless_want_every_frame(bool on);
 
@@ -34,5 +35,6 @@ uint64_t hudless_capture_count();     // copies made so far
 VkImageView hudless_view(Texture* presented, Frame& f, bool again);
 // present, after every user: the window's textures for the next captures; the next frame's copy goes to the other image
 void hudless_end_present(Window* w, bool again);
+void hudless_shutdown();   // frees the copies and forgets everything (render thread, GPU idle)
 
 }  // namespace nxrt::nvn::be::gpu
