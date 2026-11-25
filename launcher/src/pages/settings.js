@@ -54,9 +54,9 @@ const SECTIONS = [
   {
     title: 'settings.sec.frameRate', icon: 'gauge', file: 'game',
     fields: [
-      // [xc2] fps: 0/30 keeps the 30 Hz cadence/cap; 60 is retail 3.0.1 native; 90/120 scale via dual-clock (cutscenes stay 60).
+      // [xc2] fps: 0/30 keeps the 30 Hz cadence/cap; 60 is retail 3.0.1 native (recommended); 90/120 scale via dual-clock (experimental, cutscenes stay 60).
       { id: 'fps', type: 'select', label: 'settings.fps.label', sec: 'xc2', key: 'fps', def: '60',
-        options: [['0', 'settings.fps.native'], ['60', '60'], ['90', '90'], ['120', '120']],
+        options: [['0', 'settings.fps.native'], ['60', 'settings.fps.fps60'], ['90', 'settings.fps.fps90'], ['120', 'settings.fps.fps120']],
         normalize: (v) => {
           const s = String(v).trim();
           if (s === '0' || s === '30') return '0';
