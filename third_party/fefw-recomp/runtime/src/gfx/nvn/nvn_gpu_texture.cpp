@@ -2144,6 +2144,11 @@ uint32_t tex_layers(Texture* t) { return t->layers; }
 
 bool tex_is_depth(Texture* t) { return t->fmt && t->fmt->aspect != kAspectColor; }
 
+bool tex_copy_source_ok(Texture* t) {
+    TexGpu* g = tex_or_null(t);
+    return g && (g->usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) && g->layout != VK_IMAGE_LAYOUT_UNDEFINED && shape_of(*t).samples <= 1;
+}
+
 VkImageView tex_sampled_view(Texture* t, const ViewRequest& req) {
     TexGpu* g = tex_or_null(t);
     if (!g) return VK_NULL_HANDLE;

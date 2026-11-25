@@ -35,7 +35,7 @@
 #include "api_dlss.h"
 #include "nvn_decoded.h"
 #include "nvn_enums.h"
-#include "nvn_framegen.h"
+#include "nvn_hudless.h"
 #include "nvn_format.h"
 #include "nvn_mask_clear.h"
 #include "nvn_gpu_internal.h"
@@ -4138,9 +4138,9 @@ bool begin_draw(int mode, bool indexed, int index_type, VkPrimitiveTopology* top
         rs_mark(kRsPrepUpscale);
     }
     rs_mark(kRsPrep);
-    if (S.ncolor && fg_hudless_candidate(S.color_tex[0].get(), (S.color.blend_enable_mask & 1u) != 0)) {   // frame generation: the scene before the UI
+    if (S.ncolor && hudless_candidate(S.color_tex[0].get(), (S.color.blend_enable_mask & 1u) != 0)) {   // the scene before the UI (nvn_hudless.h)
         end_pass();
-        fg_hudless_capture(*F, S.color_tex[0].get());
+        hudless_capture(*F, S.color_tex[0].get());
     }
     if (g_fb_seen || (g_dirty & (kDesc | kPipe))) feedback_prepare(*pl);
     if (!g_fb_valid.empty()) {

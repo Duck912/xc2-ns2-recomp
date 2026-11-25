@@ -20,6 +20,7 @@
 #include "imgui_internal.h"
 #include "nxrt/audio_sink.h"
 #include "nxrt/extras.h"
+#include "extras/hdr_pattern.h"
 #include "extras/temporal.h"
 #include "nxrt/frame_limiter.h"
 #include "nxrt/input_source.h"
@@ -29,6 +30,7 @@
 #include "nxrt/overlay.h"
 #include "nxrt/platform.h"
 #include "play_game.h"
+#include "play_hints.h"
 
 namespace nxrt::play {
 
@@ -100,6 +102,11 @@ constexpr int kFpsDetailCount = 4;
 
 constexpr const char* kHdrModeZh[] = {"关闭 (SDR)", "自动", "强制开启", "Switch 2 原生 HDR"};
 constexpr const char* kHdrModeEn[] = {"Off (SDR)", "Auto", "On", "Native HDR"};
+
+constexpr const char* kHdrPatternZh[] = {"关闭", "峰值亮度", "亮度阶梯", "黑位"};
+constexpr const char* kHdrPatternEn[] = {"Off", "Peak brightness", "Brightness staircase", "Black level"};
+constexpr extras::HdrPattern kHdrPatternKinds[] = {extras::HdrPattern::None, extras::HdrPattern::Peak, extras::HdrPattern::Staircase,
+                                                   extras::HdrPattern::Black};
 
 constexpr const char* kHdrFmtZh[] = {"自动", "HDR10", "scRGB"};
 constexpr const char* kHdrFmtEn[] = {"Auto", "HDR10", "scRGB"};
@@ -258,6 +265,7 @@ void sanitize(Settings& s) {
     h.peak_nits = h.peak_nits <= 0 ? 0 : std::clamp(h.peak_nits, 200.0, 10000.0);
     h.paper_white_nits = h.paper_white_nits <= 0 ? 0 : std::clamp(h.paper_white_nits, 80.0, 500.0);
     h.highlight_boost = std::clamp(h.highlight_boost, 0.0, 2.0);
+    h.ui_white_nits = h.ui_white_nits <= 0 ? 0 : std::clamp(h.ui_white_nits, 80.0, 500.0);
     s.extras.upscale.sharpness = std::clamp(s.extras.upscale.sharpness, 0.0, 1.0);
     s.extras.picture = extras::picture_clamped(s.extras.picture);
     s.audio.volume = std::clamp(s.audio.volume, 0.0, 1.0);
@@ -787,9 +795,10 @@ bool card_choice_vec(const char* id, const char* lzh, const char* len, const cha
 
 bool card_slider_f(const char* id, const char* lzh, const char* len, const char* dzh, const char* den,
                    double* val, double lo, double hi, double step, const char* fmt,
-                   bool restart = false, bool live = false) {
-    char buf[64];
+                   bool restart = false, bool live = false, const char* tag = nullptr) {
+    char buf[128];
     std::snprintf(buf, sizeof buf, fmt, *val);
+    if (tag && *tag) std::snprintf(buf + std::strlen(buf), sizeof buf - std::strlen(buf), "  (%s)", tag);
     const float prog = (hi > lo) ? static_cast<float>((*val - lo) / (hi - lo)) : 0.0f;
     const int s = draw_card_raw(id, tr(lzh, len), buf, tr(dzh, den), true, restart, live, false, false, prog);
     if (s == -1 || s == 1 || s == 2) {
@@ -808,10 +817,12 @@ bool card_slider_f(const char* id, const char* lzh, const char* len, const char*
 
 bool card_slider_i(const char* id, const char* lzh, const char* len, const char* dzh, const char* den,
                    int* val, int lo, int hi, int step, const char* fmt,
-                   bool restart = false, bool live = false, const char* special_zero = nullptr, int min_nonzero = 0) {
-    char buf[64];
+                   bool restart = false, bool live = false, const char* special_zero = nullptr, int min_nonzero = 0,
+                   const char* tag = nullptr) {
+    char buf[128];
     if (special_zero && *val <= 0) std::snprintf(buf, sizeof buf, "%s", special_zero);
     else std::snprintf(buf, sizeof buf, fmt, *val);
+    if (tag && *tag) std::snprintf(buf + std::strlen(buf), sizeof buf - std::strlen(buf), "  (%s)", tag);
     const float prog = (hi > lo) ? static_cast<float>(std::max(0, *val - lo)) / static_cast<float>(hi - lo) : 0.0f;
     const int s = draw_card_raw(id, tr(lzh, len), buf, tr(dzh, den), true, restart, live, false, false, prog);
     if (s == -1 || s == 1 || s == 2) {
@@ -830,6 +841,11 @@ bool card_slider_i(const char* id, const char* lzh, const char* len, const char*
     }
     return false;
 }
+
+const char* hint_tag(const SliderHint& h) { return tr(h.tag_zh, h.tag_en); }
+
+int g_hdr_pattern = 0;   // the HDR test pattern chosen on the Graphics page, an index into kHdrPatternKinds (not saved)
+extras::HdrPattern chosen_pattern() { return kHdrPatternKinds[std::clamp(g_hdr_pattern, 0, 3)]; }
 
 bool card_button(const char* id, const char* lzh, const char* len, const char* dzh, const char* den,
                  const char* right_text = "", bool disabled = false) {
@@ -1078,31 +1094,39 @@ void tab_graphics(const LiveStatus& live, Page& p, float bottom_h) {
             mark(p);
         }
     }
+    const SliderHint h_pic_con = hint_contrast(pic.contrast);
     if (card_slider_f("pic_con", "对比度", "Contrast",
-                      "拉大明暗反差。1.00 为游戏原版默认值，修改时画面实时变化。",
-                      "Spreads tones from mid-grey; 1.00 is untouched. Applies live.",
-                      &pic.contrast, 0.50, 1.50, 0.02, "%.2f", false, true)) {
+                      "拉大明暗反差。1.00 为游戏原版默认值，修改时画面实时变化。\n\n调高直到画面不再发平；如果阴影变成死黑，就调低。",
+                      "Spreads tones from mid-grey; 1.00 is untouched. Applies live.\n\n"
+                      "Raise it until the picture stops looking flat. Lower it if shadows turn solid black.",
+                      &pic.contrast, 0.50, 1.50, 0.02, "%.2f", false, true, hint_tag(h_pic_con))) {
         extras::set_picture_live(pic);
         mark(p);
     }
+    const SliderHint h_pic_sat = hint_saturation(pic.saturation);
     if (card_slider_f("pic_sat", "饱和度", "Saturation",
-                      "调整画面色彩鲜艳程度。0.00 为黑白，1.00 为原版，推荐 1.00~1.20。",
-                      "Colour intensity; 1.00 is untouched. Applies live.",
-                      &pic.saturation, 0.00, 2.00, 0.05, "%.2f", false, true)) {
+                      "调整画面色彩鲜艳程度。0.00 为黑白，1.00 为原版，推荐 1.00~1.20。\n\n调高直到颜色显得鲜活；如果皮肤或草地开始不自然，就调低。",
+                      "Colour intensity; 1.00 is untouched. Applies live.\n\n"
+                      "Raise it until colours look lively. Lower it if skin or grass starts to look unnatural.",
+                      &pic.saturation, 0.00, 2.00, 0.05, "%.2f", false, true, hint_tag(h_pic_sat))) {
         extras::set_picture_live(pic);
         mark(p);
     }
+    const SliderHint h_pic_blk = hint_black(pic.black);
     if (card_slider_f("pic_blk", "黑位调整", "Black level",
-                      "设为负值（如 -0.03）可压暗发灰的暗部，让夜景和阴影更通透；0.00 为原版。",
-                      "Negative pulls hazy shadows toward pure black; 0.00 is untouched.",
-                      &pic.black, -0.25, 0.25, 0.01, "%+.2f", false, true)) {
+                      "设为负值（如 -0.03）可压暗发灰的暗部，让夜景和阴影更通透；0.00 为原版。\n\n把 HDR 测试图设为「黑位」，然后调整此项，直到最暗的方块刚好勉强可见。",
+                      "Negative pulls hazy shadows toward pure black; 0.00 is untouched.\n\n"
+                      "Set HDR test pattern to Black level, then adjust this until the darkest squares are only just visible.",
+                      &pic.black, -0.25, 0.25, 0.01, "%+.2f", false, true, hint_tag(h_pic_blk))) {
         extras::set_picture_live(pic);
         mark(p);
     }
+    const SliderHint h_pic_gam = hint_gamma(pic.gamma);
     if (card_slider_f("pic_gam", "伽马亮度", "Gamma",
-                      "调整中间调亮度：大于 1.00 画面更亮，小于 1.00 更暗，不影响纯黑和纯白。",
-                      "Mid-tone brightness; 1.00 is untouched.",
-                      &pic.gamma, 0.50, 2.00, 0.05, "%.2f", false, true)) {
+                      "调整中间调亮度：大于 1.00 画面更亮，小于 1.00 更暗，不影响纯黑和纯白。\n\n如果人脸和场景太暗就调高，显得发白就调低。",
+                      "Mid-tone brightness; 1.00 is untouched.\n\n"
+                      "Raise it if faces and scenery look too dark. Lower it if they look washed out.",
+                      &pic.gamma, 0.50, 2.00, 0.05, "%.2f", false, true, hint_tag(h_pic_gam))) {
         extras::set_picture_live(pic);
         mark(p);
     }
@@ -1178,42 +1202,71 @@ void tab_graphics(const LiveStatus& live, Page& p, float bottom_h) {
     card_group("HDR 高动态范围输出", "HDR Output");
     int hmode = static_cast<int>(hdr.mode);
     if (card_choice("hdr_mode", "HDR 模式", "HDR mode",
-                    "开启需显示器及 Windows 系统均开启 HDR。「Switch 2 原生 HDR」使用游戏原版 HDR 色调映射参数。",
-                    "Requires an HDR display with Windows HDR enabled.",
+                    "开启需显示器及 Windows 系统均开启 HDR。「Switch 2 原生 HDR」使用游戏原版 HDR 色调映射参数。\n\n选「自动」，Windows 开启 HDR 时就会使用 HDR。修改后需重启游戏。",
+                    "Requires an HDR display with Windows HDR enabled.\n\n"
+                    "Choose Auto to use HDR whenever Windows has HDR on. Restart the game after changing it.",
                     &hmode, kHdrModeZh, kHdrModeEn, 4, true)) {
         hdr.mode = static_cast<extras::HdrMode>(hmode);
         mark(p);
     }
     int hfmt = static_cast<int>(hdr.format);
     if (card_choice("hdr_fmt", "HDR 信号格式", "HDR format",
-                    "发送给显示器的信号格式：HDR10 或 scRGB，自动会优先选用显示器原生支持的 HDR10。",
-                    "Signal format sent to display (HDR10 or scRGB).",
+                    "发送给显示器的信号格式：HDR10 或 scRGB，自动会优先选用显示器原生支持的 HDR10。\n\n保持「自动」。只有显示器或录制软件需要 scRGB 时才修改。修改后需重启游戏。",
+                    "Signal format sent to display (HDR10 or scRGB).\n\n"
+                    "Leave this on Auto. Only change it if your display or recording software needs scRGB. Restart the game after changing it.",
                     &hfmt, kHdrFmtZh, kHdrFmtEn, 3, true)) {
         hdr.format = static_cast<extras::HdrFormat>(hfmt);
         mark(p);
     }
     int peak = static_cast<int>(std::lround(hdr.peak_nits));
+    const SliderHint h_peak = hint_peak(peak);
     if (card_slider_i("hdr_peak", "HDR 峰值亮度", "HDR peak brightness",
-                      "高光能达到的最大亮度（尼特），设为自动则直接读取显示器上报的峰值亮度。",
-                      "Maximum highlight brightness in nits (Auto reads display capability).",
-                      &peak, 0, 2000, 50, "%d nits", false, false, tr("自动", "Auto"), 200)) {
+                      "高光能达到的最大亮度（尼特），设为自动则直接读取显示器上报的峰值亮度。\n\n把 HDR 测试图设为「峰值亮度」，然后调高此项，直到小方块消失。拿不准时，使用显示器规格中的最高亮度。",
+                      "Maximum highlight brightness in nits (Auto reads display capability).\n\n"
+                      "Set HDR test pattern to Peak brightness, then raise this until the small squares disappear. If you can't tell, use the maximum brightness from your display's specs.",
+                      &peak, 0, 2000, 50, "%d nits", false, false, tr("自动", "Auto"), 200, hint_tag(h_peak))) {
         hdr.peak_nits = peak;
         mark(p);
     }
     int paper = static_cast<int>(std::lround(hdr.paper_white_nits));
+    const SliderHint h_paper = hint_paper_white(paper);
     if (card_slider_i("hdr_paper", "HDR 纸白亮度", "HDR paper white",
-                      "普通白色与 UI 的亮度（尼特），自动会跟随 Windows SDR 内容亮度设置。",
-                      "Standard white & UI luminance in nits.",
-                      &paper, 0, 500, 10, "%d nits", false, false, tr("自动", "Auto"), 80)) {
+                      "普通白色的亮度（尼特），自动会跟随 Windows SDR 内容亮度设置。「HDR 界面亮度」为自动时，界面也使用此亮度。\n\n调整此项，直到云和雪等白色的东西明亮干净，看起来又不累眼。",
+                      "Standard white luminance in nits. The UI uses it too while HDR UI brightness is on Auto.\n\n"
+                      "Adjust this until white things like clouds and snow look bright and clean, but comfortable to look at.",
+                      &paper, 0, 500, 10, "%d nits", false, false, tr("自动", "Auto"), 80, hint_tag(h_paper))) {
         hdr.paper_white_nits = paper;
         mark(p);
     }
+    const SliderHint h_boost = hint_boost(hdr.highlight_boost);
     if (card_slider_f("hdr_boost", "HDR 高光增强", "HDR highlight boost",
-                      "控制高光向峰值亮度扩展的幅度，0.00 接近 SDR，1.00 标准 HDR。",
-                      "Expands highlights toward peak brightness.",
-                      &hdr.highlight_boost, 0.0, 2.0, 0.10, "%.2f", false, true)) {
+                      "控制高光向峰值亮度扩展的幅度，0.00 接近 SDR，1.00 标准 HDR。\n\n调高直到太阳和反光闪耀；如果明亮的天空变成一片白，就调低。",
+                      "Expands highlights toward peak brightness.\n\n"
+                      "Raise it until the sun and reflections sparkle. Lower it if bright skies turn into plain white.",
+                      &hdr.highlight_boost, 0.0, 2.0, 0.10, "%.2f", false, true, hint_tag(h_boost))) {
         mark(p);
     }
+    int ui_white = static_cast<int>(std::lround(hdr.ui_white_nits));
+    const SliderHint h_ui = hint_ui_white(ui_white, hdr.paper_white_nits);
+    if (card_slider_i("hdr_ui", "HDR 界面亮度", "HDR UI brightness",
+                      "游戏菜单、HUD 与字幕的亮度（尼特），与画面其余部分分开调整。「自动」与纸白相同。\n\n调整此项，直到菜单和字幕清晰易读又不刺眼。",
+                      "Brightness of the game's menus, HUD and subtitles in nits, separate from the rest of the picture. Auto matches paper white.\n\n"
+                      "Adjust this until menus and subtitles are easy to read without glaring.",
+                      &ui_white, 0, 500, 10, "%d nits", false, false, tr("自动", "Auto"), 80, hint_tag(h_ui))) {
+        hdr.ui_white_nits = ui_white;
+        mark(p);
+    }
+    if (card_toggle("hdr_deband", "HDR 去色带", "HDR debanding",
+                    "用细微的噪点消除 HDR 拉伸后天空、雾气和光晕中出现的色带。\n\n保持开启。只有在画面中看到颗粒感时才关闭。",
+                    "Hides the colour banding HDR can show in skies, fog and glows, using a very fine noise.\n\n"
+                    "Leave this on. Turn it off only if you notice grain in the picture.", &hdr.deband, false, true)) {
+        mark(p);
+    }
+    card_choice("hdr_pattern", "HDR 测试图", "HDR test pattern",
+                "选择一张测试图，然后：\n- 峰值亮度：调高「HDR 峰值亮度」，直到小方块消失。\n- 亮度阶梯：把「HDR 峰值亮度」设为最后一格仍比左边更亮的那一格的亮度（从左到右 300 至 1000 尼特）。\n- 黑位：调整「黑位」，直到最暗的方块刚好勉强可见。",
+                "Pick a test pattern, then:\n- Peak brightness: raise HDR peak brightness until the small squares disappear.\n- Brightness staircase: set HDR peak brightness to the last bar that is still brighter than the one to its left (bars go 300 to 1000 nits, left to right).\n- Black level: adjust Black level until the darkest squares are only just visible.",
+                &g_hdr_pattern, kHdrPatternZh, kHdrPatternEn, 4, false, true);
+    if (chosen_pattern() != extras::HdrPattern::None) extras::set_hdr_pattern(chosen_pattern(), static_cast<float>(hdr.peak_nits));
 
     // ---- Experimental: options of this PC version, not of the game, each with what it costs ----
     card_group("实验性功能", "Experimental");
@@ -1642,7 +1695,8 @@ void draw_settings_menu(UiHost& host, gfx::Overlay& ov) {
     }
 
     const ImVec2 disp = ImGui::GetIO().DisplaySize;
-    ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0.0f, 0.0f), disp, IM_COL32(3, 8, 16, 155));
+    if (extras::hdr_pattern().kind == extras::HdrPattern::None)   // a test pattern is shown undimmed
+        ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0.0f, 0.0f), disp, IM_COL32(3, 8, 16, 155));
 
     const float em = ImGui::GetFontSize();
     const float w = std::min(disp.x - 2.5f * em, std::max(54.0f * em, disp.x * 0.74f));

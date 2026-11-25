@@ -25,7 +25,7 @@
 #include "nvn_format.h"
 #include "nvn_gpu.h"
 #include "nvn_gpu_internal.h"
-#include "nvn_framegen.h"
+#include "nvn_hudless.h"
 #include "nvn_texdata.h"
 #include "nvn_texprep.h"
 #include "nvn_texture_layout.h"
@@ -1417,4 +1417,74 @@ NXTEST(hudless_copy_format_matches_hdr_and_sdr) {
     CHECK_EQ(gpu::hudless_copy_format(VK_FORMAT_R8G8B8A8_UNORM, true), VK_FORMAT_R8G8B8A8_SRGB);
     CHECK_EQ(gpu::hudless_copy_format(VK_FORMAT_B8G8R8A8_UNORM, true), VK_FORMAT_B8G8R8A8_SRGB);
     CHECK_EQ(gpu::hudless_copy_format(VK_FORMAT_R16G16B16A16_SFLOAT, true), VK_FORMAT_R16G16B16A16_SFLOAT);
+}
+
+// Who gets the copy of the window texture before the UI: HDR every frame, frame generation after its DLSS evaluation.
+NXTEST(hudless_copy_rules) {
+    Rig r;
+    if (!bring_up(r)) {
+        CHECK(false);
+        return;
+    }
+    {
+        Tex x, bad;
+        CHECK(make_tex(x, info(NVN_TEXTURE_TARGET_2D, 64, 32, 1, 1, NVN_FORMAT_RGBA8, NVN_TEXTURE_FLAGS_DISPLAY)));
+        CHECK(make_tex(bad, info(NVN_TEXTURE_TARGET_2D, 64, 32, 1, 1, NVN_FORMAT_RGBA8, NVN_TEXTURE_FLAGS_DISPLAY)));   // no GPU image
+        Texture* t = x.t.get();
+        Tex other;
+        CHECK(make_tex(other, info(NVN_TEXTURE_TARGET_2D, 64, 32, 1, 1, NVN_FORMAT_RGBA8)));
+        nxrt::nvn::be::Window w;
+        w.textures.push_back(x.t);
+        w.textures.push_back(bad.t);
+        gpu::run_frame_sync([&](Frame& f) {
+            gpu::tex_ensure_current(t, f);
+            gpu::tex_transition(t, f, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            gpu::hudless_end_present(&w, false);   // learns the window's textures
+
+            // nobody asks: no copy
+            CHECK(!gpu::hudless_candidate(t, true));
+            // HDR asks every frame: the first blended draw into a window texture is copied, once
+            gpu::hudless_want_every_frame(true);
+            CHECK(!gpu::hudless_candidate(t, false));
+            CHECK(!gpu::hudless_candidate(other.t.get(), true));
+            CHECK(gpu::hudless_candidate(t, true));
+            const uint64_t n0 = gpu::hudless_capture_count();
+            gpu::hudless_capture(f, t);
+            CHECK_EQ(gpu::hudless_capture_count(), n0 + 1);
+            CHECK(!gpu::hudless_candidate(t, true));
+            // frame generation's first ask drops that copy: its own comes from the next blended draw; a second ask keeps it
+            gpu::hudless_want_this_frame();
+            CHECK(gpu::hudless_candidate(t, true));
+            gpu::hudless_capture(f, t);
+            CHECK_EQ(gpu::hudless_capture_count(), n0 + 2);
+            gpu::hudless_want_this_frame();
+            CHECK(!gpu::hudless_candidate(t, true));
+            CHECK(gpu::hudless_view(t, f, false) != VK_NULL_HANDLE);
+            CHECK(gpu::hudless_view(other.t.get(), f, false) == VK_NULL_HANDLE);
+            gpu::hudless_end_present(&w, false);
+
+            // with frame generation's ask alone (HDR off), a frame gets a copy only after the ask
+            gpu::hudless_want_every_frame(false);
+            CHECK(!gpu::hudless_candidate(t, true));
+            gpu::hudless_want_this_frame();
+            CHECK(gpu::hudless_candidate(t, true));
+            gpu::hudless_end_present(&w, false);
+
+            // a failed copy blocks the rest of the frame, and the next ask tries again
+            gpu::hudless_want_every_frame(true);
+            CHECK(gpu::hudless_candidate(bad.t.get(), true));
+            gpu::hudless_capture(f, bad.t.get());
+            CHECK(gpu::hudless_failed_this_frame());
+            CHECK(!gpu::hudless_candidate(t, true));
+            gpu::hudless_want_this_frame();
+            CHECK(!gpu::hudless_failed_this_frame());
+            CHECK(gpu::hudless_candidate(t, true));
+            gpu::hudless_end_present(&w, false);
+            CHECK(!gpu::hudless_failed_this_frame());
+            gpu::hudless_want_every_frame(false);
+        });
+        gpu::finish();
+        gpu::run_on_render_thread([] { gpu::hudless_shutdown(); });
+    }
+    teardown(r);
 }
