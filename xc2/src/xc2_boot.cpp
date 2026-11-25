@@ -726,6 +726,128 @@ static void host_vsync_period_301(::Ctx *c) {
     c->v[0].f[0] = step / static_cast<float>(iv);
 }
 
+static std::atomic<int64_t> g_teardown_fps{60};
+static nxrt::GuestFn g_orig_821b40 = nullptr;
+static nxrt::GuestFn g_orig_822570 = nullptr;
+static nxrt::GuestFn g_orig_822600 = nullptr;
+
+// Scale guest-83's frame-counted 0x27d0 resource-bank teardown (main+0x820200 via 0x821b40/0x822570, and main+0x822600) back to <=60 Hz wall time.
+// Main retires consumer nodes at 30 Hz (33.3 ms), while 60 fps teardown waits 4 rendered frames per stage (66.7 ms); above 60 fps,
+// unmodified 2/4-frame thresholds finish in <=33.3 ms and unmap active pools during cutscene exit or fast travel.
+static bool hold_teardown_counter(uint64_t bank, uint16_t off, uint16_t trigger_minus_one, uint16_t hold_limit, uint16_t& held) {
+    if (held < hold_limit) {
+        ++held;
+        const uint16_t back = static_cast<uint16_t>(trigger_minus_one - 1);
+        std::memcpy(reinterpret_cast<void*>(bank + off), &back, 2);
+        return true;
+    }
+    return false;
+}
+
+static void handle_teardown_tick(uint64_t bank, bool is_820200) {
+    if (!bank || !nxrt::mem::is_mapped(bank, 0x10c0)) return;
+    const int64_t cur_fps = g_teardown_fps.load(std::memory_order_relaxed);
+    const int64_t scale = (cur_fps > 60) ? ((cur_fps + 59) / 60) : 1;
+
+    struct TeardownHold {
+        uint64_t bank = 0;
+        uint16_t h4184_3 = 0;
+        uint16_t h4182_1 = 0;
+        uint16_t h4182_3 = 0;
+    };
+    static std::mutex mu;
+    static std::vector<TeardownHold> holds;
+    static std::atomic<bool> logged_once{false};
+
+    uint32_t flags = 0;
+    std::memcpy(&flags, reinterpret_cast<const void*>(bank + 4284), 4);
+    const bool phase4184 = is_820200 && ((flags & 0x40000u) == 0);
+    const bool phase4182 = !is_820200 || ((flags & 0x40000u) != 0 && (flags & 0x8000000u) != 0);
+    if (!phase4184 && !phase4182) return;
+
+    std::lock_guard<std::mutex> lk(mu);
+    auto it = std::find_if(holds.begin(), holds.end(), [bank](const TeardownHold& e) { return e.bank == bank; });
+    if (scale <= 1) {
+        if (it != holds.end()) holds.erase(it);
+        return;
+    }
+
+    const uint16_t extra2 = static_cast<uint16_t>(2 * (scale - 1));
+    const uint16_t extra4 = static_cast<uint16_t>(4 * (scale - 1));
+    bool held_now = false;
+    if (phase4184) {
+        uint16_t c4184 = 0;
+        std::memcpy(&c4184, reinterpret_cast<const void*>(bank + 4184), 2);
+        if (c4184 == 0) {
+            if (it != holds.end()) it->h4184_3 = 0;
+            return;
+        }
+        if (c4184 != 3) return;
+        if (it == holds.end()) {
+            holds.push_back({bank, 0, 0, 0});
+            it = holds.end() - 1;
+        }
+        held_now = hold_teardown_counter(bank, 4184, 3, extra4, it->h4184_3);
+    } else {
+        uint16_t c4182 = 0;
+        std::memcpy(&c4182, reinterpret_cast<const void*>(bank + 4182), 2);
+        if (c4182 == 0) {
+            if (it != holds.end()) {
+                it->h4182_1 = 0;
+                it->h4182_3 = 0;
+            }
+            return;
+        }
+        if (c4182 == 1) {
+            if (it == holds.end()) {
+                holds.push_back({bank, 0, 0, 0});
+                it = holds.end() - 1;
+            }
+            held_now = hold_teardown_counter(bank, 4182, 1, extra2, it->h4182_1);
+        } else if (c4182 == 3) {
+            if (it == holds.end()) {
+                holds.push_back({bank, 0, 0, 0});
+                it = holds.end() - 1;
+            }
+            held_now = hold_teardown_counter(bank, 4182, 3, extra2, it->h4182_3);
+            if (!held_now) holds.erase(it);
+        }
+    }
+    if (held_now && !logged_once.exchange(true, std::memory_order_relaxed)) {
+        NXLOG_I("xc2", "teardown cadence: scaling bank 0x%llx cleanup at %lld fps (%lldx)",
+                static_cast<unsigned long long>(bank), static_cast<long long>(cur_fps), static_cast<long long>(scale));
+    }
+}
+
+static void wrap_teardown_821b40(::Ctx* c) {
+    if (c) handle_teardown_tick(c->x[0], true);
+    if (g_orig_821b40) g_orig_821b40(c);
+}
+
+static void wrap_teardown_822570(::Ctx* c) {
+    if (c) handle_teardown_tick(c->x[0], true);
+    if (g_orig_822570) g_orig_822570(c);
+}
+
+static void wrap_teardown_822600(::Ctx* c) {
+    if (c) handle_teardown_tick(c->x[0], false);
+    if (g_orig_822600) g_orig_822600(c);
+}
+
+static void arm_teardown_cadence_301(uint64_t main_base, int64_t fps) {
+    if (fps <= 60) return;
+    g_teardown_fps.store(fps, std::memory_order_relaxed);
+    g_orig_821b40 = nxrt::fn_lookup(main_base + 0x821b40ull);
+    g_orig_822570 = nxrt::fn_lookup(main_base + 0x822570ull);
+    g_orig_822600 = nxrt::fn_lookup(main_base + 0x822600ull);
+    if (g_orig_821b40) nxrt::fn_register(main_base + 0x821b40ull, wrap_teardown_821b40);
+    if (g_orig_822570) nxrt::fn_register(main_base + 0x822570ull, wrap_teardown_822570);
+    if (g_orig_822600) nxrt::fn_register(main_base + 0x822600ull, wrap_teardown_822600);
+    NXLOG_I("xc2", "teardown cadence: wrapped indirect dispatch 821b40=%d 822570=%d 822600=%d for >60 fps safety (target %lld fps, scale %lldx)",
+            g_orig_821b40 != nullptr, g_orig_822570 != nullptr, g_orig_822600 != nullptr,
+            static_cast<long long>(fps), static_cast<long long>((fps + 59) / 60));
+}
+
 static void arm_frame_rate(uint64_t main_base) {
     const int64_t fps = nxrt::config_get_int("xc2", "fps", 0);
     // [nvn] present_ahead (HANDOVER 61): the guest used to be kept from leading the replay because it rewrote data the GPU was
@@ -756,6 +878,7 @@ static void arm_frame_rate(uint64_t main_base) {
         g_fps_limiter_step.store(init_step, std::memory_order_relaxed);
         g_fps_game_step.store(init_step, std::memory_order_relaxed);
         nxrt::fn_register(main_base + 0xba1320, host_vsync_period_301);
+        arm_teardown_cadence_301(main_base, fps);
         const int64_t cutscene_fps = nxrt::config_get_int("xc2", "cutscene_fps", fps > 60 ? 60 : 0);
         NXLOG_I("xc2", "frame rate: hooked retail 3.0.1 vsync_period virtual at main+0xba1320 (target %lld fps, cutscene %lld fps, step %.2f ms)",
                 static_cast<long long>(fps), static_cast<long long>(cutscene_fps), static_cast<double>(init_step) * 1000.0);
@@ -785,6 +908,7 @@ static void arm_frame_rate(uint64_t main_base) {
                 const int64_t want_fps = (in_cutscene && cutscene_fps > 0 && cutscene_fps < fps) ? cutscene_fps : fps;
                 if (want_fps != cur_fps) {
                     cur_fps = want_fps;
+                    g_teardown_fps.store(cur_fps, std::memory_order_relaxed);
                     nxrt::set_present_interval_hz(static_cast<double>(cur_fps));
                     nxrt::services::viapi::set_display_vsync_hz(static_cast<double>(cur_fps));
                     g_frame_limiter->set_target_fps(static_cast<double>(cur_fps));

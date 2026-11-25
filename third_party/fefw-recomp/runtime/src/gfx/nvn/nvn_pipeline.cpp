@@ -926,7 +926,10 @@ static VkShaderModule fragment_module(const GraphicsKey& key) {
     if (!fs) return VK_NULL_HANDLE;
     const bool want_int_out = !key.no_out && key.logic_op_enable && key_int_colour(key);
     const uint32_t keep_mask = key.no_out ? 0u : active_color_mask(key);
-    const bool want_prune = !key.no_out && !key.dual_src && fs_has_unattached_outputs(fs, keep_mask);
+    // Prewarm/prebuild keys leave color_count == 0 (real no-color draws set no_out = 1),
+    // so skip output pruning there or precompiled FS parts will never match draw-time keys.
+    const bool want_prune = !key.no_out && key.color_count > 0 && !key.dual_src &&
+                            fs_has_unattached_outputs(fs, keep_mask);
     const bool want_uint_smp = key.uint_samplers != 0;
 
     if (!want_prune && !want_uint_smp) {
