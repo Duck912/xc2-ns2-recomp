@@ -214,6 +214,22 @@ def main():
             with open(src, "rb") as a, open(os.path.join(out_dir, name), "wb") as b:
                 b.write(a.read())
 
+    # Include recent freeze / crash / device-lost dumps written beside the exe or install root.
+    dump_dirs = [ROOT]
+    exe_dir = os.path.dirname(os.path.abspath(exe))
+    if exe_dir and exe_dir != ROOT:
+        dump_dirs.append(exe_dir)
+    ref_time = os.path.getmtime(log) if os.path.isfile(log) else started
+    for dname in ("xc2_boot_freeze.txt", "xc2_boot_crash.txt", "xc2_boot_devicelost.txt"):
+        for d in dump_dirs:
+            cand = os.path.join(d, dname)
+            if not os.path.isfile(cand):
+                continue
+            if os.path.getmtime(cand) >= min(started, ref_time) - 300.0:
+                with open(cand, "rb") as a, open(os.path.join(out_dir, dname), "wb") as b:
+                    b.write(a.read())
+                break
+
     readme = """Rendering report, %s
 
 run.log            the whole log of one run
@@ -222,6 +238,7 @@ features.txt       the capability lines the driver reported
 device-lost.txt    anything that says the device went away (empty is good)
 environment.txt    the exe, the ini, the shader cache, the toolchain
 frame-times.csv    one line per presented frame (only with --headless)
+xc2_boot_*.txt     freeze / crash / device-lost dumps from the run (when generated)
 
 Attach the zip to the issue as-is. Nothing here is game data: it is the log, the settings and the timing.
 """ % stamp

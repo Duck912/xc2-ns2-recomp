@@ -1076,6 +1076,13 @@ bool ensure_pass(bool depth_ro = false, bool writes = false, bool depth_general 
     }
     (void)last;
     gstamp("pass setup");
+    {
+        char cp[96];
+        std::snprintf(cp, sizeof cp, "pass %ux%u c%u:%u d:%u", extent.width, extent.height,
+                      S.ncolor, S.ncolor ? static_cast<unsigned>(P.color_fmt[0]) : 0u,
+                      have_depth ? static_cast<unsigned>(P.depth_fmt) : 0u);
+        device().cmd_checkpoint(F->cb, cp);
+    }
     vkCmdBeginRendering(F->cb, &ri);
     P.open = true;
     counters().passes.fetch_add(1, std::memory_order_relaxed);
@@ -1705,19 +1712,36 @@ void prepare_textures(const ProgLayout& pl) {
                         r.tex->dbg_file[0] ? " from " : "", r.tex->dbg_file);
         }
         if (!tex_gpu(r.tex)) continue;
-        // owned by the pass; a compute dispatch runs outside every pass, so the graphics attachments do not own what it samples
-        if (shares_image(r.tex, S.depth_tex.get()) || (d.nvn_stage != kCompute && is_color_feedback(r.tex))) continue;
+        const bool depth_owned = shares_image(r.tex, S.depth_tex.get());
+        const bool fb_owned = d.nvn_stage != kCompute && is_color_feedback(r.tex);
         if (uint_tex_patch && d.nvn_stage == kFragment && d.index >= 0 && d.index < 64 &&
-            b.image.component == ScalarType::Float && !tex_is_depth(r.tex)) {
-            const VkFormat tf = tex_vk_format(r.tex);
-            if (vk_format_is_integer(tf) && !vk_format_is_signed_int(tf)) {
+            b.image.component == ScalarType::Float && !b.image.depth) {
+            bool want_uint = false;
+            if (!tex_is_depth(r.tex)) {
+                const VkFormat tf = tex_vk_format(r.tex);
+                want_uint = vk_format_is_integer(tf) && !vk_format_is_signed_int(tf);
+            } else if (!fb_owned && tex_aspect(r.tex) == (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) {
+                // Depth-stencil STENCIL plane sampled through a float sampler (#4, #39, #44, #54): rewrite to usampler at runtime
+                // (matching patch_ds_samplers.py) so NVIDIA (where ds_stencil_bits defaults to 0 and float samplers read DEPTH32F,
+                // causing iso-depth stripes in a299a459/292faa92) and AMD both read S8_UINT legally.
+                int dsmode = r.tex->b.depth_stencil_mode;
+                if (r.has_view && r.view.has_depth_stencil_mode) dsmode = r.view.depth_stencil_mode;
+                static const std::string ds_depth_list = nxrt::config_get_str("nvn", "ds_depth_shaders", "");
+                const bool in_ds_depth = !ds_depth_list.empty() && ds_depth_list.find(d.shader->hash) != std::string::npos;
+                want_uint = (dsmode != NVN_TEXTURE_DEPTH_STENCIL_MODE_DEPTH) && !in_ds_depth;
+            }
+            if (want_uint) {
                 uint_samplers |= 1ull << d.index;
                 if (first_time_key("uint-tex-patch " + d.shader->hash + " " + std::to_string(b.set) + " " + std::to_string(b.binding))) {
-                    NXLOG_I(kTag, "uint_tex_patch: fs %s s%ub%u (%s) samples integer texture %u (%s) as usampler",
-                            d.shader->hash.c_str(), b.set, b.binding, b.name.c_str(), r.tex->id, r.tex->fmt ? r.tex->fmt->name : "?");
+                    NXLOG_I(kTag, "uint_tex_patch: fs %s s%ub%u (%s) samples %s texture %u (%s) as usampler",
+                            d.shader->hash.c_str(), b.set, b.binding, b.name.c_str(),
+                            tex_is_depth(r.tex) ? "stencil plane of" : "integer",
+                            r.tex->id, r.tex->fmt ? r.tex->fmt->name : "?");
                 }
             }
         }
+        // owned by the pass; a compute dispatch runs outside every pass, so the graphics attachments do not own what it samples
+        if (depth_owned || fb_owned) continue;
         if (r.tex->cpu_dirty.load() || tex_layout(r.tex) != tex_sampled_layout(r.tex)) {
             need.push_back(r.tex);
             if (r.tex->cpu_dirty.load() && ft::on()) ft::mark(b.nvn.source == NvnSource::SamplerBinding ? "tx.dirty_bind" : "tx.dirty_uniform", r.tex->id);
@@ -2646,9 +2670,10 @@ VkDescriptorSet build_set(const ProgLayout& pl, uint32_t set) {
                             }
                         }
                         const VkFormat ivf = tex_vk_format(r.tex);
-                        if (!tex_is_depth(r.tex) && vk_format_is_integer(ivf)) {
+                        if (vr.component == 2 || vr.component == 3 || (!tex_is_depth(r.tex) && vk_format_is_integer(ivf))) {
                             s.min_filter = NVN_MIN_FILTER_NEAREST;
                             s.mag_filter = NVN_MAG_FILTER_NEAREST;
+                            s.max_anisotropy = 1.0f;
                         }
                         static const bool depth_nearest = nxrt::config_get_bool("nvn", "depth_sampler_nearest", false);
                         if (depth_nearest) {
@@ -4767,44 +4792,97 @@ bool bind_u32_indices(const std::vector<uint32_t>& idx) {
     return true;
 }
 
-// [nvn] draw_ring = N (default 32, 0 = off): the last N draws the replay submitted, printed by the freeze watchdog. A GPU that
-// hangs gives no error of its own - the only thing left is which draws it was given just before it stopped, and that is what
-// this keeps (the freeze dump otherwise shows threads waiting on a fence and nothing else).
+// [nvn] draw_ring = N (default 32, 0 = off): the last N draws/dispatches/blits the replay submitted, printed by the freeze watchdog and
+// on VK_ERROR_DEVICE_LOST. A GPU that hangs gives no error of its own - the only thing left is what it was given just before it stopped.
 struct RingDraw {
-    long long frame;
-    std::string vs, fs;
-    uint32_t count, instances;
-    bool indexed;
+    enum Kind { kDraw, kDispatch, kBlit };
+    Kind kind = kDraw;
+    long long frame = 0;
+    std::string a, b;       // draw: vs, fs | dispatch: cs, "-" | blit: src desc, dst desc
+    uint32_t x = 0, y = 0, z = 0;
+    uint32_t pw = 0, ph = 0, cfmt = 0, dfmt = 0;
+    bool flag = false;      // draw: indexed | dispatch: indirect | blit: copy(true)/linear(false)
+    uint64_t no_chunk_delta = 0;
 };
 std::mutex g_ring_mu;
 std::deque<RingDraw> g_ring;
+uint64_t g_ring_last_no_chunk = 0;
 size_t draw_ring_cap() {
     static const size_t n = static_cast<size_t>(std::clamp<int64_t>(nxrt::config_get_int("nvn", "draw_ring", 32), 0, 256));
     return n;
 }
-void draw_ring_note(uint32_t count, uint32_t instances, bool indexed) {
+void draw_ring_push(RingDraw&& d) {
     const size_t cap = draw_ring_cap();
     if (!cap) return;
-    RingDraw d;
-    d.frame = static_cast<long long>(counters().presents.load());
-    d.vs = S.stage[kVertex] ? S.stage[kVertex]->hash : "-";
-    d.fs = S.stage[kFragment] ? S.stage[kFragment]->hash : "-";
-    d.count = count;
-    d.instances = instances;
-    d.indexed = indexed;
+    const uint64_t nc = gpu::mirror_capture_no_chunk_escapes();
+    d.no_chunk_delta = nc >= g_ring_last_no_chunk ? (nc - g_ring_last_no_chunk) : 0;
+    g_ring_last_no_chunk = nc;
     std::lock_guard<std::mutex> lk(g_ring_mu);
     g_ring.push_back(std::move(d));
     while (g_ring.size() > cap) g_ring.pop_front();
 }
+void draw_ring_note(uint32_t count, uint32_t instances, bool indexed) {
+    if (!draw_ring_cap()) return;
+    RingDraw d;
+    d.kind = RingDraw::kDraw;
+    d.frame = static_cast<long long>(counters().presents.load());
+    d.a = S.stage[kVertex] ? S.stage[kVertex]->hash : "-";
+    d.b = S.stage[kFragment] ? S.stage[kFragment]->hash : "-";
+    d.x = count;
+    d.y = instances;
+    d.pw = P.extent.width;
+    d.ph = P.extent.height;
+    d.cfmt = (S.ncolor > 0) ? static_cast<uint32_t>(P.color_fmt[0]) : 0u;
+    d.dfmt = S.depth_tex ? static_cast<uint32_t>(P.depth_fmt) : 0u;
+    d.flag = indexed;
+    draw_ring_push(std::move(d));
+}
+void draw_ring_note_dispatch(const ShaderInfo& cs, uint32_t gx, uint32_t gy, uint32_t gz, bool indirect) {
+    if (!draw_ring_cap()) return;
+    RingDraw d;
+    d.kind = RingDraw::kDispatch;
+    d.frame = static_cast<long long>(counters().presents.load());
+    d.a = cs.hash;
+    d.x = gx;
+    d.y = gy;
+    d.z = gz;
+    d.flag = indirect;
+    draw_ring_push(std::move(d));
+}
+void draw_ring_note_blit(Texture* src, Texture* dst, uint32_t sw, uint32_t sh, uint32_t dw, uint32_t dh, bool copy_only) {
+    if (!draw_ring_cap()) return;
+    RingDraw d;
+    d.kind = RingDraw::kBlit;
+    d.frame = static_cast<long long>(counters().presents.load());
+    char sa[64], sb[64];
+    std::snprintf(sa, sizeof sa, "t%u(%ux%u f%u)", src ? src->id : 0u, sw, sh, src ? static_cast<unsigned>(tex_vk_format(src)) : 0u);
+    std::snprintf(sb, sizeof sb, "t%u(%ux%u f%u)", dst ? dst->id : 0u, dw, dh, dst ? static_cast<unsigned>(tex_vk_format(dst)) : 0u);
+    d.a = sa;
+    d.b = sb;
+    d.flag = copy_only;
+    draw_ring_push(std::move(d));
+}
 std::string draw_ring_report() {
     if (!draw_ring_cap()) return "";
-    std::string out = "\n--- the last draws the replay submitted ([nvn] draw_ring, oldest first) ---\n";
-    std::lock_guard<std::mutex> lk(g_ring_mu);
+    std::string out = "\n--- the last draws/dispatches/blits the replay submitted ([nvn] draw_ring, oldest first) ---\n";
+    std::unique_lock<std::mutex> lk(g_ring_mu, std::try_to_lock);
+    if (!lk.owns_lock()) return out + "(ring busy)\n";
     if (g_ring.empty()) return out + "(none recorded)\n";
     char line[512];
     for (const RingDraw& d : g_ring) {
-        std::snprintf(line, sizeof line, "frame %lld  fs %s  vs %s  %s  count %u  instances %u\n", d.frame, d.fs.c_str(), d.vs.c_str(),
-                      d.indexed ? "indexed" : "arrays", d.count, d.instances);
+        if (d.kind == RingDraw::kDraw) {
+            std::snprintf(line, sizeof line, "frame %lld  draw  fs %s  vs %s  %s  count %u  instances %u  pass %ux%u c%u d%u  no_chunk +%llu\n",
+                          d.frame, d.b.c_str(), d.a.c_str(), d.flag ? "indexed" : "arrays", d.x, d.y,
+                          d.pw, d.ph, d.cfmt, d.dfmt, static_cast<unsigned long long>(d.no_chunk_delta));
+        } else if (d.kind == RingDraw::kDispatch) {
+            std::snprintf(line, sizeof line, "frame %lld  dispatch  cs %s  groups %ux%ux%u%s  no_chunk +%llu\n",
+                          d.frame, d.a.c_str(), d.x, d.y, d.z, d.flag ? " (indirect)" : "",
+                          static_cast<unsigned long long>(d.no_chunk_delta));
+        } else {
+            std::snprintf(line, sizeof line, "frame %lld  %s  %s -> %s  no_chunk +%llu\n",
+                          d.frame, d.flag ? "copy" : "blit", d.a.c_str(), d.b.c_str(),
+                          static_cast<unsigned long long>(d.no_chunk_delta));
+        }
         out += line;
     }
     return out;
@@ -5503,12 +5581,18 @@ void do_dispatch(uint32_t x, uint32_t y, uint32_t z, uint64_t indirect) {
         memory_barrier(F->cb);     // the copies into the shadows before the dispatch reads them
         gstamp("shadow in");
     }
+    {
+        char cp[96];
+        std::snprintf(cp, sizeof cp, "cs %s %ux%ux%u%s", cs->hash.substr(0, 8).c_str(), x, y, z, indirect ? " ind" : "");
+        device().cmd_checkpoint(F->cb, cp);
+    }
     if (indirect) {
         vkCmdDispatchIndirect(F->cb, ind.buffer, ind.offset);
     } else {
         vkCmdDispatch(F->cb, x, y, z);
         if (gpass_on()) gstamp(("cs " + cs->hash.substr(0, 8)).c_str());
     }
+    draw_ring_note_dispatch(*cs, x, y, z, indirect != 0);
     shadows_after_dispatch();
     memory_barrier(F->cb);
     if (g_trace) trace_snap_after_dispatch(*cs, *pl);
@@ -5832,7 +5916,15 @@ void do_copy_texture_texture(const P_CopyTexTex& p) {
     // MIRROR_X/Y/Z: the 2D engine writes the region reversed along that axis (a blit with the destination corners swapped)
     const uint32_t mirror = p.flags & (NVN_COPY_FLAGS_MIRROR_X_BIT | NVN_COPY_FLAGS_MIRROR_Y_BIT | NVN_COPY_FLAGS_MIRROR_Z_BIT);
     if (mirror) log_once("copy-mirror", "CopyTextureToTexture with mirror flags: copied as a mirrored blit");
-    if (same_size && same_fmt && !mirror) {
+    const bool copy_only = same_size && same_fmt && !mirror;
+    {
+        char cp[96];
+        std::snprintf(cp, sizeof cp, "%s t%u(%ux%u)->t%u(%ux%u)", copy_only ? "copy" : "blit",
+                      s ? s->id : 0u, static_cast<unsigned>(sr.w), static_cast<unsigned>(sr.h),
+                      d ? d->id : 0u, static_cast<unsigned>(dr.w), static_cast<unsigned>(dr.h));
+        device().cmd_checkpoint(F->cb, cp);
+    }
+    if (copy_only) {
         VkImageCopy c = {};
         c.srcSubresource = {sa, ss.level, ss.layer, 1};
         c.dstSubresource = {da, ds.level, ds.layer, 1};
@@ -5856,6 +5948,8 @@ void do_copy_texture_texture(const P_CopyTexTex& p) {
                             !tex_is_depth(s) && !tex_is_depth(d) && !vk_format_is_integer(tex_vk_format(s)) && !vk_format_is_integer(tex_vk_format(d));
         vkCmdBlitImage(F->cb, tex_image(s), sl, tex_image(d), dl, 1, &b, linear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
     }
+    draw_ring_note_blit(s, d, static_cast<uint32_t>(sr.w), static_cast<uint32_t>(sr.h),
+                        static_cast<uint32_t>(dr.w), static_cast<uint32_t>(dr.h), copy_only);
     memory_barrier(F->cb);
     counters().copies.fetch_add(1, std::memory_order_relaxed);
     gstamp("copy texture");
@@ -6390,8 +6484,16 @@ void run_list(const CmdList& list, int depth) {
                 // VK_KHR_dynamic_rendering_local_read).
                 if (P.open && P.color_feedback != 0 && !P.depth_ro && P.color_general == 0 &&
                     (pb.bits & ~(0x01u | 0x02u | 0x04u | 0x10u)) == 0) {
+                    Texture* fb_color[8] = {};
+                    const uint32_t fb_n = std::min<uint32_t>(P.ncolor, 8u);
+                    for (uint32_t i = 0; i < fb_n; ++i) fb_color[i] = P.color[i].tex;
                     end_pass(true);
-                    g_pending.clear();
+                    // Only clear the current color attachments covered by the narrow color feedback barrier below;
+                    // preserve P.depth and any earlier passes' unflushed entries in g_pending.
+                    g_pending.erase(std::remove_if(g_pending.begin(), g_pending.end(), [&](const PendingWrite& w) {
+                        for (uint32_t i = 0; i < fb_n; ++i) if (fb_color[i] && same_image(w.tex.get(), fb_color[i])) return true;
+                        return false;
+                    }), g_pending.end());
                     VkMemoryBarrier2 mb = {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
                     mb.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
                     mb.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;

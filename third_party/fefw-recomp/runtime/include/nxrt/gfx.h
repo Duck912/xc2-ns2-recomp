@@ -145,6 +145,7 @@ struct DeviceFeatures {
     bool anti_lag = false;                // VK_AMD_anti_lag (AMD Anti-Lag 2)
     bool memory_budget = false;           // VK_EXT_memory_budget
     bool device_fault = false;            // VK_EXT_device_fault
+    bool device_diagnostic_checkpoints = false;   // VK_NV_device_diagnostic_checkpoints
 };
 
 struct DeviceLimitsExt {
@@ -210,6 +211,8 @@ public:
     bool device_lost() const;
     bool note_device_lost(VkResult r, const char* where);
     std::string query_device_fault() const;
+    void cmd_checkpoint(VkCommandBuffer cb, const char* tag) const;
+    std::string query_checkpoints() const;
 
     void set_name(VkObjectType type, uint64_t handle, const char* name);     // VK_EXT_debug_utils, no-op without it
 
@@ -231,7 +234,7 @@ private:
     VkQueue queue_ = VK_NULL_HANDLE;
     uint32_t queue_family_ = 0;
     uint32_t timestamp_valid_bits_ = 0;
-    std::mutex queue_mutex_;
+    mutable std::mutex queue_mutex_;
     VmaAllocator vma_ = nullptr;
     VkPhysicalDeviceProperties props_ = {};
     DeviceFeatures features_;

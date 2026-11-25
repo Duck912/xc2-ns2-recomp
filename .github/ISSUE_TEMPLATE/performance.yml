@@ -5,12 +5,12 @@ body:
   - type: markdown
     attributes:
       value: |
-        **If you are on an older build, update first.** Releases before **0.2.4** have known issues already fixed
-        (including `v0.2.3` dynamic-resolution / render-scale regressions and cutscene sync hitches).
+        **If you are on an older build, update first.** Releases before **0.2.5** have known issues already fixed
+        (including `v0.2.3` dynamic-resolution / render-scale regressions, `#54` 3D stencil sampling, and cutscene sync hitches).
         Use **About → Check now** in `xc2-launcher.exe` or grab the latest build:
         <https://github.com/weile10000/xc2-ns2-recomp/releases/latest>
 
-        **请先确认版本是 0.2.4 或更新。** `0.2.4` 已修复动态分辨率与渲染缩放回归及过场卡顿等问题，建议先通过启动器 **关于 → 检查更新** 升级再测。
+        **请先确认版本是 0.2.5 或更新。** `0.2.5` 包含此前动态分辨率与渲染缩放回归、3D 斜向黑纹与过场卡顿修复，建议先通过启动器 **关于 → 检查更新** 升级再测。
 
         Three things and you are done - the log below carries the rest.
 
@@ -68,7 +68,7 @@ body:
     attributes:
       label: Build (optional)
       description: The report zip already says it; fill this in if you know it.
-      placeholder: 0.2.4
+      placeholder: 0.2.5
   - type: textarea
     id: notes
     attributes:

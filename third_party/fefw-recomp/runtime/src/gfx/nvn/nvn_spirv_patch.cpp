@@ -285,9 +285,12 @@ bool spirv_add_xfb(const std::vector<uint32_t>& in, std::vector<uint32_t>& out, 
     return true;
 }
 
-bool spirv_outputs_to_private(const std::vector<uint32_t>& in, std::vector<uint32_t>& out) {
+bool spirv_outputs_to_private(const std::vector<uint32_t>& in, std::vector<uint32_t>& out, uint32_t keep_mask) {
     if (in.size() < 5) return false;
-    enum : uint32_t { OpVariableOp = 59, OpDecorateOp = 71, OpEntryPointOp = 15, StoragePrivate = 6, DecIndex = 32, DecComponent = 31, DecBuiltIn = 11 };
+    enum : uint32_t {
+        OpVariableOp = 59, OpLoadOp = 61, OpStoreOp = 62, OpAccessChainOp = 65, OpInBoundsAccessChainOp = 66,
+        OpDecorateOp = 71, OpEntryPointOp = 15, StoragePrivate = 6, DecIndex = 32, DecComponent = 31, DecBuiltIn = 11,
+    };
     std::vector<Inst> insts;
     for (size_t i = 5; i < in.size();) {
         const uint32_t len = in[i] >> 16;
@@ -295,26 +298,91 @@ bool spirv_outputs_to_private(const std::vector<uint32_t>& in, std::vector<uint3
         insts.push_back({i, in[i] & 0xffff, len});
         i += len;
     }
-    std::map<uint32_t, bool> out_var, has_location, builtin;
+    uint32_t bound = in[3];
+    size_t first_function = 0;
+    std::map<uint32_t, std::pair<uint32_t, uint32_t>> ptr_info;    // ptr_id -> (storage, pointee)
+    std::map<uint32_t, size_t> ptr_at;
+    std::map<uint32_t, uint32_t> priv_ptr;                          // pointee -> existing StoragePrivate ptr
+    std::map<uint32_t, uint32_t> out_var, loc_of;
+    std::set<uint32_t> builtin;
     for (const Inst& n : insts) {
         const uint32_t* w = &in[n.at];
-        if (n.op == OpVariableOp && n.len >= 4 && w[3] == StorageOutput) out_var[w[2]] = true;
-        else if (n.op == OpDecorateOp && n.len >= 4 && w[2] == DecorationLocation) has_location[w[1]] = true;
-        else if (n.op == OpDecorateOp && n.len >= 4 && w[2] == DecBuiltIn) builtin[w[1]] = true;
+        if (!first_function && n.op == OpFunction) first_function = n.at;
+        else if (n.op == OpTypePointer && n.len == 4) {
+            ptr_info[w[1]] = {w[2], w[3]};
+            ptr_at[w[1]] = n.at;
+            if (w[2] == StoragePrivate && !priv_ptr.count(w[3])) priv_ptr[w[3]] = w[1];
+        } else if (n.op == OpVariableOp && n.len >= 4 && !first_function && w[3] == StorageOutput) out_var[w[2]] = w[1];
+        else if (n.op == OpDecorateOp && n.len >= 4 && w[2] == DecorationLocation) loc_of[w[1]] = w[3];
+        else if (n.op == OpDecorateOp && n.len >= 4 && w[2] == DecBuiltIn) builtin.insert(w[1]);
     }
     if (out_var.empty()) return false;
-    for (const auto& kv : out_var)
-        if (builtin.count(kv.first) || !has_location.count(kv.first)) return false;
+    std::set<uint32_t> drop_vars;
+    for (const auto& kv : out_var) {
+        if (builtin.count(kv.first) || !loc_of.count(kv.first)) continue;
+        const uint32_t loc = loc_of[kv.first];
+        if (loc < 32 && ((keep_mask >> loc) & 1u)) continue;
+        drop_vars.insert(kv.first);
+    }
+    if (drop_vars.empty()) return false;
+
+    std::map<uint32_t, uint32_t> drop_chains;                       // access chain result -> ptr_id
+    std::set<uint32_t> needed_ptrs;
+    for (uint32_t v : drop_vars) needed_ptrs.insert(out_var[v]);
+    if (first_function) {
+        for (const Inst& n : insts) {
+            if (n.at < first_function) continue;
+            const uint32_t* w = &in[n.at];
+            if ((n.op == OpAccessChainOp || n.op == OpInBoundsAccessChainOp) && n.len >= 4 &&
+                (drop_vars.count(w[3]) || drop_chains.count(w[3]))) {
+                drop_chains[w[2]] = w[1];
+                needed_ptrs.insert(w[1]);
+            }
+        }
+        for (const Inst& n : insts) {
+            if (n.at < first_function) continue;
+            const uint32_t* w = &in[n.at];
+            for (uint32_t k = 1; k < n.len; ++k) {
+                const uint32_t id = w[k];
+                if (!drop_vars.count(id) && !drop_chains.count(id)) continue;
+                if (n.op == OpStoreOp && k == 1) continue;
+                if (n.op == OpLoadOp && k == 3) continue;
+                if ((n.op == OpAccessChainOp || n.op == OpInBoundsAccessChainOp) && (k == 2 || k == 3)) continue;
+                return false;
+            }
+        }
+    }
+
+    std::map<uint32_t, uint32_t> remap_ptr;
+    std::set<uint32_t> emit_after_ptr;
+    for (uint32_t old_ptr : needed_ptrs) {
+        auto pi = ptr_info.find(old_ptr);
+        if (pi == ptr_info.end() || pi->second.first != StorageOutput) return false;
+        const uint32_t pointee = pi->second.second;
+        auto pp = priv_ptr.find(pointee);
+        if (pp != priv_ptr.end() && ptr_at[pp->second] < ptr_at[old_ptr]) {
+            remap_ptr[old_ptr] = pp->second;
+        } else {
+            remap_ptr[old_ptr] = bound++;
+            emit_after_ptr.insert(old_ptr);
+        }
+    }
+
     const bool before_14 = in[1] < 0x10400;
     std::vector<uint32_t> res(in.begin(), in.begin() + 5);
-    res.reserve(in.size());
+    res.reserve(in.size() + emit_after_ptr.size() * 4);
     for (const Inst& n : insts) {
         std::vector<uint32_t> c(in.begin() + static_cast<std::ptrdiff_t>(n.at), in.begin() + static_cast<std::ptrdiff_t>(n.at + n.len));
-        if (n.op == OpTypePointer && n.len == 4 && c[2] == StorageOutput) c[2] = StoragePrivate;
-        else if (n.op == OpVariableOp && n.len >= 4 && c[3] == StorageOutput) c[3] = StoragePrivate;
-        else if (n.op == OpDecorateOp && n.len >= 4 && out_var.count(c[1]) && (c[2] == DecorationLocation || c[2] == DecIndex || c[2] == DecComponent)) continue;
-        else if (n.op == OpEntryPointOp && before_14) {
-            // OpEntryPoint model id name... interface ids: drop the output variables from the interface
+        if (n.op == OpVariableOp && n.len >= 4 && drop_vars.count(c[2])) {
+            c[1] = remap_ptr[c[1]];
+            c[3] = StoragePrivate;
+        } else if ((n.op == OpAccessChainOp || n.op == OpInBoundsAccessChainOp) && n.len >= 4 && drop_chains.count(c[2])) {
+            c[1] = remap_ptr[c[1]];
+        } else if (n.op == OpDecorateOp && n.len >= 4 && drop_vars.count(c[1]) &&
+                   (c[2] == DecorationLocation || c[2] == DecIndex || c[2] == DecComponent)) {
+            continue;
+        } else if (n.op == OpEntryPointOp && before_14) {
+            // OpEntryPoint model id name... interface ids: drop the demoted output variables from the interface
             size_t name_words = 0;
             const char* nm = reinterpret_cast<const char*>(&c[3]);
             const size_t max_chars = (c.size() - 3) * 4;
@@ -324,12 +392,16 @@ bool spirv_outputs_to_private(const std::vector<uint32_t>& in, std::vector<uint3
             const size_t iface = 3 + name_words;
             std::vector<uint32_t> d(c.begin(), c.begin() + static_cast<std::ptrdiff_t>(std::min(iface, c.size())));
             for (size_t i = iface; i < c.size(); ++i)
-                if (!out_var.count(c[i])) d.push_back(c[i]);
+                if (!drop_vars.count(c[i])) d.push_back(c[i]);
             d[0] = (static_cast<uint32_t>(d.size()) << 16) | OpEntryPointOp;
             c = d;
         }
         res.insert(res.end(), c.begin(), c.end());
+        if (n.op == OpTypePointer && n.len == 4 && emit_after_ptr.count(c[1])) {
+            res.insert(res.end(), {(4u << 16) | OpTypePointer, remap_ptr[c[1]], StoragePrivate, c[3]});
+        }
     }
+    res[3] = bound;
     out = std::move(res);
     return true;
 }
@@ -1011,9 +1083,11 @@ bool spirv_outputs_to_uint(const std::vector<uint32_t>& in, std::vector<uint32_t
     uint32_t bound = in[3];
     size_t entry_at = 0, first_function = 0;
     uint32_t entries = 0;
-    std::map<uint32_t, std::pair<bool, uint32_t>> scalars;          // type -> (is float, width)
+    struct ScalarDecl { int kind = 0; uint32_t width = 0; };       // kind: 0 float, 1 uint, 2 sint
+    std::map<uint32_t, ScalarDecl> scalars;                         // type -> kind, width
     std::map<uint32_t, std::pair<uint32_t, uint32_t>> vecs;         // type -> (component type, count)
     std::map<uint32_t, std::pair<uint32_t, uint32_t>> ptrs;         // type -> (storage class, pointee)
+    std::map<uint32_t, size_t> type_at;                             // type -> instruction offset
     std::map<uint32_t, uint32_t> location;                          // variable -> Location
     std::map<uint32_t, uint32_t> var_ptr;                           // variable -> pointer type
     std::map<uint32_t, uint32_t> const_ids;                         // ids of OpConstant values (the component indices)
@@ -1022,10 +1096,10 @@ bool spirv_outputs_to_uint(const std::vector<uint32_t>& in, std::vector<uint32_t
         const uint32_t* w = &in[n.at];
         if (n.op == OpEntryPointOp) { ++entries; entry_at = n.at; }
         else if (n.op == OpFunctionOp) { if (!first_function) first_function = n.at; }
-        else if (n.op == OpTypeIntOp && n.len == 4) scalars[w[1]] = {false, w[2]};
-        else if (n.op == OpTypeFloatOp && n.len >= 3) scalars[w[1]] = {true, w[2]};
-        else if (n.op == OpTypeVectorOp && n.len == 4) vecs[w[1]] = {w[2], w[3]};
-        else if (n.op == OpTypePointerOp && n.len == 4) ptrs[w[1]] = {w[2], w[3]};
+        else if (n.op == OpTypeIntOp && n.len == 4) { scalars[w[1]] = {w[3] ? 2 : 1, w[2]}; type_at[w[1]] = n.at; }
+        else if (n.op == OpTypeFloatOp && n.len >= 3) { scalars[w[1]] = {0, w[2]}; type_at[w[1]] = n.at; }
+        else if (n.op == OpTypeVectorOp && n.len == 4) { vecs[w[1]] = {w[2], w[3]}; type_at[w[1]] = n.at; }
+        else if (n.op == OpTypePointerOp && n.len == 4) { ptrs[w[1]] = {w[2], w[3]}; type_at[w[1]] = n.at; }
         else if (n.op == OpDecorateOp && n.len >= 4 && w[2] == DecorationLocationOp) location[w[1]] = w[3];
         else if (n.op == OpConstantOp && n.len >= 4) const_ids[w[2]] = w[3];
         else if (n.op == OpVariableOp && n.len == 4 && w[3] == StorageOutputOp && !first_function) {
@@ -1038,28 +1112,33 @@ bool spirv_outputs_to_uint(const std::vector<uint32_t>& in, std::vector<uint32_t
 
     uint32_t uint_scalar = 0, float_scalar = 0;
     for (const auto& kv : scalars) {
-        if (kv.second.second != 32) continue;
-        if (kv.second.first) float_scalar = kv.first;
-        else uint_scalar = kv.first;
+        if (kv.second.width != 32) continue;
+        if (kv.second.kind == 0) float_scalar = kv.first;
+        else if (kv.second.kind == 1) uint_scalar = kv.first;
     }
     std::vector<uint32_t> decls;
     if (!uint_scalar) {
         uint_scalar = bound++;
         decls.insert(decls.end(), {(4u << 16) | OpTypeIntOp, uint_scalar, 32, 0});
-        scalars[uint_scalar] = {false, 32};
+        scalars[uint_scalar] = {1, 32};
+        type_at[uint_scalar] = 0;
     }
     auto uint_vec = [&](uint32_t count) -> uint32_t {
-        for (const auto& kv : vecs) if (kv.second.first == uint_scalar && kv.second.second == count) return kv.first;
+        for (const auto& kv : vecs)
+            if (kv.second.first == uint_scalar && kv.second.second == count) return kv.first;
         const uint32_t id = bound++;
         decls.insert(decls.end(), {(4u << 16) | OpTypeVectorOp, id, uint_scalar, count});
         vecs[id] = {uint_scalar, count};
+        type_at[id] = 0;
         return id;
     };
     auto out_ptr = [&](uint32_t pointee) -> uint32_t {
-        for (const auto& kv : ptrs) if (kv.second.first == StorageOutputOp && kv.second.second == pointee) return kv.first;
+        for (const auto& kv : ptrs)
+            if (kv.second.first == StorageOutputOp && kv.second.second == pointee) return kv.first;
         const uint32_t id = bound++;
         decls.insert(decls.end(), {(4u << 16) | OpTypePointerOp, id, StorageOutputOp, pointee});
         ptrs[id] = {StorageOutputOp, pointee};
+        type_at[id] = 0;
         return id;
     };
 
@@ -1072,7 +1151,7 @@ bool spirv_outputs_to_uint(const std::vector<uint32_t>& in, std::vector<uint32_t
         auto v = vecs.find(p->second.second);
         if (v == vecs.end()) return fail("scalar or array output");
         auto sc = scalars.find(v->second.first);
-        if (sc == scalars.end() || !sc->second.first || sc->second.second != 32) return fail("output component is not f32");
+        if (sc == scalars.end() || sc->second.kind != 0 || sc->second.width != 32) return fail("output component is not f32");
         const uint32_t n = v->second.second;
         if (n < 1 || n > 4) return fail("output vector width");
         new_value_type[var] = uint_vec(n);
@@ -1140,25 +1219,32 @@ bool spirv_outputs_to_uint(const std::vector<uint32_t>& in, std::vector<uint32_t
     if (store_value.empty()) return fail("no store to rewrite");
     std::sort(inserts.begin(), inserts.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
 
-    // The new types are used by the re-typed OpVariable as well, so they go in front of every variable (before the first function)
-    size_t types_at = first_function;
+    std::vector<uint32_t> moved_vars;
     for (const Inst& n : insts) {
-        if (n.op == OpVariableOp && n.at < types_at) { types_at = n.at; break; }
+        auto vt = var_type_patch.find(n.at);
+        if (vt == var_type_patch.end()) continue;
+        moved_vars.push_back(in[n.at]);
+        moved_vars.push_back(vt->second);
+        moved_vars.push_back(in[n.at + 2]);
+        moved_vars.push_back(in[n.at + 3]);
     }
+    (void)type_at;
     out.clear();
     out.reserve(in.size() + decls.size() + inserts.size() * 4 + 8);
     out.insert(out.end(), in.begin(), in.begin() + 5);
     size_t next_insert = 0;
     for (const Inst& n : insts) {
-        if (n.at == types_at) out.insert(out.end(), decls.begin(), decls.end());
+        if (n.at == first_function) {
+            out.insert(out.end(), decls.begin(), decls.end());
+            out.insert(out.end(), moved_vars.begin(), moved_vars.end());
+        }
+        if (var_type_patch.count(n.at)) continue;
         while (next_insert < inserts.size() && inserts[next_insert].first == n.at) {
             out.insert(out.end(), inserts[next_insert].second.begin(), inserts[next_insert].second.end());
             ++next_insert;
         }
         const size_t at = out.size();
         out.insert(out.end(), in.begin() + static_cast<std::ptrdiff_t>(n.at), in.begin() + static_cast<std::ptrdiff_t>(n.at + n.len));
-        auto vt = var_type_patch.find(n.at);
-        if (vt != var_type_patch.end()) out[at + 1] = vt->second;
         auto ct = chain_type.find(n.at);
         if (ct != chain_type.end()) out[at + 1] = ct->second;
         auto sv = store_value.find(n.at);

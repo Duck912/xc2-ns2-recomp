@@ -766,29 +766,79 @@ std::vector<SpvIntSlot> key_int_slots(const GraphicsKey& key) {
     return int_slots;
 }
 
-static VkShaderModule fs_uint_sampler_module(const GraphicsKey& key, VkShaderModule fallback) {
+static uint32_t active_color_mask(const GraphicsKey& key) {
+    uint32_t m = 0;
+    for (uint32_t i = 0; i < key.color_count && i < 8; ++i)
+        if (key.color_format[i] != VK_FORMAT_UNDEFINED) m |= (1u << i);
+    return m;
+}
+
+static bool fs_has_unattached_outputs(const ShaderInfo* fs, uint32_t keep_mask) {
+    if (!fs) return false;
+    for (const ShaderIo& o : fs->refl.outputs) {
+        const uint32_t count = o.array ? o.array : 1;
+        for (uint32_t e = 0; e < count; ++e) {
+            const uint32_t loc = o.location + e;
+            if (loc >= 32 || !((keep_mask >> loc) & 1u)) return true;
+        }
+    }
+    return false;
+}
+
+static VkShaderModule fragment_module(const GraphicsKey& key) {
     const ShaderInfo* fs = key.stage[1];
-    if (!fs || !key.uint_samplers) return fallback;
+    if (!fs) return VK_NULL_HANDLE;
+    const bool want_int_out = !key.no_out && key.logic_op_enable && key_int_colour(key);
+    const uint32_t keep_mask = key.no_out ? 0u : active_color_mask(key);
+    const bool want_prune = !key.no_out && !key.dual_src && fs_has_unattached_outputs(fs, keep_mask);
+    const bool want_uint_smp = key.uint_samplers != 0;
+
+    if (!want_prune && !want_uint_smp) {
+        if (key.no_out) return no_output_module(fs);
+        if (want_int_out) return fs_int_output_module(fs);
+        if (key.dual_src) return dual_source_module(fs);
+        return hdr_fragment_module(fs);
+    }
+
     std::vector<SpvSamplerSlot> slots;
     std::vector<uint32_t> id;
-    const uint32_t flags = (key.no_out ? 1u : 0u) | ((key.logic_op_enable && key_int_colour(key)) ? 2u : 0u) | (key.dual_src ? 4u : 0u);
+    const uint32_t flags = (key.no_out ? 1u : 0u) | (want_int_out ? 2u : 0u) | (key.dual_src ? 4u : 0u) |
+                           (extras::hdr_scene_active() && fs->spirv.size() <= 65536 ? 8u : 0u);
     if (flags) id.push_back(0x30000000u | flags);
-    for (uint32_t i = 0; i < 64 && i < fs->refl.bindings.size(); ++i) {
-        if (!((key.uint_samplers >> i) & 1ull)) continue;
-        const DescriptorBinding& b = fs->refl.bindings[i];
-        slots.push_back({b.set, b.binding});
-        id.push_back(0x20000000u | ((b.set & 0xffu) << 16) | (b.binding & 0xffffu));
+    if (want_prune) id.push_back(0x50000000u | keep_mask);
+    if (want_uint_smp) {
+        for (uint32_t i = 0; i < 64 && i < fs->refl.bindings.size(); ++i) {
+            if (!((key.uint_samplers >> i) & 1ull)) continue;
+            const DescriptorBinding& b = fs->refl.bindings[i];
+            slots.push_back({b.set, b.binding});
+            id.push_back(0x20000000u | ((b.set & 0xffu) << 16) | (b.binding & 0xffffu));
+        }
     }
-    if (slots.empty()) return fallback;
+    if (id.empty()) return shader_module(fs);
+
     std::lock_guard<std::recursive_mutex> lk(g_module_mu);
     if (auto it = g_variants.find({fs, id}); it != g_variants.end()) return it->second;
-    std::vector<uint32_t> patched;
-    VkShaderModule m = spirv_uint_samplers(fs->spirv, slots, patched) ? create_module(patched, fs->hash.c_str()) : VK_NULL_HANDLE;
-    if (m) {
-        NXLOG_I(kTag, "%s: usampler variant for %zu R8/uint binding(s) (%zu words)", fs->hash.c_str(), slots.size(), patched.size());
-    } else {
-        m = fallback;
+
+    std::vector<uint32_t> cur = fs->spirv;
+    std::vector<uint32_t> tmp;
+    bool changed = false;
+    if (key.no_out) {
+        if (spirv_outputs_to_private(cur, tmp, 0)) { cur = std::move(tmp); changed = true; }
+    } else if (want_prune) {
+        if (spirv_outputs_to_private(cur, tmp, keep_mask)) { cur = std::move(tmp); changed = true; }
     }
+    if (want_int_out) {
+        if (spirv_outputs_to_uint(cur, tmp)) { cur = std::move(tmp); changed = true; }
+    } else if (key.dual_src) {
+        if (spirv_dual_source_output(cur, tmp)) { cur = std::move(tmp); changed = true; }
+    } else if (extras::hdr_scene_active() && fs->spirv.size() <= 65536) {
+        if (extras::hdr_tonemap_variant(cur, fs->hash, tmp)) { cur = std::move(tmp); changed = true; }
+    }
+    if (!slots.empty()) {
+        if (spirv_uint_samplers(cur, slots, tmp)) { cur = std::move(tmp); changed = true; }
+    }
+
+    VkShaderModule m = changed ? create_module(cur, fs->hash.c_str()) : shader_module(fs);
     g_variants[{fs, id}] = m;
     return m;
 }
@@ -811,12 +861,8 @@ bool resolve_stage_modules(const GraphicsKey& key, StageModules* out) {
         VkShaderModule m = (i == 2) ? producer_module(key.stage[2], (i == feeder && key.stage[1]) ? key.stage[1] : nullptr, {}, key.topology)
                            : (i == feeder && key.stage[1]) ? producer_module(key.stage[i], key.stage[1], i == 0 ? int_slots : std::vector<SpvIntSlot>())
                            : (i == 0 && !int_slots.empty()) ? producer_module(key.stage[i], nullptr, int_slots)
-                           : (i == 1 && key.no_out)      ? no_output_module(key.stage[i])
-                           : (i == 1 && key.logic_op_enable && key_int_colour(key)) ? fs_int_output_module(key.stage[i])
-                           : (i == 1 && key.dual_src)    ? dual_source_module(key.stage[i])
-                           : (i == 1)                    ? hdr_fragment_module(key.stage[i])
+                           : (i == 1)                    ? fragment_module(key)
                                                          : shader_module(key.stage[i]);
-        if (i == 1 && key.uint_samplers && m) m = fs_uint_sampler_module(key, m);
         if (!m) return false;
         out->m[i] = m;
     }
