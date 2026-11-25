@@ -1046,7 +1046,8 @@ void tab_graphics(const LiveStatus& live, Page& p, float bottom_h) {
     }
     const SliderHint h_pic_con = hint_contrast(pic.contrast);
     if (card_slider_f("pic_con", "对比度", "Contrast",
-                      "调高直到画面不再发平；如果阴影变成死黑，就调低。",
+                      "拉大明暗反差。1.00 为游戏原版默认值，修改时画面实时变化。\n\n调高直到画面不再发平；如果阴影变成死黑，就调低。",
+                      "Spreads tones from mid-grey; 1.00 is untouched. Applies live.\n\n"
                       "Raise it until the picture stops looking flat. Lower it if shadows turn solid black.",
                       &pic.contrast, 0.50, 1.50, 0.02, "%.2f", false, true, hint_tag(h_pic_con))) {
         extras::set_picture_live(pic);
@@ -1054,7 +1055,8 @@ void tab_graphics(const LiveStatus& live, Page& p, float bottom_h) {
     }
     const SliderHint h_pic_sat = hint_saturation(pic.saturation);
     if (card_slider_f("pic_sat", "饱和度", "Saturation",
-                      "调高直到颜色显得鲜活；如果皮肤或草地开始不自然，就调低。",
+                      "调整画面色彩鲜艳程度。0.00 为黑白，1.00 为原版，推荐 1.00~1.20。\n\n调高直到颜色显得鲜活；如果皮肤或草地开始不自然，就调低。",
+                      "Colour intensity; 1.00 is untouched. Applies live.\n\n"
                       "Raise it until colours look lively. Lower it if skin or grass starts to look unnatural.",
                       &pic.saturation, 0.00, 2.00, 0.05, "%.2f", false, true, hint_tag(h_pic_sat))) {
         extras::set_picture_live(pic);
@@ -1062,7 +1064,8 @@ void tab_graphics(const LiveStatus& live, Page& p, float bottom_h) {
     }
     const SliderHint h_pic_blk = hint_black(pic.black);
     if (card_slider_f("pic_blk", "黑位调整", "Black level",
-                      "把 HDR 测试图设为「黑位」，然后调整此项，直到最暗的方块刚好勉强可见。",
+                      "设为负值（如 -0.03）可压暗发灰的暗部，让夜景和阴影更通透；0.00 为原版。\n\n把 HDR 测试图设为「黑位」，然后调整此项，直到最暗的方块刚好勉强可见。",
+                      "Negative pulls hazy shadows toward pure black; 0.00 is untouched.\n\n"
                       "Set HDR test pattern to Black level, then adjust this until the darkest squares are only just visible.",
                       &pic.black, -0.25, 0.25, 0.01, "%+.2f", false, true, hint_tag(h_pic_blk))) {
         extras::set_picture_live(pic);
@@ -1070,7 +1073,8 @@ void tab_graphics(const LiveStatus& live, Page& p, float bottom_h) {
     }
     const SliderHint h_pic_gam = hint_gamma(pic.gamma);
     if (card_slider_f("pic_gam", "伽马亮度", "Gamma",
-                      "如果人脸和场景太暗就调高，显得发白就调低。",
+                      "调整中间调亮度：大于 1.00 画面更亮，小于 1.00 更暗，不影响纯黑和纯白。\n\n如果人脸和场景太暗就调高，显得发白就调低。",
+                      "Mid-tone brightness; 1.00 is untouched.\n\n"
                       "Raise it if faces and scenery look too dark. Lower it if they look washed out.",
                       &pic.gamma, 0.50, 2.00, 0.05, "%.2f", false, true, hint_tag(h_pic_gam))) {
         extras::set_picture_live(pic);
@@ -1148,7 +1152,8 @@ void tab_graphics(const LiveStatus& live, Page& p, float bottom_h) {
     card_group("HDR 高动态范围输出", "HDR Output");
     int hmode = static_cast<int>(hdr.mode);
     if (card_choice("hdr_mode", "HDR 模式", "HDR mode",
-                    "选「自动」，Windows 开启 HDR 时就会使用 HDR。修改后需重启游戏。",
+                    "开启需显示器及 Windows 系统均开启 HDR。「Switch 2 原生 HDR」使用游戏原版 HDR 色调映射参数。\n\n选「自动」，Windows 开启 HDR 时就会使用 HDR。修改后需重启游戏。",
+                    "Requires an HDR display with Windows HDR enabled.\n\n"
                     "Choose Auto to use HDR whenever Windows has HDR on. Restart the game after changing it.",
                     &hmode, kHdrModeZh, kHdrModeEn, 4, true)) {
         hdr.mode = static_cast<extras::HdrMode>(hmode);
@@ -1156,7 +1161,8 @@ void tab_graphics(const LiveStatus& live, Page& p, float bottom_h) {
     }
     int hfmt = static_cast<int>(hdr.format);
     if (card_choice("hdr_fmt", "HDR 信号格式", "HDR format",
-                    "保持「自动」。只有显示器或录制软件需要 scRGB 时才修改。修改后需重启游戏。",
+                    "发送给显示器的信号格式：HDR10 或 scRGB，自动会优先选用显示器原生支持的 HDR10。\n\n保持「自动」。只有显示器或录制软件需要 scRGB 时才修改。修改后需重启游戏。",
+                    "Signal format sent to display (HDR10 or scRGB).\n\n"
                     "Leave this on Auto. Only change it if your display or recording software needs scRGB. Restart the game after changing it.",
                     &hfmt, kHdrFmtZh, kHdrFmtEn, 3, true)) {
         hdr.format = static_cast<extras::HdrFormat>(hfmt);
@@ -1165,7 +1171,8 @@ void tab_graphics(const LiveStatus& live, Page& p, float bottom_h) {
     int peak = static_cast<int>(std::lround(hdr.peak_nits));
     const SliderHint h_peak = hint_peak(peak);
     if (card_slider_i("hdr_peak", "HDR 峰值亮度", "HDR peak brightness",
-                      "把 HDR 测试图设为「峰值亮度」，然后调高此项，直到小方块消失。拿不准时，使用显示器规格中的最高亮度。",
+                      "高光能达到的最大亮度（尼特），设为自动则直接读取显示器上报的峰值亮度。\n\n把 HDR 测试图设为「峰值亮度」，然后调高此项，直到小方块消失。拿不准时，使用显示器规格中的最高亮度。",
+                      "Maximum highlight brightness in nits (Auto reads display capability).\n\n"
                       "Set HDR test pattern to Peak brightness, then raise this until the small squares disappear. If you can't tell, use the maximum brightness from your display's specs.",
                       &peak, 0, 2000, 50, "%d nits", false, false, tr("自动", "Auto"), 200, hint_tag(h_peak))) {
         hdr.peak_nits = peak;
@@ -1174,15 +1181,17 @@ void tab_graphics(const LiveStatus& live, Page& p, float bottom_h) {
     int paper = static_cast<int>(std::lround(hdr.paper_white_nits));
     const SliderHint h_paper = hint_paper_white(paper);
     if (card_slider_i("hdr_paper", "HDR 纸白亮度", "HDR paper white",
-                      "调整此项，直到云和菜单等白色的东西明亮干净，看起来又不累眼。",
-                      "Adjust this until white things like clouds and menus look bright and clean, but comfortable to look at.",
+                      "普通白色的亮度（尼特），自动会跟随 Windows SDR 内容亮度设置。「HDR 界面亮度」为自动时，界面也使用此亮度。\n\n调整此项，直到云和雪等白色的东西明亮干净，看起来又不累眼。",
+                      "Standard white luminance in nits. The UI uses it too while HDR UI brightness is on Auto.\n\n"
+                      "Adjust this until white things like clouds and snow look bright and clean, but comfortable to look at.",
                       &paper, 0, 500, 10, "%d nits", false, false, tr("自动", "Auto"), 80, hint_tag(h_paper))) {
         hdr.paper_white_nits = paper;
         mark(p);
     }
     const SliderHint h_boost = hint_boost(hdr.highlight_boost);
     if (card_slider_f("hdr_boost", "HDR 高光增强", "HDR highlight boost",
-                      "调高直到太阳和反光闪耀；如果明亮的天空变成一片白，就调低。",
+                      "控制高光向峰值亮度扩展的幅度，0.00 接近 SDR，1.00 标准 HDR。\n\n调高直到太阳和反光闪耀；如果明亮的天空变成一片白，就调低。",
+                      "Expands highlights toward peak brightness.\n\n"
                       "Raise it until the sun and reflections sparkle. Lower it if bright skies turn into plain white.",
                       &hdr.highlight_boost, 0.0, 2.0, 0.10, "%.2f", false, true, hint_tag(h_boost))) {
         mark(p);
@@ -1190,14 +1199,16 @@ void tab_graphics(const LiveStatus& live, Page& p, float bottom_h) {
     int ui_white = static_cast<int>(std::lround(hdr.ui_white_nits));
     const SliderHint h_ui = hint_ui_white(ui_white, hdr.paper_white_nits);
     if (card_slider_i("hdr_ui", "HDR 界面亮度", "HDR UI brightness",
-                      "调整此项，直到菜单和字幕清晰易读又不刺眼。「自动」与纸白相同。",
-                      "Adjust this until menus and subtitles are easy to read without glaring. Auto matches paper white.",
+                      "游戏菜单、HUD 与字幕的亮度（尼特），与画面其余部分分开调整。「自动」与纸白相同。\n\n调整此项，直到菜单和字幕清晰易读又不刺眼。",
+                      "Brightness of the game's menus, HUD and subtitles in nits, separate from the rest of the picture. Auto matches paper white.\n\n"
+                      "Adjust this until menus and subtitles are easy to read without glaring.",
                       &ui_white, 0, 500, 10, "%d nits", false, false, tr("自动", "Auto"), 80, hint_tag(h_ui))) {
         hdr.ui_white_nits = ui_white;
         mark(p);
     }
     if (card_toggle("hdr_deband", "HDR 去色带", "HDR debanding",
-                    "保持开启。只有在画面中看到颗粒感时才关闭。",
+                    "用细微的噪点消除 HDR 拉伸后天空、雾气和光晕中出现的色带。\n\n保持开启。只有在画面中看到颗粒感时才关闭。",
+                    "Hides the colour banding HDR can show in skies, fog and glows, using a very fine noise.\n\n"
                     "Leave this on. Turn it off only if you notice grain in the picture.", &hdr.deband, false, true)) {
         mark(p);
     }
