@@ -22,6 +22,7 @@
 #include <string>
 
 #include "nxrt/config.h"
+#include "nxrt/diag.h"
 #include "nxrt/render_quality.h"
 #include "nxrt/dispatch.h"
 #include "nxrt/fiber.h"
@@ -49,6 +50,8 @@
 #include <memory>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -2157,6 +2160,108 @@ static void arm_ns2_mem_probe(uint64_t main_base) {
 // The release split (upstream's fefw_rt.dll / fefw_stub.cpp): the runtime and this boot code live in a DLL and
 // the player's exe only hands it the process. Built with XC2_RT_DLL the entry is exported under a C name so the
 // stub can find it; without the define this is still the exe entry it always was.
+static bool run_shader_prepare(bool interactive, bool force, const std::string& programs_file, bool* cancelled = nullptr) {
+    if (cancelled) *cancelled = false;
+    nxrt::nvn::ShaderPrepareOptions o;
+    o.programs_file = programs_file;
+    o.only_if_needed = !force;
+    o.force = force;
+
+    std::atomic<uint64_t> done{0}, total{0};
+    std::atomic<bool> stop{false}, finished{false};
+    std::mutex mu;
+    std::condition_variable cv;
+    bool ok = false;
+    nxrt::nvn::ShaderPrepareResult res;
+
+    auto run_body = [&] {
+        std::atomic<uint64_t> next_log{1000};
+        o.progress = [&](uint64_t d, uint64_t t) -> bool {
+            done.store(d, std::memory_order_relaxed);
+            total.store(t, std::memory_order_relaxed);
+            nxrt::diag_progress();
+            uint64_t m = next_log.load(std::memory_order_relaxed);
+            if ((d >= m || (t > 0 && d == t)) && next_log.compare_exchange_strong(m, d + 1000, std::memory_order_relaxed)) {
+                NXLOG_I("xc2", "shader prepare: %llu / %llu programs", static_cast<unsigned long long>(d),
+                        static_cast<unsigned long long>(t));
+                if (!interactive) {
+                    std::fprintf(stderr, "shader prepare: %llu / %llu\n", static_cast<unsigned long long>(d),
+                                 static_cast<unsigned long long>(t));
+                }
+            }
+            return !stop.load(std::memory_order_relaxed);
+        };
+        ok = nxrt::nvn::prepare_shaders(o, &res);
+        {
+            std::lock_guard<std::mutex> lk(mu);
+            finished.store(true, std::memory_order_release);
+        }
+        cv.notify_all();
+    };
+
+    if (!interactive) {
+        run_body();
+    } else {
+        std::thread worker(run_body);
+        uint64_t shown_done = ~0ull;
+        bool title_changed = false;
+        {
+            std::unique_lock<std::mutex> lk(mu);
+            cv.wait_for(lk, std::chrono::milliseconds(5), [&] { return finished.load(std::memory_order_acquire); });
+        }
+        while (!finished.load(std::memory_order_acquire)) {
+            nxrt::diag_progress();
+            nxrt::platform::pump_events(false, 0);
+            if (nxrt::platform::quit_requested()) stop.store(true, std::memory_order_relaxed);
+            const uint64_t d = done.load(std::memory_order_relaxed);
+            const uint64_t t = total.load(std::memory_order_relaxed);
+            if (t > 0 && d != shown_done) {
+                shown_done = d;
+                title_changed = true;
+                char buf[160];
+                const int pct = static_cast<int>(d * 100 / t);
+                std::snprintf(buf, sizeof buf, "%s - Preparing Shaders %d%% (%llu / %llu)", nxrt::game::info().title, pct,
+                              static_cast<unsigned long long>(d), static_cast<unsigned long long>(t));
+                nxrt::platform::set_window_title(buf);
+            }
+            std::unique_lock<std::mutex> lk(mu);
+            cv.wait_for(lk, std::chrono::milliseconds(100), [&] { return finished.load(std::memory_order_acquire); });
+        }
+        worker.join();
+        if (title_changed) nxrt::platform::set_window_title(nxrt::game::info().title);
+    }
+
+    if (cancelled) *cancelled = res.cancelled;
+    if (!ok) {
+        if (interactive && res.error.rfind("cannot open ", 0) == 0) {
+            NXLOG_I("xc2", "shader prepare: skipped (%s)", res.error.c_str());
+            return true;
+        }
+        NXLOG_W("xc2", "shader prepare failed: %s", res.error.c_str());
+        if (!interactive) std::fprintf(stderr, "shader prepare failed: %s\n", res.error.c_str());
+        return false;
+    }
+    if (res.already_ready) {
+        NXLOG_I("xc2", "shader prepare: cache already up to date (%llu programs)",
+                static_cast<unsigned long long>(res.programs));
+        if (!interactive) {
+            std::fprintf(stderr, "shader prepare: already ready (%llu programs)\n",
+                         static_cast<unsigned long long>(res.programs));
+        }
+    } else {
+        NXLOG_I("xc2", "shader prepare: %s (%llu/%llu prepared, %llu parts, %.2f s)",
+                res.cancelled ? "cancelled" : "done", static_cast<unsigned long long>(res.prepared),
+                static_cast<unsigned long long>(res.programs), static_cast<unsigned long long>(res.parts), res.seconds);
+        if (!interactive) {
+            std::fprintf(stderr, "shader prepare: %llu/%llu prepared, %llu missing, %llu failed, %llu parts in %.2f s\n",
+                         static_cast<unsigned long long>(res.prepared), static_cast<unsigned long long>(res.programs),
+                         static_cast<unsigned long long>(res.missing_shaders), static_cast<unsigned long long>(res.failed),
+                         static_cast<unsigned long long>(res.parts), res.seconds);
+        }
+    }
+    return !res.cancelled && res.failed == 0;
+}
+
 #ifdef XC2_RT_DLL
 extern "C" __declspec(dllexport) int xc2_rt_main(int argc, char **argv) {
 #else
@@ -2165,6 +2270,9 @@ int main(int argc, char **argv) {
     std::string exefs;
     std::string link = "host";
     std::string entry_mode = "rtld";
+    std::string programs_file;
+    bool prepare_only = false;
+    bool force_prepare = false;
     uint64_t addr_override = 0;
     const char *logp = "xc2_boot.log";
     for (int i = 1; i < argc; i++) {
@@ -2175,9 +2283,12 @@ int main(int argc, char **argv) {
         else if (arg("--gfx")) ++i;   // parsed again below (window | headless)
         else if (arg("--entry")) entry_mode = argv[++i];
         else if (arg("--addr")) addr_override = std::strtoull(argv[++i], nullptr, 0);
-        else die("usage: xc2_boot --exefs DIR [--link host|rtld] [--gfx window|headless] [--log FILE]");
+        else if (!std::strcmp(argv[i], "--prepare-shaders")) prepare_only = true;
+        else if (!std::strcmp(argv[i], "--force-prepare")) force_prepare = true;
+        else if (arg("--programs")) programs_file = argv[++i];
+        else die("usage: xc2_boot --exefs DIR [--link host|rtld] [--gfx window|headless] [--prepare-shaders] [--log FILE]");
     }
-    if (exefs.empty()) die("--exefs is required: point it at the ExeFS you dumped from your own copy");
+    if (!prepare_only && exefs.empty()) die("--exefs is required: point it at the ExeFS you dumped from your own copy");
     if (!exefs.empty() && exefs.back() == '\\') exefs.pop_back();
 
     nxrt_register_game_xc2ns2_core();   // before nxrt::init reads the title facts
@@ -2193,7 +2304,7 @@ int main(int argc, char **argv) {
     const char* gfxmode = "window";
     for (int i = 1; i < argc; i++)
         if (!std::strcmp(argv[i], "--gfx") && i + 1 < argc) gfxmode = argv[++i];
-    const bool headless = !std::strcmp(gfxmode, "headless");
+    const bool headless = prepare_only || !std::strcmp(gfxmode, "headless");
     std::unique_ptr<nxrt::gfx::Device> gfx_device;
     std::unique_ptr<nxrt::gfx::Renderer> gfx_renderer;
     nxrt::nvn::install();
@@ -2310,6 +2421,26 @@ int main(int argc, char **argv) {
         bd.limiter = frame_limiter;
         bd.keep_aspect = play_disp.keep_aspect;
         if (!nxrt::nvn::install_backend(bd)) die("NVN back end failed to start (see the log)");
+        if (prepare_only) {
+            const bool ok = run_shader_prepare(false, force_prepare, programs_file);
+            nxrt::nvn::shutdown_backend();
+            gfx_renderer.reset();
+            gfx_device.reset();
+            nxrt::shutdown();
+            return ok ? 0 : 1;
+        }
+        if (!headless && nxrt::config_get_bool("nvn", "auto_prepare", true)) {
+            bool prep_cancelled = false;
+            run_shader_prepare(true, force_prepare, programs_file, &prep_cancelled);
+            if (prep_cancelled || nxrt::platform::quit_requested()) {
+                nxrt::nvn::shutdown_backend();
+                gfx_renderer.reset();
+                gfx_device.reset();
+                if (!headless) nxrt::platform::shutdown();
+                nxrt::shutdown();
+                return 0;
+            }
+        }
         nxrt::play::StartOptions po;
         po.device = gfx_device.get();
         po.renderer = gfx_renderer.get();

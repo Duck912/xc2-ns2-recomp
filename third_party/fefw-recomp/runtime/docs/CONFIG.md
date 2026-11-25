@@ -364,6 +364,7 @@ Rules:
 | `nvn` | `tex_preupload_max` | `12` | `NXRT_NVN_TEX_PREUPLOAD_MAX` | `src/gfx/nvn/nvn_replay.cpp` | Maximum number of background-prepared textures pre-uploaded per frame when `[nvn] tex_preupload` is enabled (`1..1024`). |
 | `nvn` | `tex_preupload_kb` | `4096` | `NXRT_NVN_TEX_PREUPLOAD_KB` | `src/gfx/nvn/nvn_replay.cpp` | Per-frame byte budget in KiB for `[nvn] tex_preupload` uploads (`256..524288`). |
 | `xc2` | `cutscene_fps` | `60 (when fps > 60)` | `NXRT_XC2_CUTSCENE_FPS` | `xc2/src/xc2_boot.cpp` | Cutscene frame-rate cap on retail 3.0.1 when `[xc2] fps > 60`: defaults to `60` (`0` disables cutscene capping). |
+| `nvn` | `auto_prepare` | `true` | `NXRT_NVN_AUTO_PREPARE` | `xc2/src/xc2_boot.cpp` | Automatically precompile paired `programs.bin` shader parts via `prepare_shaders` at launch when `prepare.state` is missing or stale for the active GPU/driver. |
 
 ### Audio notes
 

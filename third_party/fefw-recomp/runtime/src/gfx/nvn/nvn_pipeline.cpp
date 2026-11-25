@@ -58,7 +58,7 @@ std::unordered_map<VkShaderModule, uint64_t> g_module_ids;   // every module cre
 std::atomic<uint64_t> g_built_at_draw{0};                    // whole pipelines built by the render thread at a draw
 std::atomic<bool> g_cache_dirty{false};
 std::atomic<uint32_t> g_new_since_save{0};      // pipelines and parts created since the cache file was last written
-bool g_cache_big = false;                       // the file loaded at start was large (a shader preparation made it): rewritten rarely, see pipeline_cache_dirty
+std::atomic<bool> g_cache_big{false};         // the file loaded at start was large (a shader preparation made it): rewritten rarely, see pipeline_cache_dirty
 // Producer modules with extra outputs (nvn_spirv_patch.h): (shader, slots as location * 4 + scalar type).
 std::map<std::pair<const ShaderInfo*, std::vector<uint32_t>>, VkShaderModule> g_variants;
 std::unordered_map<const ShaderInfo*, VkShaderModule> g_dual_src;
@@ -163,7 +163,7 @@ void ensure_cache() {
             std::fclose(f);
         }
     }
-    g_cache_big = data.size() >= (64u << 20);
+    g_cache_big.store(data.size() >= (64u << 20), std::memory_order_relaxed);
     VkPipelineCacheCreateInfo ci = {VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
     ci.initialDataSize = data.size();
     ci.pInitialData = data.empty() ? nullptr : data.data();
@@ -181,11 +181,16 @@ void ensure_cache() {
 // pipeline cache (and out of vkGetPipelineCacheData on drivers where serialising GPL parts crashes, issue #49).
 void ensure_gpl_cache() {
     if (g_gpl_cache_ready.load(std::memory_order_acquire)) return;
+    ensure_cache();
     std::lock_guard<std::mutex> lk(g_cache_mu);
     if (g_gpl_cache_tried) return;
     g_gpl_cache_tried = true;
     VkPipelineCacheCreateInfo ci = {VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
     vkCreatePipelineCache(vkdev(), &ci, nullptr, &g_gpl_cache);
+    if (g_gpl_cache != VK_NULL_HANDLE && g_cache != VK_NULL_HANDLE) {
+        std::shared_lock<std::shared_mutex> cache_lk(g_cache_rw_mu);
+        vkMergePipelineCaches(vkdev(), g_gpl_cache, 1, &g_cache);
+    }
     g_gpl_cache_ready.store(true, std::memory_order_release);
 }
 
@@ -207,13 +212,14 @@ void save_cache() {
     }
     std::lock_guard<std::mutex> save_lk(g_save_mu);
     // written to a temporary file and renamed, so a process that ends in the middle of it leaves the old cache intact
-    const std::string tmp = path + ".tmp";
+        const std::string tmp = path + ".tmp";
     {
         std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
         if (!f) return;
         f.write(data.data(), static_cast<std::streamsize>(n));
         if (!f) return;
     }
+    if (n >= (64u << 20)) g_cache_big.store(true, std::memory_order_relaxed);
     std::error_code ec;
     std::filesystem::rename(tmp, path, ec);
     if (ec) {
@@ -232,11 +238,11 @@ bool should_save_pipeline_cache(const std::string& mode, uint32_t vendor_id) {
 }
 
 // A cache of hundreds of MB (the shader preparation's) is rewritten only after thousands of new pipelines: the new ones are few next to it and
-// the write takes seconds. The ordinary small cache is written whenever something new appeared, as before.
+// the write takes seconds. The ordinary small cache is marked dirty when anything new appeared (background saver throttles writes).
 bool pipeline_cache_dirty() {
     if (!g_cache_save_on.load(std::memory_order_relaxed)) return false;
     if (!g_cache_dirty.load(std::memory_order_relaxed)) return false;
-    return !g_cache_big || g_new_since_save.load(std::memory_order_relaxed) >= 3000;
+    return !g_cache_big.load(std::memory_order_relaxed) || g_new_since_save.load(std::memory_order_relaxed) >= 3000;
 }
 void pipeline_cache_save() { save_cache(); }
 // The write at the end of a session: skipped when the cache is the big one of a preparation and little was added.
@@ -1914,22 +1920,35 @@ void pool_sets_shutdown() {
 
 size_t pipeline_count() { return static_cast<size_t>(g_pipeline_count.get()); }
 
-void module_cache_clear() {
-    VkDevice d = vkdev();
-    std::lock_guard<std::recursive_mutex> lk(g_module_mu);
-    for (auto& [k, m] : g_modules) if (m) vkDestroyShaderModule(d, m, nullptr);
-    g_modules.clear();
-    for (auto& [k, m] : g_variants) if (m) vkDestroyShaderModule(d, m, nullptr);
-    g_variants.clear();
-    for (auto& [k, m] : g_dual_src) if (m) vkDestroyShaderModule(d, m, nullptr);
-    g_dual_src.clear();
-    for (auto& [k, e] : g_no_out) if (e.first && e.second) vkDestroyShaderModule(d, e.first, nullptr);
+// Collect every live VkShaderModule across all seven maps before destroying so shared fallback handles (variant maps returning
+// shader_module(s)) are destroyed at most once and no map retains a dangling handle between gpl_prepare batches. Caller holds g_module_mu.
+static void clear_all_shader_modules_locked(VkDevice d) {
+    std::unordered_set<VkShaderModule> unique;
+    auto drain = [&](auto& map) {
+        for (auto& [k, h] : map)
+            if (h) unique.insert(h);
+        map.clear();
+    };
+    drain(g_modules);
+    drain(g_variants);
+    drain(g_dual_src);
+    drain(g_hdr_mod);
+    drain(g_int_out_mod);
+    for (auto& [k, e] : g_no_out)
+        if (e.first) unique.insert(e.first);
     g_no_out.clear();
-    for (auto& [k, v] : g_xfb_mod) if (v.first) vkDestroyShaderModule(d, v.first, nullptr);
+    for (auto& [k, v] : g_xfb_mod)
+        if (v.first) unique.insert(v.first);
     g_xfb_mod.clear();
+    for (VkShaderModule h : unique) vkDestroyShaderModule(d, h, nullptr);
     std::lock_guard<std::mutex> lk2(g_module_id_mu);
     g_module_ids.clear();
     g_module_subgroups.clear();
+}
+
+void module_cache_clear() {
+    std::lock_guard<std::recursive_mutex> lk(g_module_mu);
+    clear_all_shader_modules_locked(vkdev());
 }
 
 uint64_t module_content_id(VkShaderModule m) {
@@ -2066,25 +2085,9 @@ void pipeline_shutdown() {
     }
     g_shared_layouts.clear();
     pool_sets_shutdown();
-    for (auto& [k, m] : g_modules)
-        if (m) vkDestroyShaderModule(d, m, nullptr);
-    g_modules.clear();
-    for (auto& [k, m] : g_variants)
-        if (m) vkDestroyShaderModule(d, m, nullptr);
-    g_variants.clear();
-    for (auto& [k, m] : g_dual_src)
-        if (m) vkDestroyShaderModule(d, m, nullptr);
-    g_dual_src.clear();
-    for (auto& [k, e] : g_no_out)
-        if (e.first && e.second) vkDestroyShaderModule(d, e.first, nullptr);
-    g_no_out.clear();
-    for (auto& [k, v] : g_xfb_mod)
-        if (v.first) vkDestroyShaderModule(d, v.first, nullptr);
-    g_xfb_mod.clear();
     {
-        std::lock_guard<std::mutex> lk(g_module_id_mu);
-        g_module_ids.clear();
-        g_module_subgroups.clear();
+        std::lock_guard<std::recursive_mutex> lk(g_module_mu);
+        clear_all_shader_modules_locked(d);
     }
     for (auto& [k, b] : g_const_bufs) device().destroy_buffer(b.first);
     g_const_bufs.clear();
