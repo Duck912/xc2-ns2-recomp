@@ -468,7 +468,7 @@ export const zh = {
     'settings.presentMode.hint': 'FIFO 是默认值。FIFO relaxed 跟随可变刷新率显示器；mailbox 和 immediate 会撕裂。',
     'settings.fps.label': '目标帧率',
     'settings.fps.native': '30 帧（省电 / 稳帧）',
-    'settings.fps.hint': '零售版 3.0.1 游戏本体最高按 60 帧运行（强行解锁原生帧率会导致局部逻辑与动画加速）。需要 120 帧输出可在上方开启「帧生成（FSR 3 / DLSS-G）」（注：插帧可能影响部分高速或局部动画的画面正确性）。',
+    'settings.fps.hint': '60 帧为零售版 3.0.1 默认步进；90 / 120 帧通过双时钟在游玩时提升帧率并自动将过场与视频保持在 60 帧（开启垂直同步需显示器支持对应刷新率）。',
     'settings.vsyncCap.label': '帧率跟随显示器上限',
     'settings.vsyncCap.hint': '关闭后，垂直同步不限制时帧率可以跑满。',
     'settings.audioDevice.label': '音频设备',

@@ -469,7 +469,7 @@ export const en = {
     'settings.presentMode.hint': 'FIFO is the default. FIFO relaxed follows a variable-refresh display; mailbox and immediate tear.',
     'settings.fps.label': 'Target frame rate',
     'settings.fps.native': '30 fps (power saver)',
-    'settings.fps.hint': 'Retail 3.0.1 runs its game logic up to 60 fps. For 120 fps output without speeding up physics or timers, you can enable Frame Generation above (FSR 3 / DLSS-G), though interpolated frames may affect visual correctness in some scenes.',
+    'settings.fps.hint': '60 fps matches retail 3.0.1. 90 and 120 fps scale gameplay via dual-clock vsync while keeping cutscenes and videos at 60 fps (requires a matching refresh-rate display when VSync is on).',
     'settings.vsyncCap.label': 'Cap the frame rate to the display',
     'settings.vsyncCap.hint': 'Off lets the frame rate run free when vsync does not limit it.',
     'settings.audioDevice.label': 'Audio device',

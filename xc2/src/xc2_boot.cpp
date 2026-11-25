@@ -34,8 +34,10 @@
 #include "nxrt/log.h"
 #include "nxrt/memory.h"
 #include "nxrt/module.h"
+#include "nxrt/movie_vdec.h"
 #include "nxrt/nxmodule.h"
 #include "nxrt/runtime.h"
+#include "nxrt/services_api.h"
 #include "nxrt/svc.h"
 #include "nxrt/gfx.h"
 #include "nxrt/gfx_tuning.h"
@@ -680,6 +682,46 @@ static void arm_model_probe(uint64_t main_base) {
 // (NS1 does the same through a patch page: frame_rate.c xc2_rate_store, patches-v301.txt set xc2fps. Their build reads the period through
 // the virtual every frame; ours has to be checked - if the game caches it at boot, this write lands before the read either way.)
 static nxrt::FrameLimiter *g_frame_limiter = nullptr;   // the play-mode limiter: its measured interval is the display time
+static std::atomic<float> g_fps_limiter_step{1.0f / 60.0f};
+static std::atomic<float> g_fps_game_step{1.0f / 60.0f};
+static uint64_t g_fps_main_base = 0;
+
+// Retail 3.0.1 vsync-period virtual override (main+0xba1320, vtable slot +0xc8 at main+0xe62780; zero direct BL callers).
+// Separates NS1-style dual words without binary patching:
+//   - renderSyncSys limiter (lr = main+0xb8eb4c / 0xb8ebd0) receives exact target step (1/90 gameplay, 1/60 cutscene), never self-locking;
+//   - getFrameStep (0xb865bc, 0xb8e540) receives the 5-frame real-time moving average so gameplay/hair/cloth keep 1.0x real time.
+static void host_vsync_period_301(::Ctx *c) {
+    const uint64_t mb = g_fps_main_base;
+    int32_t iv = 1;
+    const uint64_t iv_addr = mb + 0xe95460;   // retail 3.0.1 vsync interval (written to 1 at boot by 0x735300)
+    if (nxrt::mem::is_mapped(iv_addr, 4)) {
+        std::memcpy(&iv, reinterpret_cast<const void *>(iv_addr), 4);
+    }
+    if (iv <= 0) iv = 2;   // matches cbz w8 -> 2*period in renderSyncSys (0xb8eba0)
+    const uint64_t lr = c->x[30];
+    const bool is_limiter = (lr == mb + 0xb8eb4c || lr == mb + 0xb8ebd0);
+    static std::atomic<uint64_t> seen[8] = {};
+    static std::atomic<int> nseen{0};
+    bool known = false;
+    const int n = nseen.load(std::memory_order_relaxed);
+    for (int i = 0; i < n && i < 8; ++i) {
+        if (seen[i].load(std::memory_order_relaxed) == lr) { known = true; break; }
+    }
+    if (!known && n < 8) {
+        const int idx = nseen.fetch_add(1, std::memory_order_relaxed);
+        if (idx < 8) {
+            seen[idx].store(lr, std::memory_order_relaxed);
+            NXLOG_I("xc2", "vsync_period(0xba1320): caller lr=0x%llx (main+0x%llx) role=%s iv=%d",
+                    static_cast<unsigned long long>(lr), static_cast<unsigned long long>(lr - mb),
+                    is_limiter ? "renderSyncSys-limiter" : "game-step", iv);
+        }
+    }
+    const float step = is_limiter ? g_fps_limiter_step.load(std::memory_order_relaxed)
+                                  : g_fps_game_step.load(std::memory_order_relaxed);
+    c->v[0].u64[0] = 0;
+    c->v[0].u64[1] = 0;
+    c->v[0].f[0] = step / static_cast<float>(iv);
+}
 
 static void arm_frame_rate(uint64_t main_base) {
     const int64_t fps = nxrt::config_get_int("xc2", "fps", 0);
@@ -701,19 +743,62 @@ static void arm_frame_rate(uint64_t main_base) {
     NXLOG_I("xc2", "present_ahead = %s (auto = 1 while [nvn] mirror_capture is on, else 0; [nvn] present_ahead overrides this default)",
             nxrt::config_get_str("nvn", "present_ahead", "").c_str());
     if (fps <= 0) return;
-    const uint64_t period_addr = main_base + 0xf65a44;      // the 1/60 the vsync-period virtual loads (0x3C888889)
-    if (!nxrt::mem::is_mapped(period_addr, 4)) {
-        NXLOG_W("xc2", "frame rate: the vsync period is not mapped at 0x%llx: the game keeps its own 30 fps step",
-                static_cast<unsigned long long>(period_addr));
-        return;
-    }
+    const uint64_t period_addr = main_base + 0xf65a44;      // the 1/60 the vsync-period virtual loads (0x3C888889) on 3.0.0
     float old = 0.0f;
-    std::memcpy(&old, reinterpret_cast<const void*>(period_addr), 4);
-    // 0xf65a44 is the 3.0.0 rodata address of 1/60 (0x3C888889); on 3.0.1 it falls inside .bss (0.0f) and the game already
-    // runs natively at 60 fps (present interval 1). Skip patching and the fps_follow thread when the slot does not hold 1/60.
-    if (std::fabs(old - (1.0f / 60.0f)) > 1e-4f) {
-        NXLOG_I("xc2", "frame rate: main+0xf65a44 holds %.6f (expected 1/60); skipping 3.0.0 vsync-period patch",
-                static_cast<double>(old));
+    const bool has_300_slot = nxrt::mem::is_mapped(period_addr, 4) &&
+                              (std::memcpy(&old, reinterpret_cast<const void*>(period_addr), 4), std::fabs(old - (1.0f / 60.0f)) <= 1e-4f);
+    if (!has_300_slot) {
+        g_fps_main_base = main_base;
+        const float init_step = static_cast<float>(1.0 / static_cast<double>(fps));
+        g_fps_limiter_step.store(init_step, std::memory_order_relaxed);
+        g_fps_game_step.store(init_step, std::memory_order_relaxed);
+        nxrt::fn_register(main_base + 0xba1320, host_vsync_period_301);
+        const int64_t cutscene_fps = nxrt::config_get_int("xc2", "cutscene_fps", fps > 60 ? 60 : 0);
+        NXLOG_I("xc2", "frame rate: hooked retail 3.0.1 vsync_period virtual at main+0xba1320 (target %lld fps, cutscene %lld fps, step %.2f ms)",
+                static_cast<long long>(fps), static_cast<long long>(cutscene_fps), static_cast<double>(init_step) * 1000.0);
+        nxrt::set_present_interval_hz(static_cast<double>(fps));
+        nxrt::services::viapi::set_display_vsync_hz(static_cast<double>(fps));
+        const bool follow = nxrt::config_get_bool("xc2", "fps_follow", true);
+        if ((!follow && cutscene_fps <= 0) || !g_frame_limiter) return;
+        std::thread([main_base, fps, cutscene_fps, follow] {
+            constexpr uint64_t kCutsceneFlagOff = 0xedf1a0ull;
+            int64_t cur_fps = fps;
+            bool was_rt_cutscene = false;
+            for (;;) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(4));
+                const bool in_movie = nxrt::media::is_movie_playing();
+                bool in_rt_cutscene = false;
+                const uint64_t flag_addr = main_base + kCutsceneFlagOff;
+                if (nxrt::mem::is_mapped(flag_addr, 1)) {
+                    uint8_t flag = 0;
+                    std::memcpy(&flag, reinterpret_cast<const void *>(flag_addr), 1);
+                    in_rt_cutscene = (flag & 1u) != 0;
+                    if (in_rt_cutscene != was_rt_cutscene) {
+                        was_rt_cutscene = in_rt_cutscene;
+                        NXLOG_I("xc2", "real-time cutscene %s (main+0xedf1a0=0x%02x)", in_rt_cutscene ? "starts" : "ends", static_cast<unsigned>(flag));
+                    }
+                }
+                const bool in_cutscene = in_movie || in_rt_cutscene;
+                const int64_t want_fps = (in_cutscene && cutscene_fps > 0 && cutscene_fps < fps) ? cutscene_fps : fps;
+                if (want_fps != cur_fps) {
+                    cur_fps = want_fps;
+                    nxrt::set_present_interval_hz(static_cast<double>(cur_fps));
+                    nxrt::services::viapi::set_display_vsync_hz(static_cast<double>(cur_fps));
+                    g_frame_limiter->set_target_fps(static_cast<double>(cur_fps));
+                    NXLOG_I("xc2", "frame rate -> %lld fps (%s)", static_cast<long long>(cur_fps),
+                            in_movie ? "AV1 movie" : in_rt_cutscene ? "real-time cutscene" : "gameplay");
+                }
+                const double target = 1.0 / static_cast<double>(cur_fps);
+                g_fps_limiter_step.store(static_cast<float>(target), std::memory_order_relaxed);
+                double step = target;
+                if (follow) {
+                    const double recent_ms = g_frame_limiter->recent_mean_ms(5, 250.0);
+                    if (recent_ms > 0.0) step = (std::max)(target, recent_ms / 1000.0);
+                    step = (std::min)(step, 1.0 / 15.0);
+                }
+                g_fps_game_step.store(static_cast<float>(step), std::memory_order_relaxed);
+            }
+        }).detach();
         return;
     }
     // [xc2] fps_interval (default 2): the game's "vsyncs per frame". 2 with period 1/(2 fps) is the shipping arrangement;
