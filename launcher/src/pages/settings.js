@@ -68,6 +68,10 @@ const SECTIONS = [
     fields: [
       { id: 'audio_device', type: 'text', label: 'settings.audioDevice.label', sec: 'audio', key: 'device', def: 'default',
         placeholder: 'settings.audioDevice.placeholder', hint: 'settings.audioDevice.hint' },
+      { id: 'audio_channels', type: 'select', label: 'settings.audioChannels.label', sec: 'audio', key: 'channels', def: '2',
+        options: [['2', 'settings.audioChannels.stereo'], ['6', 'settings.audioChannels.surround51']],
+        normalize: (v) => (String(v).trim() === '6' ? '6' : '2'),
+        hint: 'settings.audioChannels.hint' },
       { id: 'out_latency', type: 'number', label: 'settings.audioLatency.label', sec: 'audio', key: 'out_latency_ms', def: '30',
         min: 5, max: 200, hint: 'settings.audioLatency.hint' },
       { id: 'jc2_mouse', type: 'select', label: 'settings.jc2Mouse.label', sec: 'input', key: 'jc2_mouse', def: 'auto',
