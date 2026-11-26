@@ -1253,6 +1253,9 @@ def step_done_package(r, repo, install):
         made = write_ini(install, repo)
         if made:
             r.log("  wrote nxrt.ini")
+        unshadowed = unshadow_ini(install)
+        if unshadowed:
+            r.log("  nxrt.ini: dropped " + ", ".join(unshadowed) + " (the F1 page owns those; see #57 / #73)")
     game = install / "game"
     if not r.dry:
         game.mkdir(parents=True, exist_ok=True)
@@ -1263,6 +1266,52 @@ def step_done_package(r, repo, install):
         (install / "setup_state.tsv").write_text("mprs_setup_state\t1\nmeta\tfinished\t1\n", encoding="utf-8")
     r.write_status(state="done", note="ready to play")
     return r.end_step("done", started, True, "ready to play")
+
+
+# The template used to seed keys that the F1 page owns, and nxrt.ini wins over controls.ini (play.cpp merge_env), so
+# the player's choice was replaced on every launch: [hdr] mode = auto pinned HDR (#57), [gfx] window_width/height pinned
+# the window size (#73). New installs no longer get them. An nxrt.ini written by an older template still holds them, so
+# setup drops each one while it still carries exactly the old default - a value the player set is left alone.
+SHADOWED_DEFAULTS = (("hdr", "mode", "auto"), ("gfx", "window_width", "1920"), ("gfx", "window_height", "1080"))
+
+
+def _shadowed_key(section, line):
+    body = line.split(";")[0].strip()
+    if "=" not in body:
+        return None
+    name, _, value = body.partition("=")
+    name = name.strip().lower()
+    value = value.strip().strip('"').lower()
+    for sec, key, default in SHADOWED_DEFAULTS:
+        if section == sec and name == key and value == default:
+            return sec + "/" + key
+    return None
+
+
+def unshadow_ini(install):
+    """Drop the keys an older template seeded with their default, so the F1 page decides those settings again."""
+    ini = install / "nxrt.ini"
+    if not ini.is_file():
+        return []
+    lines = ini.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+    section = ""
+    kept = []
+    dropped = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            section = stripped[1:-1].strip().lower()
+            kept.append(line)
+            continue
+        hit = _shadowed_key(section, line)
+        if hit:
+            dropped.append(hit)
+        else:
+            kept.append(line)
+    if not dropped:
+        return []
+    ini.write_text("".join(kept), encoding="utf-8", newline="\n")
+    return dropped
 
 
 def write_ini(install, repo):
