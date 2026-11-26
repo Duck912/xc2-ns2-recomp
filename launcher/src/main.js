@@ -3,7 +3,7 @@ import './layout.css';
 import './components.css';
 import { listen } from '@tauri-apps/api/event';
 import { api, esc, icon, refreshIcons, errText, toast } from './util.js';
-import { t, initLang, getLang } from './i18n.js';
+import { t, initLang, getLang, setLang } from './i18n.js';
 import * as play from './pages/play.js';
 import * as mods from './pages/mods.js';
 import * as settings from './pages/settings.js';
@@ -20,6 +20,8 @@ const PAGES = {
 };
 
 const nav = document.getElementById('nav');
+// The launcher's own configuration, kept here so the corner language switch can save it too (boot() fills it in).
+let cfg = { dump_dir: '' };
 const view = document.getElementById('view');
 let current = null;
 let statusHandler = null;
@@ -68,6 +70,36 @@ function drawShell() {
   document.title = t('window.title');
   nav.setAttribute('aria-label', t('nav.main'));
   drawNav();
+  drawLangSwitch();
+}
+
+/**
+ * The language switch in the top-right corner. The label is the language it switches *to*, so one click always does
+ * what the button says. It writes the same two places the Settings page writes: the launcher's own config and the
+ * in-game F1 menu's [gfx] ui_language, so the two never disagree.
+ */
+function drawLangSwitch() {
+  let b = document.getElementById('lang-switch');
+  if (!b) {
+    b = document.createElement('button');
+    b.id = 'lang-switch';
+    b.className = 'lang-switch';
+    b.type = 'button';
+    b.addEventListener('click', async () => {
+      const next = getLang() === 'zh' ? 'en' : 'zh';
+      cfg = { ...cfg, lang: next };
+      try { await api('save_config', { config: cfg }); } catch (e) { /* applies for this session anyway */ }
+      try {
+        await api('write_settings', { edits: [{ file: 'game', section: 'gfx', key: 'ui_language', value: next === 'zh' ? 'zh' : 'auto' }] });
+      } catch (e) { /* nxrt.ini may not exist yet; the menu keeps its language */ }
+      await setLang(next, () => redrawForLang());
+    });
+    document.body.appendChild(b);
+  }
+  const next = getLang() === 'zh' ? 'en' : 'zh';
+  b.textContent = next === 'zh' ? '中文' : 'EN';
+  b.title = next === 'zh' ? '切换到中文' : 'Switch to English';
+  b.setAttribute('aria-label', b.title);
 }
 
 /** Redraws the shell and the open page after the interface language changed. */
@@ -106,7 +138,6 @@ async function boot() {
     notify();
   });
   upd.listeners.add(drawNav);
-  let cfg = { dump_dir: '' };
   try {
     cfg = await api('get_config');
   } catch (e) {

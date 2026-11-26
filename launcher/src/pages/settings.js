@@ -82,10 +82,7 @@ const SECTIONS = [
         hint: 'settings.audioChannels.hint' },
       { id: 'out_latency', type: 'number', label: 'settings.audioLatency.label', sec: 'audio', key: 'out_latency_ms', def: '30',
         min: 5, max: 200, hint: 'settings.audioLatency.hint' },
-      { id: 'jc2_mouse', type: 'select', label: 'settings.jc2Mouse.label', sec: 'input', key: 'jc2_mouse', def: 'auto',
-        options: [['auto', 'settings.jc2Mouse.auto'], ['on', 'settings.jc2Mouse.on'], ['off', 'settings.jc2Mouse.off']], hint: 'settings.jc2Mouse.hint' },
-      { id: 'jc2_clicks', type: 'select', label: 'settings.jc2Clicks.label', sec: 'input', key: 'jc2_clicks', def: 'both',
-        options: [['both', 'settings.jc2Clicks.both'], ['device', 'settings.jc2Clicks.device']], hint: 'settings.jc2Clicks.hint' },
+      // Joy-Con 2 mouse (jc2_mouse / jc2_clicks) is an upstream Fortune's Weave feature; XC2 uses the real mouse.
     ],
   },
   {
