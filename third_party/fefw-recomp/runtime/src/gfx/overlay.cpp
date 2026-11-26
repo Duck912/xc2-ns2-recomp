@@ -203,6 +203,15 @@ struct Overlay::Impl {
     const ForeignFrame* foreign_frame = nullptr;     // set while draw_foreign runs draw
     void (*foreign_lock)(bool) = nullptr;
     bool capturing() const { return ctx.renderer && ctx.renderer->capture_pending(); }
+    // show_toast: text and the steady-clock seconds it ends at (toast_mu: set from any thread, read while drawing)
+    std::mutex toast_mu;
+    std::string toast_text;
+    double toast_until_s = 0.0, toast_len_s = 0.0;
+    bool toast_visible(double now_s) {
+        std::lock_guard<std::mutex> lk(toast_mu);
+        return !toast_text.empty() && now_s < toast_until_s;
+    }
+    void draw_toast(const FrameInfo& f, double now_s);
     std::atomic<bool> visible{false};
     std::mutex mu;                    // guards the ImGui context: events arrive on the game's main thread, drawing happens on the presenting thread
     int toggle_sc = SDL_SCANCODE_F1;
@@ -1703,6 +1712,34 @@ bool Overlay::Impl::note_visible(double now_s) {
     return now_s - note_since_s >= 1.5;
 }
 
+void Overlay::show_toast(const std::string& text, double seconds) {
+    Impl& s = *impl_;
+    const double now_s = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    std::lock_guard<std::mutex> lk(s.toast_mu);
+    s.toast_text = text;
+    s.toast_len_s = seconds > 0.1 ? seconds : 0.1;
+    s.toast_until_s = now_s + s.toast_len_s;
+}
+void Overlay::Impl::draw_toast(const FrameInfo& f, double now_s) {
+    std::string text;
+    double left = 0.0;
+    {
+        std::lock_guard<std::mutex> lk(toast_mu);
+        text = toast_text;
+        left = toast_until_s - now_s;
+    }
+    if (text.empty() || left <= 0.0) return;
+    const float alpha = static_cast<float>(std::clamp(left / 0.4, 0.0, 1.0));   // fades over the last 0.4 s
+    ImFont* font = ImGui::GetFont();
+    const float size = std::clamp(std::round(static_cast<float>(f.extent.height) / 54.f), 13.f, 32.f);
+    const float pad = size * 0.5f;
+    const ImVec2 sz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, text.c_str());
+    const float W = static_cast<float>(f.extent.width);
+    const float x0 = (W - sz.x) * 0.5f - pad, y0 = size * 1.2f;
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x0 + sz.x + 2.f * pad, y0 + sz.y + 2.f * pad), IM_COL32(0, 0, 0, static_cast<int>(150 * alpha)), size * 0.35f);
+    dl->AddText(font, size, ImVec2(x0 + pad, y0 + pad), IM_COL32(255, 255, 255, static_cast<int>(235 * alpha)), text.c_str());
+}
 void Overlay::Impl::draw_note(const FrameInfo& f) {
     char text[96];
     const int pending = shader_backlog();
@@ -1728,7 +1765,8 @@ void Overlay::draw(const FrameInfo& f) {
     const bool note_on = s.note_visible(now_s) && (s.counter_in_shots.load(std::memory_order_relaxed) || !s.capturing());
     const bool ptr_on = s.ptr_show.load(std::memory_order_relaxed) && (s.ptr_in_shots.load(std::memory_order_relaxed) || !s.capturing());
     const bool kb_on = s.kb_poll();
-    if (!s.visible && !counter_on && !note_on && !ptr_on && !kb_on) {
+    const bool toast_on = s.toast_visible(now_s);
+    if (!s.visible && !counter_on && !note_on && !ptr_on && !kb_on && !toast_on) {
         s.last_frame = now;
         s.counter_was_on = false;
         return;
@@ -1756,7 +1794,7 @@ void Overlay::draw(const FrameInfo& f) {
     }
     // a screenshot leaves the counter out unless asked for; with the menu hidden there is then nothing to draw
     const bool show_counter = counter_on && (s.counter_in_shots.load(std::memory_order_relaxed) || !s.capturing());
-    if (!s.visible && !show_counter && !note_on && !ptr_on && !kb_on) {
+    if (!s.visible && !show_counter && !note_on && !ptr_on && !kb_on && !toast_on) {
         s.last_frame = now;
         return;
     }
@@ -1778,6 +1816,7 @@ void Overlay::draw(const FrameInfo& f) {
     if (kb_on) s.draw_keyboard(now_s);
     if (show_counter) s.draw_counter(f, now_s);
     if (note_on) s.draw_note(f);
+    if (toast_on) s.draw_toast(f, now_s);
     if (ptr_on) {   // a plain arrow, white with a dark outline, sized with the frame height
         const float k = std::max(1.f, static_cast<float>(f.extent.height) / 720.f);
         const float x = s.ptr_x.load(std::memory_order_relaxed), y = s.ptr_y.load(std::memory_order_relaxed);

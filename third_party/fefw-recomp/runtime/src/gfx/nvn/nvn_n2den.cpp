@@ -212,6 +212,8 @@ void resize(uint32_t width, uint32_t height) {
     if (active()) N2denNvnhle::Resize(width, height);
 }
 
+static std::atomic<gfx::Overlay*> g_overlay{nullptr};   // set_overlay: the screenshot note goes on it
+
 bool request_screenshot(const std::string& png_path) {
     auto* path = new std::string(png_path);
     const bool ok = N2denNvnhle::RequestScreenshot(0, 0, [](void* user, const uint8_t* bgra, uint32_t w, uint32_t h) {
@@ -227,8 +229,13 @@ bool request_screenshot(const std::string& png_path) {
             rgba[i + 2] = bgra[i];
             rgba[i + 3] = 255;
         }
-        if (gfx::save_png_rgba(*p, rgba.data(), w, h)) NXLOG_I(kTag, "screenshot %s (%ux%u)", p->c_str(), w, h);
+        const bool saved = gfx::save_png_rgba(*p, rgba.data(), w, h);
+        if (saved) NXLOG_I(kTag, "screenshot %s (%ux%u)", p->c_str(), w, h);
         else NXLOG_W(kTag, "screenshot %s could not be written", p->c_str());
+        if (gfx::Overlay* o = g_overlay.load()) {
+            const size_t slash = p->find_last_of("\\/");
+            o->show_toast(saved ? "Screenshot saved: " + p->substr(slash == std::string::npos ? 0 : slash + 1) : "Screenshot failed");
+        }
     }, path);
     if (!ok) delete path;
     return ok;
@@ -238,6 +245,7 @@ bool set_setting(const char* key, const char* value) { return N2denNvnhle::SetSe
 std::string get_setting(const char* key) { return N2denNvnhle::GetSetting(key); }
 
 void set_overlay(gfx::Overlay* overlay) {
+    g_overlay.store(overlay);
     if (!overlay) {
         N2denNvnhle::SetOverlay(nullptr);
         return;

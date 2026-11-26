@@ -95,6 +95,9 @@ public:
     // A drawn arrow at a window pixel (test aid, S28: a screenshot of the game's own frame does not contain the OS cursor). Any thread.
     void set_pointer(bool show, float x, float y, bool in_screenshots);
 
+    // A short note at the top of the screen for `seconds` ("Screenshot saved"), fading out at the end. Any thread.
+    void show_toast(const std::string& text, double seconds = 2.0);
+
     // The Renderer overlay hook: builds and draws the menu on top of the frame (no-op while hidden, unless the counter is on).
     void draw(const FrameInfo& f);
 
