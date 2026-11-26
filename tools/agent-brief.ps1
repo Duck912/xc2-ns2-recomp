@@ -108,6 +108,31 @@ try {
         Write-Host ("  MISSING: $card (optional; pass -CardPath or set XC2_ONBOARDING_CARD)") -ForegroundColor Yellow
     }
 
+    # A backup that stopped running is invisible until someone needs it: 2026-11-26 the nightly job had been failing
+    # on a stale NAS password for a day and nothing said so. This is the one line that says it.
+    Section "NAS BACKUP  (maintenance\last-sync.json)"
+    $syncFile = Join-Path $maintDir 'last-sync.json'
+    if (Test-Path -LiteralPath $syncFile) {
+        try {
+            $sync = Get-Content -LiteralPath $syncFile -Raw -Encoding UTF8 | ConvertFrom-Json
+            $when = [datetime]$sync.when
+            $ageH = [math]::Round(((Get-Date) - $when).TotalHours, 1)
+            $failed = @($sync.pairs | Where-Object { -not $_.ok })
+            if (-not $sync.ok -or $failed.Count -gt 0) {
+                Write-Host ("  FAIL   last sync failed at " + $when.ToString('MM-dd HH:mm') + ": " + (($failed | ForEach-Object { $_.name }) -join ', ')) -ForegroundColor Red
+                Write-Host ('         run the maintenance sync script in ' + $maintDir) -ForegroundColor Red
+            } elseif ($ageH -gt 36) {
+                Write-Host ("  WARN   last successful sync was " + $ageH + " h ago (" + $when.ToString('MM-dd HH:mm') + "); the nightly task may not be running") -ForegroundColor Yellow
+            } else {
+                Write-Host ("  ok     last sync " + $ageH + " h ago, every pair matched")
+            }
+        } catch {
+            Write-Host ('  WARN   cannot read last-sync.json: ' + $_.Exception.Message) -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host '  MISSING: no last-sync.json (has the backup ever run?)' -ForegroundColor Yellow
+    }
+
     Section 'CURRENT STATE  (docs/internal/STATE.md)'
     $state = Join-Path $internal 'STATE.md'
     if (Test-Path -LiteralPath $state) {
