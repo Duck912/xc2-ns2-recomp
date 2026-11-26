@@ -67,7 +67,7 @@
 // is written with, and every one of them can be changed in the F1 page (controls.ini is the file that page edits).
 static const char* const kXc2SettingsText = R"INI(
 [meta]
-defaults_rev = 9
+defaults_rev = 10
 
 [bindings.all]
 # movement: WASD and the arrow keys
@@ -107,6 +107,9 @@ G = btn_r
 # menu (Tab) and map (M); Esc stays cancel (B), which is what people expect
 Tab = btn_plus
 M = btn_minus
+# the wheel scrolls: one notch is one d-pad step (menus, lists, the arts palette)
+WheelUp = dpad_up
+WheelDown = dpad_down
 # stick clicks
 V = btn_lstick
 Left Ctrl = btn_rstick
@@ -138,6 +141,8 @@ static const nxrt::play::GameDefaultAddition kXc2Additions[] = {
     {7, nxrt::play::Ctx::All, "Backspace", nxrt::play::Act::BtnB},
     {7, nxrt::play::Ctx::All, "Escape", nxrt::play::Act::BtnB},
     {7, nxrt::play::Ctx::All, "Mouse3", nxrt::play::Act::BtnR},
+    {10, nxrt::play::Ctx::All, "WheelUp", nxrt::play::Act::DpadUp},
+    {10, nxrt::play::Ctx::All, "WheelDown", nxrt::play::Act::DpadDown},
     {9, nxrt::play::Ctx::All, "1", nxrt::play::Act::BtnY},
     {9, nxrt::play::Ctx::All, "2", nxrt::play::Act::BtnA},
     {9, nxrt::play::Ctx::All, "3", nxrt::play::Act::BtnB},
@@ -194,7 +199,7 @@ static const nxrt::play::GameDefaults& xc2_play_defaults() {
     static const nxrt::play::GameDefaults d = [] {
         nxrt::play::GameDefaults g;
         g.settings_text = kXc2SettingsText;
-        g.defaults_rev = 9;
+        g.defaults_rev = 10;
         g.additions = kXc2Additions;
         g.addition_count = static_cast<unsigned>(sizeof kXc2Additions / sizeof kXc2Additions[0]);
         g.vocabulary = &xc2_vocabulary();
