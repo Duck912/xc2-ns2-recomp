@@ -686,7 +686,7 @@ def install_runtime_signature(install):
     return None
 
 
-def step_link_package(r, repo, install, zig, rtlib, jobs, exe_name="xc2_boot.exe"):
+def step_link_package(r, repo, install, zig, rtlib, jobs, exe_name="xc2_boot.exe", icon=None):
     started = r.step("link")
     exe = install / exe_name   # XC:DE: xcde.exe
     stamp = install / "build" / "link-stamp.json"
@@ -791,6 +791,11 @@ def step_link_package(r, repo, install, zig, rtlib, jobs, exe_name="xc2_boot.exe
     argv = ([str(zig), "c++", "-target", "x86_64-windows-gnu", "-O1", "-w", "-fno-exceptions", "-fno-rtti",
              "-Wl,--strip-debug", "-DXC2_MODULES_7", "@" + str(rsp), str(stub),
              "-I" + str(inc), "-I" + str(stub.parent), str(rtlib), "-o", str(exe)])
+    if icon and Path(icon).is_file() and not r.dry:
+        # The exe's icon (XC:DE: xcde/xcde.ico), compiled by Zig's resource compiler; it resolves the .ico next to the .rc.
+        shutil.copyfile(icon, obj / "app.ico")
+        (obj / "app.rc").write_text('1 ICON "app.ico"\n', encoding="ascii")
+        argv.insert(-2, str(obj / "app.rc"))
     if r.run(argv) != 0:
         return r.end_step("link", started, False, "the exe did not link")
     if not r.dry and exe.is_file() and clear_high_entropy_va(exe):

@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/images/monado-icon.png" alt="xcde-ns2-recomp icon: the Monado" width="160"></p>
+
 # xcde-ns2-recomp
 
 A native Windows PC port of **Xenoblade Chronicles: Definitive Edition – Nintendo Switch 2 Edition**, made by

@@ -280,7 +280,8 @@ def step_link(r, repo):
     rc = r.run(base.pwsh(repo / "tools" / "build" / "build-boot.ps1", "-Exefs", repo / EXEFS,
                          "-OutDir", repo / BOOT, "-LibDir", repo / BUILD / "lib",
                          "-MainLib", repo / BUILD / "lib" / "main.lib", "-Defines", "XC2_MODULES_7",
-                         "-ExeName", EXE, "-N2denDist", nvnhle_dist(repo)), cwd=repo, on_line=base.build_progress(r, "link"))
+                         "-ExeName", EXE, "-IconFile", repo / "xcde" / "xcde.ico",
+                         "-N2denDist", nvnhle_dist(repo)), cwd=repo, on_line=base.build_progress(r, "link"))
     ok = (repo / BOOT / EXE).is_file()
     return r.end_step("link", started, rc == 0 and ok, "" if rc == 0 and ok else "build-boot.ps1 failed")
 
@@ -381,7 +382,8 @@ def main():
             ("doctor", lambda: base.step_doctor_package(r, repo, tools)),
             ("ingest", lambda: step_ingest(r, repo, install, nup, exefs_in, romfs_in, dlc_in, package=True)),
             ("lift", lambda: base.step_lift_package(r, repo, install, py, a.jobs, sites=repo / "xcde" / "sites")),
-            ("link", lambda: base.step_link_package(r, repo, install, zig, rtlib, a.jobs, exe_name=EXE)),
+            ("link", lambda: base.step_link_package(r, repo, install, zig, rtlib, a.jobs, exe_name=EXE,
+                                                       icon=repo / "xcde" / "xcde.ico")),
             ("streamline", lambda: step_streamline(r, repo, install, package=True, fetch=not a.no_streamline)),
             ("done", lambda: step_done(r, repo, install)),
         ]

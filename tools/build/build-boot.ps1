@@ -19,6 +19,7 @@ param(
     [string]$OutDir = '',       # where xc2_boot.exe and its object go; default build\boot
     [string]$LibDir = '',       # directory holding the per-module libs build.ps1 writes; default build\lib
     [string]$Defines = '',      # extra /D defines for xc2_boot.cpp, space separated (HANDOVER 89: XC2_MODULES_7)
+    [string]$IconFile = '',     # the exe's .ico (XC:DE: xcdeÍe.ico); default: the optional local icons below
     [string]$ExeName = 'xc2_boot.exe',  # the exe's file name (XC:DE: xcde.exe); its .map, .names and _freeze.txt follow it
     [string]$N2denDist = ''     # n2den NVN-HLE distribution folder (lib\n2den_nvnhle_bundle.lib): links it for --nvn n2den;
                                 # the runtime must be configured with the same folder as NXRT_N2DEN_DIST
@@ -166,7 +167,7 @@ foreach ($dir in @($bd, (Join-Path $root 'build\boot'))) {
         $iconCandidates += (Join-Path $dir $nm)
     }
 }
-$foundIco = $iconCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+$foundIco = if ($IconFile -and (Test-Path -LiteralPath $IconFile)) { (Resolve-Path -LiteralPath $IconFile).Path } else { $iconCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1 }
 if ($foundIco) {
     $rcTool = (Get-Command llvm-rc.exe, rc.exe -ErrorAction SilentlyContinue | Select-Object -First 1)
     if ($rcTool) {

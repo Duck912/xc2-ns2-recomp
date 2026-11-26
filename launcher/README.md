@@ -8,4 +8,4 @@ own setup steps on your PC (see docs/BUILDING.md), writes `fefw.ini` in a run fo
 - Development: `npm run tauri dev`; `cargo test` in `src-tauri` runs the unit tests.
 - Setup state is read from what exists on disk (the copied ExeFS, the lifted libraries, `fefw.exe`, the shader cache and its
   `work/shaders/setup.json`), so a paused setup continues where it stopped. The full log is `work/setup.log`.
-- The icon is drawn by `icon/make_icon.py` (no outside artwork); `npx tauri icon icon/icon.png -o src-tauri/icons` makes the sizes.
+- The icon is `icon/monado-icon.svg` (with `icon/icon.png`, 1024 px); `npx tauri icon icon/icon.png -o <tmp>` makes the sizes in `src-tauri/icons`.
