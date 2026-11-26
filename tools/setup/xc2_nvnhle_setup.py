@@ -41,6 +41,10 @@ ICON = Path("xc2") / "xc2.ico"
 
 # XC2's start-up switches (xc2_setup.py: the 3.0.1 hooks, title facts, languages) on NVN-HLE. Without XC2_GAME the boot
 # program runs XC2 (its default), with XC2's main hooks armed.
+#: The prebuilt NVN-HLE library: the same build (and SHA-256) as xcde-ns2-recomp 0.1.0, attached to this repository's
+#: own v0.1.0 release. XC2_NVNHLE_DIST (or XCDE_NVNHLE_DIST) still wins for a library built locally.
+shared.NVNHLE_URL = "https://github.com/Duck912/xc2-ns2-recomp/releases/download/v0.1.0/n2den-nvnhle-0.1.0-windows-x64.zip"
+
 GAME_ENV = dict(base.GAME_ENV)
 GAME_ENV.update({
     "NXRT_NVN_BACKEND": "n2den",
