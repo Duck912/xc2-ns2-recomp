@@ -322,11 +322,29 @@ def step_streamline(r, repo, install, package=False, fetch=True, boot=None):
     return r.end_step("streamline", started, True, "NVIDIA Streamline %s" % SL_VERSION if ok else "unpacked without sl.interposer.dll")
 
 
+# Where the game's data really is, when the run folder cannot link to it (step_ingest): a drive without junctions (exFAT,
+# FAT32, a network share). step_done writes these into launch.env, and the launcher passes them on instead of
+# <run folder>/romfs and <run folder>/dlc.
+DATA_PATHS = {}
+
+
+def link_or_use(r, link, target, what):
+    """Junction `link` -> `target`; True when linked. When the drive cannot hold a junction, the data is used where it is."""
+    if base.junction(link, target, r) == 0:
+        return True
+    r.log("  %s: this drive cannot hold folder links (not NTFS), so the game reads it from %s" % (what, target))
+    return False
+
+
 def step_done(r, repo, install, env=None, game="XC:DE", engine="xcde_setup.py"):
     started = r.step("done")
     if not r.dry:
         path = install / "launch.env"
-        env = GAME_ENV if env is None else env
+        env = dict(GAME_ENV if env is None else env)
+        if "romfs" in DATA_PATHS:
+            env["NXRT_FS_ROMFS"] = str(DATA_PATHS["romfs"])
+        if "dlc" in DATA_PATHS:
+            env["NXRT_AOC_DIR"] = str(DATA_PATHS["dlc"])
         text = ("# The start-up switches of %s on NVN-HLE. Written by tools/setup/%s from GAME_ENV on every\n"
                 "# setup and read by the launcher (Play).\n" % (game, engine))
         for k in sorted(env):

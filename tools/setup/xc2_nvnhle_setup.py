@@ -106,13 +106,13 @@ def step_ingest(r, repo, install, nup, exefs_in, romfs_in, dlc_in, package=False
                 shutil.copytree(exefs_in, exefs, dirs_exist_ok=True)
         if not romfs_in or not romfs_ok(romfs_in):
             return r.end_step("ingest", started, False, "--romfs must name the game's RomFS (it holds bf2.ard)")
-        if base.junction(romfs, romfs_in, r) != 0:
-            return r.end_step("ingest", started, False, "could not link the RomFS")
+        if not shared.link_or_use(r, romfs, romfs_in, "the game data"):
+            romfs = shared.DATA_PATHS["romfs"] = romfs_in
         if dlc_in:
             if not addons_in(dlc_in):
                 r.log("  dlc: no add-ons (<title id>/romfs) in %s; the game runs without add-on content" % dlc_in)
-            elif base.junction(dlc, dlc_in, r) != 0:
-                return r.end_step("ingest", started, False, "could not link the add-ons")
+            elif not shared.link_or_use(r, dlc, dlc_in, "the add-ons"):
+                dlc = shared.DATA_PATHS["dlc"] = dlc_in
     if not r.dry:
         if not base.have_modules(exefs):
             return r.end_step("ingest", started, False, "the ExeFS lacks a module (main, sdk, subsdk0-3, rtld)")
