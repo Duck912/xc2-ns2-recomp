@@ -1499,6 +1499,13 @@ void tab_controls(UiHost& host, const LiveStatus& live, Page& p, float bottom_h)
     // that row, "x" removes it, "+" adds another key to the action. Conflicts unbind the other action (see
     // poll_capture), so one input never drives two things.
     card_group("按键绑定（点按键重新绑定 · × 移除 · + 增加）", "Key bindings (click a key to rebind · × remove · + add)");
+    // Resetting the keys is its own action: the footer's Defaults button reloads every setting, which is a heavy way
+    // to undo one bad rebind.
+    if (ImGui::SmallButton(tr("恢复默认按键", "Reset keys"))) {
+        p.edit.bindings = host.factory().bindings;
+        mark(p);
+        set_notice(p, tr("按键已恢复默认，点「应用并保存」生效", "Keys back to the factory set; Apply & Save to keep it"), false);
+    }
     {
         static const Act kOrder[] = {
             Act::MoveForward, Act::MoveBack, Act::MoveLeft, Act::MoveRight,
