@@ -23,6 +23,19 @@ The S2 program reads its data from program 0's RomFS (same arrangement as XC2 S2
 | subsdk3 | 0.8 MB | movie 21_4_4 | 976e2076159e |
 | rtld | – | – | 87c39fd59d4d |
 
-XC2 S2E (xc2-ns2-recomp's target) is also SDK 21.4.4 with the same seven modules and engine family
-(`bfsw.nss` here, `BF2.nss` there). Whether `sdk`, `subsdk1` (DLSS) and `subsdk2` (CUDA) are byte-identical
-to XC2's is not checked yet; if they are, their lift profiles and hooks carry over unchanged.
+## Comparison with XC2 S2E (0400E95004038001, 3.0.1)
+
+Checked 2026-11-26 by SHA-256 of the ExeFS files: **six of the seven modules are byte-identical** to XC2 S2E's.
+
+| Module | Same as XC2? |
+|---|---|
+| main | **no** (7.19 MB vs 8.86 MB compressed) |
+| sdk (nnSdk + NVN driver) | yes |
+| subsdk0, subsdk3 (movie) | yes |
+| subsdk1 (DLSS) | yes |
+| subsdk2 (CUDA) | yes |
+| rtld | yes |
+
+So the lift profiles, hook/site tables and runtime behaviour that xc2-ns2-recomp has for `sdk`, `subsdk0-3` and
+`rtld` apply unchanged, and the NVN2 / DLSS / CUDA API surface the game sees is exactly XC2's. Only `main`
+(the game itself, engine `bfsw.nss`) needs new work.
