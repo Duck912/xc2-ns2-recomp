@@ -58,6 +58,13 @@
 #include "xc2ns2/xc2ns2_game.h"
 #include "xc2_modules.h"
 
+// The build the log reports. Both build paths fill this in: tools\build\build-boot.ps1 and xc2\release\CMakeLists.txt
+// run `git describe --tags --always --dirty`, so a player's log says which build ran (tag, commit, and whether the
+// tree was dirty) instead of a literal that goes stale the moment a release ships.
+#ifndef XC2_BUILD_STAMP
+#define XC2_BUILD_STAMP "dev"
+#endif
+
 extern "C" {
 void xc2_opus301_install();    // x2_opus301.cpp: hardware Opus -> the sdk's software OpusDecoder (HANDOVER 90)
 void xc2_audio301_install();   // x2_audio301.cpp: nn::audio OutputStream -> the runtime's audio sink (HANDOVER 90)
@@ -857,8 +864,10 @@ static void arm_frame_rate(uint64_t main_base) {
     // capture on when the copies' budget can hold them (a 16 GB card, not a 12 GB one, an APU or a Steam Deck), and then leads by one
     // frame without A7's per-draw instance snapshots; otherwise all stays as it was (no lead, snapshots on). Settings the player made win.
     // A stamp the log can be checked against: with two ways to build the runtime (this exe or the package's xc2_rt.dll),
-    // "which binary ran" decided several tests on 2026-11-21. Bump it whenever the film/decode model changes.
-    NXLOG_I("xc2", "build stamp: 0.2.0 media (end of stream is a separate output; the placeholder track ends with the picture)");
+    // "which binary ran" decided several tests on 2026-11-21. XC2_BUILD_STAMP is the tag and commit the build came from
+    // (see the top of this file); the media model below still needs its own bump whenever film/decode changes.
+    NXLOG_I("xc2", "build stamp: %s media (end of stream is a separate output; the placeholder track ends with the picture)",
+            XC2_BUILD_STAMP);
     if (!nxrt::config_has("nvn", "mirror_capture")) nxrt::config_set("nvn", "mirror_capture", "auto");
     if (!nxrt::config_has("nvn", "snapshot_instances")) nxrt::config_set("nvn", "snapshot_instances", "auto");
     if (!nxrt::config_has("nvn", "present_ahead")) nxrt::config_set("nvn", "present_ahead", "auto");

@@ -112,6 +112,14 @@ $vma = Find-Dep 'VulkanMemoryAllocator' @(
 $sdlinc = Find-Dep 'SDL3' @(
     (Join-Path $depsDir 'sdl3-src\include'),
     (Join-Path $repo 'third_party\deps\src\sdl3\SDL3-3.4.18\include'))
+# The build stamp the runtime logs (xc2\src\xc2_boot.cpp): the nearest tag and the commit, so a log says which build
+# ran without a literal anyone has to remember to bump. -Defines may override it.
+if ($Defines -notmatch 'XC2_BUILD_STAMP') {
+    $stamp = ''
+    try { $stamp = (& git -C $repo describe --tags --always --dirty 2>$null | Select-Object -First 1) } catch { }
+    if (-not $stamp) { $stamp = 'unknown' }
+    $Defines = ($Defines + ' XC2_BUILD_STAMP="' + $stamp.Trim() + '"').Trim()
+}
 $defArgs = @()
 if ($Defines) { foreach ($d in $Defines.Split(' ')) { if ($d) { $defArgs += "/D$d" } } }
 & clang-cl.exe /nologo /std:c++20 /O2 /MT /c (Join-Path $root 'src\xc2_boot.cpp') "/Fo$obj" @defArgs `
