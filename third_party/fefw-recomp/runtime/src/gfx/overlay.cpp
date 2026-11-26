@@ -36,6 +36,7 @@
 #include "nxrt/log.h"
 #include "nxrt/nvn.h"
 #include "nxrt/nvn_backend.h"
+#include "nxrt/nvn_n2den.h"
 #include "nxrt/platform.h"
 #include "nxrt/services_api.h"
 #include "extras/framegen.h"
@@ -202,6 +203,11 @@ struct Overlay::Impl {
     VkFormat foreign_format = VK_FORMAT_UNDEFINED;
     const ForeignFrame* foreign_frame = nullptr;     // set while draw_foreign runs draw
     void (*foreign_lock)(bool) = nullptr;
+    // that renderer's GPU (draw_foreign reads it once): the detailed HUD's VRAM, name and vendor telemetry
+    VkPhysicalDevice foreign_physical = VK_NULL_HANDLE;
+    uint32_t foreign_vendor = 0;
+    std::string foreign_gpu_name;
+    bool foreign_budget = false;
     bool capturing() const { return ctx.renderer && ctx.renderer->capture_pending(); }
     // show_toast: text and the steady-clock seconds it ends at (toast_mu: set from any thread, read while drawing)
     std::mutex toast_mu;
@@ -1324,7 +1330,25 @@ void Overlay::Impl::refresh_perf_hud(double now_s) {
         perf.ram_game_gb = static_cast<double>(pmc.WorkingSetSize) / kGiB;
     }
 
-    // 3. VRAM via Vulkan VK_EXT_memory_budget (fallback: device vram_bytes)
+    // 3. VRAM via Vulkan VK_EXT_memory_budget (fallback: device vram_bytes); another renderer's GPU when it presents
+    if (!ctx.device && foreign_physical != VK_NULL_HANDLE) {
+        constexpr double kGiB = 1024.0 * 1024.0 * 1024.0;
+        VkPhysicalDeviceMemoryBudgetPropertiesEXT budget{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT};
+        VkPhysicalDeviceMemoryProperties2 props{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2};
+        if (foreign_budget) props.pNext = &budget;
+        vkGetPhysicalDeviceMemoryProperties2(foreign_physical, &props);
+        uint64_t total_vram = 0, used_vram = 0;
+        for (uint32_t i = 0; i < props.memoryProperties.memoryHeapCount; ++i) {
+            if (props.memoryProperties.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
+                total_vram += props.memoryProperties.memoryHeaps[i].size;
+                if (foreign_budget) used_vram += budget.heapUsage[i];
+            }
+        }
+        if (total_vram > 0) {
+            perf.vram_total_gb = static_cast<double>(total_vram) / kGiB;
+            perf.vram_used_gb = static_cast<double>(used_vram) / kGiB;
+        }
+    }
     if (ctx.device && ctx.device->physical() != VK_NULL_HANDLE) {
         constexpr double kGiB = 1024.0 * 1024.0 * 1024.0;
         if (ctx.device->features().memory_budget) {
@@ -1350,7 +1374,8 @@ void Overlay::Impl::refresh_perf_hud(double now_s) {
     }
 
     // 4. GPU utilization / temp / power / clock via dynamic AMD ADL2 or NVIDIA NVML
-    const uint32_t vid = ctx.device ? ctx.device->gpu().vendor_id : 0;
+    const uint32_t vid = ctx.device ? ctx.device->gpu().vendor_id : foreign_vendor;
+    if (vid == 0) return;   // the presenting GPU is not known yet: ask the vendor library once it is
     if (!perf.vendor_init) {
         perf.vendor_init = true;
         if (vid == 0x1002) {
@@ -1581,7 +1606,18 @@ void Overlay::Impl::draw_perf_hud(const FrameInfo& f, double now_s) {
     }
     y += graph_h + sec_gap;
 
-    // Renderer / Pipeline timings section
+    // Renderer / Pipeline timings section (this runtime's renderer). With NVN-HLE drawing, those counters stay at zero:
+    // its own settings are shown instead.
+    if (ctx.foreign) {
+        const std::string up = nvn::n2den::get_setting("nvn_upscaler"), win = nvn::n2den::get_setting("scaling_filter");
+        const char* model = std::getenv("EDEN_NX2_DLSS_PRESET");
+        draw_kv(y, cAmber, "Renderer", "NVN-HLE (Vulkan)"); y += line_h;
+        const char* up_name = up == "Auto" ? (zh ? "主机原版 (游戏 DLSS)" : "Console (game DLSS)") : up == "Dlss" ? (zh ? "DLSS (全部替换)" : "DLSS (all upscalers)")
+                            : up == "Fsr1" ? "FSR 1" : up == "Copy" ? (zh ? "关闭 (双线性)" : "Off (bilinear)") : up.c_str();
+        draw_kv(y, cAmber, zh ? "超分器" : "Upscaler", up_name); y += line_h;
+        draw_kv(y, cAmber, zh ? "DLSS 模型" : "DLSS model", model && *model ? model : "K"); y += line_h;
+        draw_kv(y, cAmber, zh ? "窗口缩放" : "Window scaler", win.c_str()); y += line_h + sec_gap;
+    } else {
     std::snprintf(buf1, sizeof buf1, "%.2f ms", perf.gpu_prep_ms);
     draw_kv(y, cAmber, zh ? "GPU 指令准备" : "GPU frame prep", buf1); y += line_h;
     std::snprintf(buf1, sizeof buf1, "%.2f ms", perf.gpu_busy_ms);
@@ -1596,6 +1632,7 @@ void Overlay::Impl::draw_perf_hud(const FrameInfo& f, double now_s) {
     draw_kv(y, cAmber, zh ? "纹理上传次数" : "Texture uploads", buf1); y += line_h;
     std::snprintf(buf1, sizeof buf1, "%.2f ms", perf.tex_upload_ms);
     draw_kv(y, cAmber, zh ? "纹理上传耗时" : "Texture upload time", buf1); y += line_h + sec_gap;
+    }
 
     // Display & Resolution section
     const nvn::GameViewportInfo gvi = nvn::scaled_game_viewport_info();
@@ -1607,13 +1644,28 @@ void Overlay::Impl::draw_perf_hud(const FrameInfo& f, double now_s) {
 
     std::snprintf(buf1, sizeof buf1, "%ux%u", f.extent.width, f.extent.height);
     draw_kv(y, cCyan, zh ? "窗口输出" : "Window", buf1); y += line_h;
-    std::snprintf(buf1, sizeof buf1, "%ux%u", game_w, game_h);
-    draw_kv(y, cCyan, zh ? "游戏画布" : "Game image", buf1); y += line_h;
-    std::snprintf(buf1, sizeof buf1, "%ux%u, %d%%", scn_w, scn_h, pct);
-    draw_kv(y, cCyan, zh ? "3D 场景" : "3D scene", buf1); y += line_h;
+    if (!ctx.foreign) {   // NVN-HLE does not report the game's internal sizes: no made-up rows for it
+        std::snprintf(buf1, sizeof buf1, "%ux%u", game_w, game_h);
+        draw_kv(y, cCyan, zh ? "游戏画布" : "Game image", buf1); y += line_h;
+        std::snprintf(buf1, sizeof buf1, "%ux%u, %d%%", scn_w, scn_h, pct);
+        draw_kv(y, cCyan, zh ? "3D 场景" : "3D scene", buf1); y += line_h;
+    }
 
     const nvn::DlssLiveInfo dli = nvn::dlss_live_info();
     const bool is_1to1 = (scn_w == game_w && scn_h == game_h);
+    if (ctx.foreign) {
+        // NVN-HLE replaces the game's DLSS with NVIDIA DLSS when Streamline is beside the exe, else with FSR 1
+        static const bool have_sl = [] {
+            char path[MAX_PATH] = {};
+            GetModuleFileNameA(nullptr, path, MAX_PATH);
+            std::string dir(path);
+            dir = dir.substr(0, dir.find_last_of("\\/") + 1);
+            return GetFileAttributesA((dir + "user\\streamline\\sl.interposer.dll").c_str()) != INVALID_FILE_ATTRIBUTES;
+        }();
+        const std::string up = nvn::n2den::get_setting("nvn_upscaler");
+        const char* scl = up == "Fsr1" ? "FSR 1" : up == "Copy" ? "bilinear" : have_sl ? "NVIDIA DLSS" : (zh ? "FSR 1 (无 Streamline)" : "FSR 1 (no Streamline)");
+        draw_kv(y, cCyan, zh ? "超分 / 缩放" : "Scaling", scl); y += line_h;
+    } else {
     const bool is_bi = (dli.upscaler == "bilinear");
     std::string scale_str;
     if (gvi.dlss_bypassed || (is_1to1 && is_bi)) {
@@ -1627,6 +1679,7 @@ void Overlay::Impl::draw_perf_hud(const FrameInfo& f, double now_s) {
         scale_str = "bilinear";
     }
     draw_kv(y, cCyan, zh ? "超分 / 缩放" : "Scaling", scale_str.c_str()); y += line_h;
+    }
 
     if (fg.requested) {
         const char* fg_kind = fg.mode == 3 ? "FSR 3 FG" : "DLSS FG";
@@ -1643,13 +1696,15 @@ void Overlay::Impl::draw_perf_hud(const FrameInfo& f, double now_s) {
     draw_kv(y, cCyan, zh ? "帧率上限" : "Frame limit", buf1); y += line_h;
 
     const PresentMode pm = ctx.renderer ? ctx.renderer->present_mode() : PresentMode::Fifo;
-    const char* pm_str = (pm == PresentMode::Fifo || pm == PresentMode::FifoRelaxed) ? "VSync"
+    const std::string nh_vsync = ctx.foreign ? nvn::n2den::get_setting("use_vsync") : std::string();
+    const char* pm_str = !nh_vsync.empty() ? (nh_vsync == "Fifo" || nh_vsync == "FifoRelaxed" ? "VSync" : nh_vsync.c_str())
+                       : (pm == PresentMode::Fifo || pm == PresentMode::FifoRelaxed) ? "VSync"
                        : (pm == PresentMode::Mailbox) ? "Mailbox" : "Immediate";
     draw_kv(y, cCyan, zh ? "呈现模式" : "Presentation", pm_str); y += line_h + sec_gap;
 
     // Hardware footer
     dl->AddLine(ImVec2(xL, y - sec_gap * 0.5f), ImVec2(xR, y - sec_gap * 0.5f), cSep, 1.0f);
-    const char* gpu_nm = ctx.device ? ctx.device->gpu().name.c_str() : "Vulkan GPU";
+    const char* gpu_nm = ctx.device ? ctx.device->gpu().name.c_str() : !foreign_gpu_name.empty() ? foreign_gpu_name.c_str() : "Vulkan GPU";
     draw_c(xL, y, cMuted, gpu_nm); y += line_h;
     draw_c(xL, y, cMuted, perf.cpu_name.c_str());
 }
@@ -1900,6 +1955,19 @@ void Overlay::draw_foreign(const ForeignDevice& d, const ForeignFrame& f) {
         volkInitializeCustom(d.get_instance_proc_addr);
         volkLoadInstanceOnly(d.instance);
         volkLoadDevice(d.device);
+        if (s.foreign_physical == VK_NULL_HANDLE) {
+            VkPhysicalDeviceProperties props{};
+            vkGetPhysicalDeviceProperties(d.physical, &props);
+            s.foreign_physical = d.physical;
+            s.foreign_vendor = props.vendorID;
+            s.foreign_gpu_name = props.deviceName;
+            uint32_t n = 0;
+            vkEnumerateDeviceExtensionProperties(d.physical, nullptr, &n, nullptr);
+            std::vector<VkExtensionProperties> exts(n);
+            if (n) vkEnumerateDeviceExtensionProperties(d.physical, nullptr, &n, exts.data());
+            for (const VkExtensionProperties& e : exts)
+                if (std::strcmp(e.extensionName, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME) == 0) s.foreign_budget = true;
+        }
         VkAttachmentDescription att = {};
         att.flags = VK_ATTACHMENT_DESCRIPTION_MAY_ALIAS_BIT;
         att.format = f.format;
