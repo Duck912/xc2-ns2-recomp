@@ -22,6 +22,7 @@
 #include <string>
 
 #include "nxrt/config.h"
+#include "nxrt/services.h"
 #include "nxrt/diag.h"
 #include "nxrt/render_quality.h"
 #include "nxrt/dispatch.h"
@@ -2935,6 +2936,22 @@ int main(int argc, char **argv) {
     // The guest rtld relocates the images itself; when we skip it (host link + direct entry) the host's relocation must stay.
     nxrt::config_set("boot", "guest_relinks", (link == "host" && entry_mode == "rtld" && !addr_override) ? "1" : "0");
     nxrt::config_set("process", "program_id", game_xcde ? "0x0100FF500E34A000" : "0x0100E95004038000");
+    if (game_xcde) {
+        // The registered game module is XC2's, and with it its title facts. XC:DE's own, from its Switch 2 program's
+        // control.nacp: display version 2.0.0, account save 0xC14000 + journal 0xC14000, no device save, owner
+        // 0100FF500E34A000. An ini or env [title] key still wins.
+        auto title_default = [](const char* key, const char* value) {
+            if (!nxrt::config_has("title", key)) nxrt::config_set("title", key, value);
+        };
+        title_default("name", "Xenoblade Chronicles: Definitive Edition");
+        title_default("display_version", "2.0.0");
+        title_default("save_owner_id", "0x0100FF500E34A000");
+        title_default("account_save_size", "0xC14000");
+        title_default("account_save_journal", "0xC14000");
+        title_default("device_save_size", "0");
+        title_default("device_save_journal", "0");
+        nxrt::services::profile_reload();   // in case a service read the title facts already
+    }
     // The "Switch 2 Edition" runs the Switch 1 graphics stack (NVN 3.5.0, Maxwell shaders), so its GPU memory
     // keeps Tegra X1 GOB order: with the Switch 2 order every block-linear texture is scrambled (the 16^3 colour
     // LUT came out green and turned the whole scene cyan - HANDOVER section 15).

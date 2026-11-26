@@ -165,3 +165,30 @@ for identity memory: n2den then keeps those ranges in guest memory instead of de
 but correct), and
 `vi::ListFrameHistory` display ticks use 19.2 MHz while this runtime's Switch 2 tick is 31.25 MHz.
 
+
+## First runs (2026-11-26, morning)
+
+All runs about 100 s, unattended with the RAM/VRAM guards, no input (so each stops at the title screen).
+
+- **n2den emulator, step 2 gate** (fork build check6): OoT, Kirby, XC2 and XC:DE reach their title
+  screens at 59-60 fps on NVN-HLE, no device loss. Fast Fusion not run (needs a go-ahead after its
+  earlier device loss).
+- **XC2 in the recomp on n2den**: title screen, steady 60 fps (16.7 ms), audio, 8.9 GB.
+- **XC:DE in the recomp on n2den**: title screen, steady 60 fps (16.7 ms, max 17.6 ms), 8.5 GB.
+
+Fixed on the way:
+
+- n2den `FindSdkImplTables` read 4 bytes before the sdk image: a table word near 2^64 made
+  `address + 8` wrap. Bounds checks in `sdk_impl_table.cpp`, `sdk_dlss_layout.cpp` and
+  `sdk_device_info.cpp` are overflow-safe now (`SdkImageHas`).
+- The sdk analysis expects module-relative offsets (the emulator's unplaced image); `embed.cpp` hands it a
+  copy of the loaded sdk with its 16 self-pointers rebased. It now finds the same implementation table as
+  the emulator (sdk+0xe95bf8).
+- `embed.cpp` creates `<data>\cache\shader`: the pipeline cache now saves between runs.
+- XC:DE showed `nn::err::ShowUnacceptableAddOnContentForUpgradeVersionError` (2162-0102, result 0xcca2):
+  `main` compares `nn::oe::GetDisplayVersion` with the upgrade pack's `dlcver.bin` ("2.0.0"), and the game
+  env (`xc2_setup.py` GAME_ENV) set XC2's `NXRT_TITLE_DISPLAY_VERSION=3.0.1`. `xcde.ini` sets 2.0.0 and
+  XC:DE's languages; `--game xcde` sets its control.nacp save sizes (account 0xC14000) and owner.
+
+Still open: the window title says XC2 (the registered game module's title), one fragment shader rejected
+by n2den's front end ("unknown bit 80", logged once), movies, overlay/screenshots, PC DLSS.
