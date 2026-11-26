@@ -44,9 +44,15 @@ and the same places for `exefs` and `cheats`; `atmosphere\exefs_patches\<name>\`
 
 **Which id goes in that folder.** `0100E95004038000` is the application (the same title as the Switch 1 release,
 update 1114112); its Switch 2 program is `0400E95004038001`, and that is what the lift recompiles. An emulator
-layout names the **application id** for base-game content, which is why the three lines above use it. The add-on
-packs are their own titles — `0100E95004039001` … `063` (the retail set is not contiguous) — and a mod that
-replaces a file *inside a pack* is placed under that pack's id instead.
+layout names the **application id** for base-game content, which is why the three lines above use it.
+
+The add-on packs are their own titles — `0100E95004039001` … `063` (the retail set is not contiguous) — but a
+mod does **not** reach inside them. Only the game's own romfs takes the overlay; every pack builds its own image
+(see [How the overlay is applied](#how-the-overlay-is-applied-m1-built) below). Naming a pack's id here therefore does
+nothing: the runtime logs `has no romfs folder: skipped`, and a plain `romfs` folder under the mod logs its
+files as `added` while the game keeps reading the pack. Check the target first with
+`tools/mods/mod_check.py` — it reports the storage a path lives in (`romfs`, `ard` or `dlc:<id>`), and a
+`dlc:` path cannot be replaced yet (issue #71).
 
 Files under any other title id are ignored, so one mod folder can hold content for several games without us
 serving the wrong one.
@@ -106,6 +112,16 @@ A patch is for one build id: `.ips` is named after it, `.pchtxt` names it on its
 
 `mods\<mod>\cheats\<build id>.txt`, Atmosphère's format, switched cheat by cheat. A cheat that changes code needs
 the same re-setup as a code patch; a cheat that only writes values does not.
+
+Two things decide whether a file is read at all, and both fail silently:
+
+1. **The name is the build id of the `main` this project recompiled** — its first 16 hex characters. Community
+   files are usually named after the Switch 1 release's build id, and a name that does not match is skipped.
+2. **The mod has to be ticked in the launcher's Mods page.** That writes `mods\.cheats_enabled.tsv`, and with no
+   row for the mod the runtime loads nothing.
+
+`nxrt.log` reports `loaded N active runtime cheat(s)` when something was picked up; no such line means neither
+condition was met.
 
 ## Metadata and settings (optional)
 
