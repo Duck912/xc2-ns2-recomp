@@ -529,6 +529,15 @@ void LiveInput::live(nxrt::hid::InputSnapshot &out) {
             CreateDirectoryA("shots_manual", nullptr);
             g_renderer->request_screenshot(path);
             if (--f12_left == 0) NXLOG_I("input", "F12: %u screenshots written", shots);
+        } else if (f12_left > 0 && nxrt::nvn::n2den::active()) {
+            // NVN-HLE draws the game: it reads its next present back (one request at a time: a burst waits for the previous one)
+            char path[64];
+            std::snprintf(path, sizeof path, "shots_manual\\shot_%04u.png", shots + 1);
+            CreateDirectoryA("shots_manual", nullptr);
+            if (nxrt::nvn::n2den::request_screenshot(path)) {
+                ++shots;
+                if (--f12_left == 0) NXLOG_I("input", "F12: %u screenshots requested", shots);
+            }
         }
         // F9 or Ctrl+F11: trace the next presented frame (plain F11 is fullscreen toggle in play mode).
         const bool trace_key = (down(VK_F9) || tapped(VK_F9)) || (down(VK_CONTROL) && (down(VK_F11) || tapped(VK_F11)));

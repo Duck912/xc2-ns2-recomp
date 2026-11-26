@@ -34,5 +34,7 @@ void set_overlay(gfx::Overlay* overlay);
 // player's [nvnhle] choices from nxrt.ini first: upscaler, dlss_model, window_filter, vsync.
 bool set_setting(const char* key, const char* value);
 std::string get_setting(const char* key);
+// A PNG of the game's picture (no overlay) at the window's size, written on a library thread. False while one is pending.
+bool request_screenshot(const std::string& png_path);
 
 }  // namespace nxrt::nvn::n2den

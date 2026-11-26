@@ -12,10 +12,12 @@
 #include <array>
 #include <atomic>
 #include <cstring>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 #include <windows.h>
 
@@ -210,6 +212,28 @@ void resize(uint32_t width, uint32_t height) {
     if (active()) N2denNvnhle::Resize(width, height);
 }
 
+bool request_screenshot(const std::string& png_path) {
+    auto* path = new std::string(png_path);
+    const bool ok = N2denNvnhle::RequestScreenshot(0, 0, [](void* user, const uint8_t* bgra, uint32_t w, uint32_t h) {
+        std::unique_ptr<std::string> p(static_cast<std::string*>(user));
+        if (!bgra) {
+            NXLOG_W(kTag, "screenshot %s failed", p->c_str());
+            return;
+        }
+        std::vector<uint8_t> rgba(static_cast<size_t>(w) * h * 4);
+        for (size_t i = 0; i < rgba.size(); i += 4) {
+            rgba[i] = bgra[i + 2];
+            rgba[i + 1] = bgra[i + 1];
+            rgba[i + 2] = bgra[i];
+            rgba[i + 3] = 255;
+        }
+        if (gfx::save_png_rgba(*p, rgba.data(), w, h)) NXLOG_I(kTag, "screenshot %s (%ux%u)", p->c_str(), w, h);
+        else NXLOG_W(kTag, "screenshot %s could not be written", p->c_str());
+    }, path);
+    if (!ok) delete path;
+    return ok;
+}
+
 bool set_setting(const char* key, const char* value) { return N2denNvnhle::SetSetting(key, value); }
 std::string get_setting(const char* key) { return N2denNvnhle::GetSetting(key); }
 
@@ -245,6 +269,7 @@ void resize(uint32_t, uint32_t) {}
 void notify_cpu_write(uint64_t, uint64_t) {}
 void set_overlay(gfx::Overlay*) {}
 bool set_setting(const char*, const char*) { return false; }
+bool request_screenshot(const std::string&) { return false; }
 std::string get_setting(const char*) { return {}; }
 }  // namespace nxrt::nvn::n2den
 
