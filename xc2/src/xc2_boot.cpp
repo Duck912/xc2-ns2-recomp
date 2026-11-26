@@ -67,9 +67,9 @@
 // is written with, and every one of them can be changed in the F1 page (controls.ini is the file that page edits).
 static const char* const kXc2SettingsText = R"INI(
 [meta]
-defaults_rev = 4
+defaults_rev = 6
 
-[bindings.play]
+[bindings.all]
 # movement: WASD and the arrow keys
 W = move_forward
 S = move_back
@@ -85,14 +85,15 @@ K = look_down
 J = look_left
 L = look_right
 # face buttons and shoulders
-Space = btn_a
+Space = btn_b
 Return = btn_a
 Backspace = btn_b
 Escape = btn_b
 U = btn_x
 O = btn_y
 Q = btn_l
-E = btn_r
+E = btn_a
+Mouse3 = btn_r
 1 = btn_zl
 2 = btn_zr
 Tab = btn_plus
@@ -100,42 +101,46 @@ Left Shift = btn_lstick
 Left Ctrl = btn_rstick
 )INI";
 
+// The `all` layer, not `play`: play mode takes the engine's context from the game table's frame callback, and XC2
+// declares no frame-step site, so the context never leaves `menu` - a `play` binding would never apply.
+//
 // controls.ini files written before those bindings existed carry empty [bindings.*] sections, and an empty section
 // means "this file is the whole truth", so the factory text above never reaches them. The additions are what play
 // mode appends to such a file (defaults_rev 3 -> 4), keeping the old one as .bak.
 static const nxrt::play::GameDefaultAddition kXc2Additions[] = {
-    {4, nxrt::play::Ctx::Play, "W", nxrt::play::Act::MoveForward},
-    {4, nxrt::play::Ctx::Play, "S", nxrt::play::Act::MoveBack},
-    {4, nxrt::play::Ctx::Play, "A", nxrt::play::Act::MoveLeft},
-    {4, nxrt::play::Ctx::Play, "D", nxrt::play::Act::MoveRight},
-    {4, nxrt::play::Ctx::Play, "Up", nxrt::play::Act::MoveForward},
-    {4, nxrt::play::Ctx::Play, "Down", nxrt::play::Act::MoveBack},
-    {4, nxrt::play::Ctx::Play, "Left", nxrt::play::Act::MoveLeft},
-    {4, nxrt::play::Ctx::Play, "Right", nxrt::play::Act::MoveRight},
-    {4, nxrt::play::Ctx::Play, "I", nxrt::play::Act::LookUp},
-    {4, nxrt::play::Ctx::Play, "K", nxrt::play::Act::LookDown},
-    {4, nxrt::play::Ctx::Play, "J", nxrt::play::Act::LookLeft},
-    {4, nxrt::play::Ctx::Play, "L", nxrt::play::Act::LookRight},
-    {4, nxrt::play::Ctx::Play, "Space", nxrt::play::Act::BtnA},
-    {4, nxrt::play::Ctx::Play, "Return", nxrt::play::Act::BtnA},
-    {4, nxrt::play::Ctx::Play, "Backspace", nxrt::play::Act::BtnB},
-    {4, nxrt::play::Ctx::Play, "Escape", nxrt::play::Act::BtnB},
-    {4, nxrt::play::Ctx::Play, "U", nxrt::play::Act::BtnX},
-    {4, nxrt::play::Ctx::Play, "O", nxrt::play::Act::BtnY},
-    {4, nxrt::play::Ctx::Play, "Q", nxrt::play::Act::BtnL},
-    {4, nxrt::play::Ctx::Play, "E", nxrt::play::Act::BtnR},
-    {4, nxrt::play::Ctx::Play, "1", nxrt::play::Act::BtnZL},
-    {4, nxrt::play::Ctx::Play, "2", nxrt::play::Act::BtnZR},
-    {4, nxrt::play::Ctx::Play, "Tab", nxrt::play::Act::BtnPlus},
-    {4, nxrt::play::Ctx::Play, "Left Shift", nxrt::play::Act::BtnLStick},
-    {4, nxrt::play::Ctx::Play, "Left Ctrl", nxrt::play::Act::BtnRStick},
+    {5, nxrt::play::Ctx::All, "W", nxrt::play::Act::MoveForward},
+    {5, nxrt::play::Ctx::All, "S", nxrt::play::Act::MoveBack},
+    {5, nxrt::play::Ctx::All, "A", nxrt::play::Act::MoveLeft},
+    {5, nxrt::play::Ctx::All, "D", nxrt::play::Act::MoveRight},
+    {5, nxrt::play::Ctx::All, "Up", nxrt::play::Act::MoveForward},
+    {5, nxrt::play::Ctx::All, "Down", nxrt::play::Act::MoveBack},
+    {5, nxrt::play::Ctx::All, "Left", nxrt::play::Act::MoveLeft},
+    {5, nxrt::play::Ctx::All, "Right", nxrt::play::Act::MoveRight},
+    {5, nxrt::play::Ctx::All, "I", nxrt::play::Act::LookUp},
+    {5, nxrt::play::Ctx::All, "K", nxrt::play::Act::LookDown},
+    {5, nxrt::play::Ctx::All, "J", nxrt::play::Act::LookLeft},
+    {5, nxrt::play::Ctx::All, "L", nxrt::play::Act::LookRight},
+    {6, nxrt::play::Ctx::All, "Space", nxrt::play::Act::BtnB},
+    {6, nxrt::play::Ctx::All, "Mouse3", nxrt::play::Act::BtnR},
+    {5, nxrt::play::Ctx::All, "Return", nxrt::play::Act::BtnA},
+    {5, nxrt::play::Ctx::All, "Backspace", nxrt::play::Act::BtnB},
+    {5, nxrt::play::Ctx::All, "Escape", nxrt::play::Act::BtnB},
+    {5, nxrt::play::Ctx::All, "U", nxrt::play::Act::BtnX},
+    {5, nxrt::play::Ctx::All, "O", nxrt::play::Act::BtnY},
+    {5, nxrt::play::Ctx::All, "Q", nxrt::play::Act::BtnL},
+    {6, nxrt::play::Ctx::All, "E", nxrt::play::Act::BtnA},
+    {5, nxrt::play::Ctx::All, "1", nxrt::play::Act::BtnZL},
+    {5, nxrt::play::Ctx::All, "2", nxrt::play::Act::BtnZR},
+    {5, nxrt::play::Ctx::All, "Tab", nxrt::play::Act::BtnPlus},
+    {5, nxrt::play::Ctx::All, "Left Shift", nxrt::play::Act::BtnLStick},
+    {5, nxrt::play::Ctx::All, "Left Ctrl", nxrt::play::Act::BtnRStick},
 };
 
 static const nxrt::play::GameDefaults& xc2_play_defaults() {
     static const nxrt::play::GameDefaults d = [] {
         nxrt::play::GameDefaults g;
         g.settings_text = kXc2SettingsText;
-        g.defaults_rev = 4;
+        g.defaults_rev = 6;
         g.additions = kXc2Additions;
         g.addition_count = static_cast<unsigned>(sizeof kXc2Additions / sizeof kXc2Additions[0]);
         return g;
@@ -355,7 +360,7 @@ void LiveInput::live(nxrt::hid::InputSnapshot &out) {
     // which is why this drives the stick instead of a yaw angle. [xc2] mouse_capture = 0 leaves the pointer to the game.
     static const bool mouse_cam = nxrt::config_get_bool("xc2", "mouse_capture", true);
     static const double mouse_full = [] {
-        const double v = nxrt::config_get_double("xc2", "mouse_stick_scale", 55.0);   // counts for full deflection
+        const double v = nxrt::config_get_double("xc2", "mouse_stick_scale", 25.0);   // counts for full deflection
         return v > 1.0 ? v : 1.0;
     }();
     static const bool mouse_invert_y = nxrt::config_get_bool("xc2", "mouse_invert_y", false);
