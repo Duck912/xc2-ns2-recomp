@@ -200,7 +200,7 @@ export const zh = {
     'play.killedBySystem': 'xc2_boot.exe 被系统结束。',
     'setup.doneMsg': '构建完成，可以开始游玩。',
     'setup.pausedMsg': '已暂停。再次开始构建会从停下的地方继续。',
-    'setup.firstRunHint': '首次运行耗时很长：重新编译游戏代码是最大的一步（8 核上一小时或更久，此处使用 {jobs} 个构建进程），并需要约 30 GB 空闲空间。之后的运行只重做有变化的部分。',
+    'setup.firstRunHint': '首次构建需要约 10 分钟，重新编译游戏代码是最大的一步；还需要约 30 GB 空闲空间。之后的运行只重做有变化的部分。',
 
     // ----- 设置 -----
     'settings.title': '设置',
@@ -454,7 +454,7 @@ export const zh = {
   'settings.files.whatStreamlineFg': 'Streamline 帧生成的 DLL',
     'settings.resolution.label': '输出分辨率',
     'settings.resolution.auto': '游戏自己的默认值',
-    'settings.resolution.hint': '窗口大小，也是游戏向它的显示器报告的尺寸。1440p 是内部上限（游戏自己的链路），4K 在这套渲染上几乎不花钱。',
+    'settings.resolution.hint': '窗口大小，也是游戏向它的显示器报告的尺寸。1440p 是游戏自己链路的上限。',
     'settings.opMode.label': '画质模式',
     'settings.opMode.docked': '主机模式（高画质）',
     'settings.opMode.handheld': '掌机模式（省性能）',

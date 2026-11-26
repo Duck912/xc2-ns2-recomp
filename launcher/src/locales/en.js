@@ -203,7 +203,7 @@ export const en = {
     'play.killedBySystem': 'xc2_boot.exe was ended by the system.',
     'setup.doneMsg': 'Setup finished. Press Play.',
     'setup.pausedMsg': 'Paused. Set up continues where it stopped.',
-    'setup.firstRunHint': 'The first run takes a long time: the recompile of the game code is the biggest step (an hour or more on 8 cores, with {jobs} build processes here) and needs about 30 GB free. Later runs only redo what changed.',
+    'setup.firstRunHint': 'The first build takes about ten minutes, with the recompile of the game code as the biggest step, and needs about 30 GB free. Later runs only redo what changed.',
 
     // ----- settings -----
     'settings.title': 'Settings',
@@ -455,7 +455,7 @@ export const en = {
   'settings.files.whatStreamlineFg': 'the Streamline frame generation files',
     'settings.resolution.label': 'Output resolution',
     'settings.resolution.auto': 'the game own default',
-    'settings.resolution.hint': 'The window size and the size the game tells its display it has. 1440p is the internal ceiling (the game own link); 4K costs almost nothing on this renderer.',
+    'settings.resolution.hint': "The window size and the size the game tells its display it has. 1440p is the ceiling of the game's own link.",
     'settings.opMode.label': 'Picture mode',
     'settings.opMode.docked': 'Docked (full quality)',
     'settings.opMode.handheld': 'Handheld (lighter)',

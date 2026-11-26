@@ -104,8 +104,20 @@ function drawLangSwitch() {
 
 /** Redraws the shell and the open page after the interface language changed. */
 function redrawForLang() {
+  // Switching the language re-renders the page, which would otherwise throw the reader back to the top. Keep both
+  // scroll positions (the window and the page container) and put them back after the render, and again on the next
+  // frame because some pages fill themselves in asynchronously.
+  const y = window.scrollY || document.scrollingElement?.scrollTop || 0;
+  const view = document.getElementById('view');
+  const viewY = view ? view.scrollTop : 0;
   drawShell();
   if (current) go(current);
+  const restore = () => {
+    window.scrollTo(0, y);
+    if (view) view.scrollTop = viewY;
+  };
+  restore();
+  requestAnimationFrame(restore);
 }
 
 async function go(page, opts = {}) {
