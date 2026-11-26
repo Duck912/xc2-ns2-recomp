@@ -1077,6 +1077,16 @@ bool Overlay::handle_event(const input::Event& e) {
     ImGui::SetCurrentContext(s.imgui);
     ImGuiIO& io = ImGui::GetIO();
     bool consumed = false;
+    // foreign mode: the presented frame may not be the window's size (until that renderer follows a resize): window pixels -> frame pixels
+    float mx = 1.f, my = 1.f;
+    if (s.ctx.foreign) {
+        int ww = 0, wh = 0;
+        platform::pixel_size(&ww, &wh);
+        if (ww > 0 && wh > 0 && io.DisplaySize.x > 0 && io.DisplaySize.y > 0) {
+            mx = io.DisplaySize.x / static_cast<float>(ww);
+            my = io.DisplaySize.y / static_cast<float>(wh);
+        }
+    }
     switch (e.type) {
         case EventType::KeyDown:
         case EventType::KeyUp: {
@@ -1090,14 +1100,14 @@ bool Overlay::handle_event(const input::Event& e) {
             consumed = io.WantTextInput;
             break;
         case EventType::MouseMotion:
-            io.AddMousePosEvent(e.u.motion.x, e.u.motion.y);
+            io.AddMousePosEvent(e.u.motion.x * mx, e.u.motion.y * my);
             consumed = io.WantCaptureMouse;
             break;
         case EventType::MouseButtonDown:
         case EventType::MouseButtonUp: {
             const int b = e.u.button.button;   // SDL: 1 left, 2 middle, 3 right
             const int ib = b == 1 ? 0 : b == 3 ? 1 : b == 2 ? 2 : b - 1;
-            io.AddMousePosEvent(e.u.button.x, e.u.button.y);
+            io.AddMousePosEvent(e.u.button.x * mx, e.u.button.y * my);
             io.AddMouseButtonEvent(ib, e.type == EventType::MouseButtonDown);
             consumed = io.WantCaptureMouse;
             break;

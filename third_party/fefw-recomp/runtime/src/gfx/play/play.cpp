@@ -48,6 +48,7 @@
 #include "nxrt/input_source.h"
 #include "nxrt/log.h"
 #include "nxrt/nvn_backend.h"
+#include "nxrt/nvn_n2den.h"
 #include "nxrt/overlay.h"
 #include "nxrt/platform.h"
 #include "nxrt/runtime.h"
@@ -695,6 +696,13 @@ void handle_event(const input::Event& e, uint64_t now) {
     G& st = g();
     using input::EventType;
     st.events++;
+    // NVN-HLE presents into this window: its swapchain follows the window's size (fullscreen, resizing)
+    if (nvn::n2den::active() && (e.type == EventType::WindowResized || e.type == EventType::WindowFullscreenChanged ||
+                                 e.type == EventType::WindowRestored)) {
+        int w = e.u.window.w, h = e.u.window.h;
+        if (e.type == EventType::WindowRestored || w <= 0 || h <= 0) platform::pixel_size(&w, &h);
+        if (w > 0 && h > 0) nvn::n2den::resize(static_cast<uint32_t>(w), static_cast<uint32_t>(h));
+    }
     if (e.type == EventType::MouseMotion && !(e.flags & input::kFlagRelative)) {
         const float mx = e.u.motion.x;
         const float my = e.u.motion.y;

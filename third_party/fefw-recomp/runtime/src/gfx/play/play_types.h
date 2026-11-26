@@ -334,6 +334,7 @@ struct GameActLabel {
     Act act;
     const char* label;          // the launcher's row label (UTF-8): "Fire", "Power beam"
     const char* group;          // the launcher's group (UTF-8): "Combat", "Beams"
+    const char* label_en = nullptr;   // the row label when the settings page is in English; null: label
 };
 struct GameVocabulary {
     const ActInfo* acts = nullptr;                   // kActCount rows in enum order: the file names and factory outputs of every action
