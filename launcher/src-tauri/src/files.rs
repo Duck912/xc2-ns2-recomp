@@ -240,7 +240,7 @@ pub fn delete_backup(game_dir: &Path, id: &str) -> Result<(), String> {
 
 /// What can be cleaned. `game_dir` is the run folder; `repo_build` the checkout's xc2/build/301 (None in a package);
 /// `linked` the folders the game's data links point into (an unpacked .nup the RomFS still reads from is not removable).
-pub fn clean_items(game_dir: &Path, repo_build: Option<&Path>, linked: &[PathBuf]) -> Vec<CleanItem> {
+pub fn clean_items(game_dir: &Path, nup: &Path, repo_build: Option<&Path>, linked: &[PathBuf]) -> Vec<CleanItem> {
     let mut items = Vec::new();
     let mut add = |id: &str, paths: Vec<PathBuf>, blocked: Option<String>| {
         let present: Vec<PathBuf> = paths.into_iter().filter(|p| fs::symlink_metadata(p).is_ok()).collect();
@@ -259,10 +259,10 @@ pub fn clean_items(game_dir: &Path, repo_build: Option<&Path>, linked: &[PathBuf
     }
     add("build", build, None);
     // The unpacked .nup: removable only once the game's data no longer points into it.
-    let nup = game_dir.join("game").join("nup_dump");
+    let nup = nup.to_path_buf();
     let nup_real = fs::canonicalize(&nup).unwrap_or_else(|_| nup.clone());
     let in_use = linked.iter().any(|l| l.starts_with(&nup) || l.starts_with(&nup_real));
-    add("nup", vec![nup], in_use.then(|| "the game's data is read from this folder".into()));
+    add("nup", vec![nup.clone()], in_use.then(|| "the game's data is read from this folder".into()));
     // Logs: the game's play logs, the setup's logs, NVN-HLE's log, crash reports.
     let mut logs = Vec::new();
     for d in [game_dir.join("work").join("logs"), game_dir.join("user").join("log"), game_dir.join("reports")] {
@@ -314,10 +314,10 @@ fn remove_path(p: &Path) -> Result<(), String> {
 }
 
 /// Removes the items with these ids (as clean_items lists them now). Returns the bytes freed.
-pub fn clean(game_dir: &Path, repo_build: Option<&Path>, linked: &[PathBuf], ids: &[String]) -> Result<u64, String> {
+pub fn clean(game_dir: &Path, nup: &Path, repo_build: Option<&Path>, linked: &[PathBuf], ids: &[String]) -> Result<u64, String> {
     let mut freed = 0;
     let mut errors = Vec::new();
-    for item in clean_items(game_dir, repo_build, linked) {
+    for item in clean_items(game_dir, nup, repo_build, linked) {
         if !ids.contains(&item.id) {
             continue;
         }
@@ -384,13 +384,14 @@ mod tests {
         fs::create_dir_all(root.join("build").join("exefs-patched")).unwrap();
         fs::create_dir_all(root.join("game").join("nup_dump").join("base").join("romfs")).unwrap();
         let linked = vec![root.join("game").join("nup_dump").join("base").join("romfs")];
-        let items = clean_items(&root, None, &linked);
+        let nup = root.join("game").join("nup_dump");
+        let items = clean_items(&root, &nup, None, &linked);
         assert!(items.iter().find(|i| i.id == "nup").unwrap().blocked.is_some());
-        let freed = clean(&root, None, &linked, &["build".into()]).unwrap();
+        let freed = clean(&root, &nup, None, &linked, &["build".into()]).unwrap();
         assert_eq!(freed, 2);
         assert!(!root.join("build").join("lift").exists());
         assert!(root.join("build").join("exefs-patched").exists());
-        assert!(clean(&root, None, &linked, &["nup".into()]).is_err());
+        assert!(clean(&root, &nup, None, &linked, &["nup".into()]).is_err());
         assert!(root.join("game").join("nup_dump").exists());
         let _ = fs::remove_dir_all(&root);
     }

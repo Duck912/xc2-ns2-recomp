@@ -49,6 +49,8 @@ struct Config {
     lang: String,
     /// Build without NVIDIA Streamline (the game's DLSS then falls back to FSR 1): setup runs with --no-streamline.
     no_streamline: bool,
+    /// Where a picked .nup is unpacked: <unpack_dir>/xc2-nup. Empty: beside the game (<game folder>/nup_dump in a package).
+    unpack_dir: String,
 }
 
 fn config_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -289,7 +291,7 @@ fn delete_save_backup(app: AppHandle, id: String) -> Result<(), String> {
 }
 
 /// The run folder, the checkout's build folder (None in a package) and where the game's data links point.
-fn clean_context(app: &AppHandle) -> Result<(PathBuf, Option<PathBuf>, Vec<PathBuf>), String> {
+fn clean_context(app: &AppHandle) -> Result<(PathBuf, PathBuf, Option<PathBuf>, Vec<PathBuf>), String> {
     let cfg = load_config(app);
     let repo = need_repo(&cfg)?;
     let game = game_dir_of(&cfg, &repo);
@@ -307,20 +309,108 @@ fn clean_context(app: &AppHandle) -> Result<(PathBuf, Option<PathBuf>, Vec<PathB
         }
     }
     let linked = links.iter().filter_map(|l| fs::canonicalize(l).ok()).chain(links.iter().cloned()).collect();
-    Ok((game, build, linked))
+    Ok((game, unpack_dir_of(&cfg, &repo), build, linked))
 }
 
 #[tauri::command]
 fn clean_scan(app: AppHandle) -> Result<Vec<files::CleanItem>, String> {
-    let (game, build, linked) = clean_context(&app)?;
-    Ok(files::clean_items(&game, build.as_deref(), &linked))
+    let (game, nup, build, linked) = clean_context(&app)?;
+    Ok(files::clean_items(&game, &nup, build.as_deref(), &linked))
 }
 
 #[tauri::command]
 fn clean_run(app: AppHandle, ids: Vec<String>) -> Result<u64, String> {
     files_busy(&app)?;
-    let (game, build, linked) = clean_context(&app)?;
-    files::clean(&game, build.as_deref(), &linked, &ids)
+    let (game, nup, build, linked) = clean_context(&app)?;
+    files::clean(&game, &nup, build.as_deref(), &linked, &ids)
+}
+
+/// Where a picked .nup is unpacked. Always a folder of its own (an unpack of another .nup clears it first), so a chosen
+/// folder gets an xc2-nup subfolder rather than being used as it is.
+fn unpack_dir_of(cfg: &Config, repo: &Path) -> PathBuf {
+    if !cfg.unpack_dir.trim().is_empty() {
+        PathBuf::from(cfg.unpack_dir.trim()).join("xc2-nup")
+    } else if package_tools().is_some() {
+        game_dir_of(cfg, repo).join("nup_dump")
+    } else {
+        repo.join("game").join("nup_dump")
+    }
+}
+
+/// Free bytes on the volume that holds `p` (its nearest existing parent). None when it cannot be read.
+#[cfg(windows)]
+fn free_bytes(p: &Path) -> Option<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetDiskFreeSpaceExW(dir: *const u16, avail: *mut u64, total: *mut u64, free: *mut u64) -> i32;
+    }
+    let mut q = p.to_path_buf();
+    while !q.exists() {
+        q = q.parent()?.to_path_buf();
+    }
+    let wide: Vec<u16> = q.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    let (mut avail, mut total, mut free) = (0u64, 0u64, 0u64);
+    (unsafe { GetDiskFreeSpaceExW(wide.as_ptr(), &mut avail, &mut total, &mut free) } != 0).then_some(avail)
+}
+
+#[cfg(not(windows))]
+fn free_bytes(_: &Path) -> Option<u64> {
+    None
+}
+
+#[derive(Serialize)]
+struct FolderInfo {
+    path: String,
+    is_default: bool,
+    free: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct Folders {
+    game: FolderInfo,
+    unpack: FolderInfo,
+    /// the game is already built in the game folder
+    built: bool,
+}
+
+#[tauri::command]
+fn get_folders(app: AppHandle) -> Result<Folders, String> {
+    let cfg = load_config(&app);
+    let repo = need_repo(&cfg)?;
+    let game = game_dir_of(&cfg, &repo);
+    let unpack = unpack_dir_of(&cfg, &repo);
+    let exe = if package_tools().is_some() { game.join("xc2.exe") } else { setup::exe_path(&repo) };
+    Ok(Folders {
+        game: FolderInfo { path: dump::fwd(&game), is_default: cfg.game_dir.trim().is_empty(), free: free_bytes(&game) },
+        unpack: FolderInfo { path: dump::fwd(&unpack), is_default: cfg.unpack_dir.trim().is_empty(), free: free_bytes(&unpack) },
+        built: exe.is_file(),
+    })
+}
+
+/// Sets the game folder or the unpack folder ("game" | "unpack"); an empty path goes back to the default. A drive's root
+/// is refused for the game folder (setup and Clean up write and remove folders inside it).
+#[tauri::command]
+fn set_folder(app: AppHandle, which: String, path: String) -> Result<Folders, String> {
+    files_busy(&app)?;
+    let mut cfg = load_config(&app);
+    let p = path.trim().to_string();
+    if !p.is_empty() {
+        let pb = PathBuf::from(&p);
+        if !pb.is_absolute() {
+            return Err("Choose a full folder path.".into());
+        }
+        if which == "game" && pb.parent().is_none() {
+            return Err("Choose a folder, not the root of a drive (for example D:/Games/XC2).".into());
+        }
+    }
+    match which.as_str() {
+        "game" => cfg.game_dir = p,
+        "unpack" => cfg.unpack_dir = p,
+        _ => return Err("unknown folder".into()),
+    }
+    save_config(app.clone(), cfg)?;
+    get_folders(app)
 }
 
 #[derive(Serialize)]
@@ -395,7 +485,7 @@ async fn import_nup(app: AppHandle, state: State<'_, Arc<setup::Shared>>, path: 
     }
     let cfg = load_config(&app);
     let repo = need_repo(&cfg)?;
-    let out = if package_tools().is_some() { game_dir_of(&cfg, &repo).join("nup_dump") } else { repo.join("game").join("nup_dump") };
+    let out = unpack_dir_of(&cfg, &repo);
     let src = PathBuf::from(path.trim());
     let emitter = app.clone();
     let res = tauri::async_runtime::spawn_blocking(move || {
@@ -1040,6 +1130,8 @@ fn main() {
             delete_save_backup,
             clean_scan,
             clean_run,
+            get_folders,
+            set_folder,
             steam_status,
             add_to_steam,
             open_game_file,

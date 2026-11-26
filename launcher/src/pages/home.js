@@ -89,6 +89,7 @@ async function renderFiles(el, ctx, cfg, status) {
   let path = cfg.dump_dir || '';
   let report = path ? await api('validate_dump', { path }).catch(() => null) : null;
   let busy = '';
+  let folders = await api('get_folders').catch(() => null);
   const tools = status?.tools || [];
   const missing = tools.filter((x) => !x.ok);
 
@@ -108,11 +109,23 @@ async function renderFiles(el, ctx, cfg, status) {
         : report
           ? `<div class="tile"><span class="badge bad">${icon('x')}</span><div class="grow"><div class="title">${esc(t('wiz.files.notUsable'))}</div><div class="detail">${esc(report.path)}</div>${(report.errors || []).map((e) => `<div class="detail">${esc(e)}</div>`).join('')}</div></div>`
           : `<div class="tile"><div class="grow"><div class="detail">${esc(t('wiz.files.none'))}</div></div></div>`;
+    const gb = (n) => (n == null ? '' : t('wiz.folders.free', { size: (n / (1 << 30)).toFixed(0) }));
+    const folderRow = (which, f, title, hint) => `<div class="tile"><span class="badge">${icon(which === 'game' ? 'hard-drive' : 'file-archive')}</span>
+        <div class="grow"><div class="title">${esc(title)}${f.is_default ? ` <span class="faint">${esc(t('wiz.folders.default'))}</span>` : ''}</div>
+          <div class="detail"><code>${esc(f.path)}</code></div><div class="detail">${esc(hint)}${f.free != null ? ` · ${esc(gb(f.free))}` : ''}</div></div>
+        <button class="btn" data-folder="${which}" ${busy ? 'disabled' : ''}>${icon('folder')}${esc(t('wiz.folders.change'))}</button>
+        ${f.is_default ? '' : `<button class="btn quiet" data-folder-reset="${which}" ${busy ? 'disabled' : ''}>${esc(t('wiz.folders.reset'))}</button>`}</div>`;
+    const foldersHtml = folders
+      ? `<div class="section-label">${esc(t('wiz.folders.title'))}</div>
+         ${folderRow('game', folders.game, t('wiz.folders.game'), t('wiz.folders.gameHint'))}
+         ${folderRow('unpack', folders.unpack, t('wiz.folders.unpack'), t('wiz.folders.unpackHint'))}`
+      : '';
     const ok = Boolean(chosen) && missing.length === 0 && !busy;   // XC2's add-ons are optional
     el.innerHTML = `<div class="wiz">
       <h1>${esc(t('wiz.files.title'))}</h1>
       <p class="lead">${esc(t('wiz.files.lead'))}</p>
       ${req}
+      ${foldersHtml}
       <div class="section-label">${esc(t('wiz.files.dump'))}</div>
       ${sel}
       <div class="row">
@@ -128,6 +141,20 @@ async function renderFiles(el, ctx, cfg, status) {
     el.querySelector('#next').addEventListener('click', async () => {
       try { await api('save_dump', { path }); wizStep = 'options'; ctx.go('home'); } catch (e) { toast(errText(e), 'error'); }
     });
+    el.querySelectorAll('[data-folder]').forEach((b) => b.addEventListener('click', async () => {
+      const which = b.dataset.folder;
+      const picked = await api('pick_folder', { title: t(which === 'game' ? 'wiz.folders.game' : 'wiz.folders.unpack'), start: null });
+      if (!picked) return;
+      try {
+        if (which === 'game' && folders?.built && !(await window.confirm(t('wiz.folders.moveWarn')))) return;
+        folders = await api('set_folder', { which, path: picked });
+      } catch (e) { toast(errText(e), 'error'); }
+      draw();
+    }));
+    el.querySelectorAll('[data-folder-reset]').forEach((b) => b.addEventListener('click', async () => {
+      try { folders = await api('set_folder', { which: b.dataset.folderReset, path: '' }); } catch (e) { toast(errText(e), 'error'); }
+      draw();
+    }));
     el.querySelector('#pick-folder').addEventListener('click', async () => {
       const picked = await api('pick_folder', { title: t('wiz.files.pickFolder'), start: path || null });
       if (!picked) return;
