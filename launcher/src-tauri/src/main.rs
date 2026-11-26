@@ -5,6 +5,7 @@
 
 mod cpu;
 mod dump;
+mod files;
 mod fsr;
 mod ini;
 mod locale;
@@ -204,6 +205,122 @@ fn import_saves(app: AppHandle, path: String) -> Result<String, String> {
         seen,
         crate::dump::fwd(&account)
     ))
+}
+
+/// The folder the game reads its saves from: <run folder>\save in a package (play.rs: NXRT_FS_SAVE_DIR), the profile's
+/// work\save-xc2nh in a checkout (config/profiles/xc2nh.ini, run by tools/run/play-xc2nh.cmd).
+fn save_dir_of(cfg: &Config, repo: &Path) -> PathBuf {
+    if package_tools().is_some() {
+        game_dir_of(cfg, repo).join("save")
+    } else {
+        repo.join("work").join("save-xc2nh")
+    }
+}
+
+/// Saves and clean-up change files the game and the build use: neither runs while the game or a build does.
+fn files_busy(app: &AppHandle) -> Result<(), String> {
+    if app.state::<play::PlayState>().0.lock().map(|s| s.state == "running").unwrap_or(false) {
+        return Err("Close the game first.".into());
+    }
+    let setup = app.state::<Arc<setup::Shared>>();
+    if setup.progress.lock().map(|p| p.state == "running").unwrap_or(false) {
+        return Err("Wait until the build has finished.".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn saves_overview(app: AppHandle) -> Result<files::SavesOverview, String> {
+    let cfg = load_config(&app);
+    let repo = need_repo(&cfg)?;
+    let game = game_dir_of(&cfg, &repo);
+    let save = save_dir_of(&cfg, &repo);
+    Ok(files::SavesOverview {
+        save_dir: dump::fwd(&save),
+        backup_dir: dump::fwd(&files::backup_dir(&game)),
+        files: files::list_saves(&save),
+        backups: files::list_backups(&game),
+    })
+}
+
+#[tauri::command]
+fn open_saves_dir(app: AppHandle) -> Result<(), String> {
+    let cfg = load_config(&app);
+    let repo = need_repo(&cfg)?;
+    let save = save_dir_of(&cfg, &repo);
+    // the account folder holds the .sav files; open it when the game has made one
+    let account = fs::read_dir(save.join("account"))
+        .ok()
+        .and_then(|rd| rd.flatten().map(|e| e.path()).find(|q| q.is_dir() && !q.to_string_lossy().contains(".work.")));
+    let dir = account.unwrap_or(save);
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    play::open_with_shell(&dir)
+}
+
+#[tauri::command]
+fn open_backups_dir(app: AppHandle) -> Result<(), String> {
+    let cfg = load_config(&app);
+    let dir = files::backup_dir(&game_dir_of(&cfg, &need_repo(&cfg)?));
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    play::open_with_shell(&dir)
+}
+
+#[tauri::command]
+fn backup_saves(app: AppHandle) -> Result<String, String> {
+    files_busy(&app)?;
+    let cfg = load_config(&app);
+    let repo = need_repo(&cfg)?;
+    files::make_backup(&save_dir_of(&cfg, &repo), &game_dir_of(&cfg, &repo), "")
+}
+
+#[tauri::command]
+fn restore_saves(app: AppHandle, id: String) -> Result<Option<String>, String> {
+    files_busy(&app)?;
+    let cfg = load_config(&app);
+    let repo = need_repo(&cfg)?;
+    files::restore_backup(&save_dir_of(&cfg, &repo), &game_dir_of(&cfg, &repo), &id)
+}
+
+#[tauri::command]
+fn delete_save_backup(app: AppHandle, id: String) -> Result<(), String> {
+    files_busy(&app)?;
+    let cfg = load_config(&app);
+    files::delete_backup(&game_dir_of(&cfg, &need_repo(&cfg)?), &id)
+}
+
+/// The run folder, the checkout's build folder (None in a package) and where the game's data links point.
+fn clean_context(app: &AppHandle) -> Result<(PathBuf, Option<PathBuf>, Vec<PathBuf>), String> {
+    let cfg = load_config(app);
+    let repo = need_repo(&cfg)?;
+    let game = game_dir_of(&cfg, &repo);
+    let build = package_tools().is_none().then(|| repo.join("xc2").join("build").join("301"));
+    let mut links = vec![game.join("romfs"), game.join("dlc"), game.join("exefs")];
+    if let Some(b) = &build {
+        links.push(b.join("game").join("romfs"));
+        links.push(b.join("game").join("dlc"));
+    }
+    if let Ok(p) = paths(&cfg) {
+        links.push(p.romfs.clone());
+        links.push(p.exefs.clone());
+        if let Some(d) = &p.dlc {
+            links.push(d.clone());
+        }
+    }
+    let linked = links.iter().filter_map(|l| fs::canonicalize(l).ok()).chain(links.iter().cloned()).collect();
+    Ok((game, build, linked))
+}
+
+#[tauri::command]
+fn clean_scan(app: AppHandle) -> Result<Vec<files::CleanItem>, String> {
+    let (game, build, linked) = clean_context(&app)?;
+    Ok(files::clean_items(&game, build.as_deref(), &linked))
+}
+
+#[tauri::command]
+fn clean_run(app: AppHandle, ids: Vec<String>) -> Result<u64, String> {
+    files_busy(&app)?;
+    let (game, build, linked) = clean_context(&app)?;
+    files::clean(&game, build.as_deref(), &linked, &ids)
 }
 
 #[derive(Serialize)]
@@ -914,7 +1031,15 @@ fn main() {
             cancel_setup,
             play,
             game_status,
-    import_saves,
+            import_saves,
+            saves_overview,
+            open_saves_dir,
+            open_backups_dir,
+            backup_saves,
+            restore_saves,
+            delete_save_backup,
+            clean_scan,
+            clean_run,
             steam_status,
             add_to_steam,
             open_game_file,
