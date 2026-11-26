@@ -221,7 +221,15 @@ struct Page {
 
 void mark(Page& p) { p.dirty = true; }
 const char* cstr(const char* s) { return s ? s : ""; }
-const char* act_label(Act a) { return a == Act::None ? tr("无 (禁用)", "none") : act_info(a).name; }
+const char* act_label(Act a) {
+    if (a == Act::None) return tr("无 (禁用)", "none");
+    // The game may give a readable name for a slot; act_info(a).name is the settings-file key ("btn_a") and stays that way.
+    if (const GameVocabulary* v = game_vocabulary()) {
+        for (unsigned i = 0; i < v->label_count; ++i)
+            if (v->labels[i].act == a && v->labels[i].label) return v->labels[i].label;
+    }
+    return act_info(a).name;
+}
 float px(float v) { return v * ImGui::GetFontSize() / 18.0f; }
 
 void stop_rebind(UiHost& host, Page& p) {

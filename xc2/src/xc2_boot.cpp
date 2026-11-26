@@ -104,7 +104,7 @@ R = btn_zr
 # the shoulders
 F = btn_l
 G = btn_r
-# menu
+# menu (Tab) and map (M); Esc stays cancel (B), which is what people expect
 Tab = btn_plus
 M = btn_minus
 # stick clicks
@@ -152,6 +152,44 @@ static const nxrt::play::GameDefaultAddition kXc2Additions[] = {
     {7, nxrt::play::Ctx::All, "Left Ctrl", nxrt::play::Act::BtnRStick},
 };
 
+// Readable names for the slots the F1 rebind page lists. The settings-file key stays act_info(a).name ("btn_a"); these
+// are only what the page shows, so "1 = Y" reads as "Y" and "Mouse3 = R" as "锁定 (R)".
+static const nxrt::play::GameActLabel kXc2Labels[] = {
+    {nxrt::play::Act::MoveForward, "前进", "移动"},
+    {nxrt::play::Act::MoveBack, "后退", "移动"},
+    {nxrt::play::Act::MoveLeft, "左移", "移动"},
+    {nxrt::play::Act::MoveRight, "右移", "移动"},
+    {nxrt::play::Act::LookUp, "视角上", "视角"},
+    {nxrt::play::Act::LookDown, "视角下", "视角"},
+    {nxrt::play::Act::LookLeft, "视角左", "视角"},
+    {nxrt::play::Act::LookRight, "视角右", "视角"},
+    {nxrt::play::Act::BtnA, "确认 / 攻击 (A)", "按键"},
+    {nxrt::play::Act::BtnB, "取消 / 跳跃 (B)", "按键"},
+    {nxrt::play::Act::BtnX, "X", "按键"},
+    {nxrt::play::Act::BtnY, "Y", "按键"},
+    {nxrt::play::Act::BtnL, "L", "按键"},
+    {nxrt::play::Act::BtnR, "锁定 (R)", "按键"},
+    {nxrt::play::Act::BtnZL, "ZL (技能盘翻页)", "按键"},
+    {nxrt::play::Act::BtnZR, "ZR (技能盘翻页)", "按键"},
+    {nxrt::play::Act::BtnPlus, "菜单 (+)", "按键"},
+    {nxrt::play::Act::BtnMinus, "地图 (-)", "按键"},
+    {nxrt::play::Act::BtnLStick, "左摇杆按下", "按键"},
+    {nxrt::play::Act::BtnRStick, "右摇杆按下", "按键"},
+    {nxrt::play::Act::DpadUp, "十字键 上", "按键"},
+    {nxrt::play::Act::DpadDown, "十字键 下", "按键"},
+    {nxrt::play::Act::DpadLeft, "十字键 左", "按键"},
+    {nxrt::play::Act::DpadRight, "十字键 右", "按键"},
+};
+
+static const nxrt::play::GameVocabulary& xc2_vocabulary() {
+    static const nxrt::play::GameVocabulary v = [] {
+        nxrt::play::GameVocabulary g;
+        g.labels = kXc2Labels;
+        g.label_count = static_cast<unsigned>(sizeof kXc2Labels / sizeof kXc2Labels[0]);
+        return g;
+    }();
+    return v;
+}
 static const nxrt::play::GameDefaults& xc2_play_defaults() {
     static const nxrt::play::GameDefaults d = [] {
         nxrt::play::GameDefaults g;
@@ -159,6 +197,7 @@ static const nxrt::play::GameDefaults& xc2_play_defaults() {
         g.defaults_rev = 9;
         g.additions = kXc2Additions;
         g.addition_count = static_cast<unsigned>(sizeof kXc2Additions / sizeof kXc2Additions[0]);
+        g.vocabulary = &xc2_vocabulary();
         return g;
     }();
     return d;
