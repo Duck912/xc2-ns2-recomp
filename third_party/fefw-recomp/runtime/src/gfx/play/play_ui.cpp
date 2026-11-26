@@ -230,6 +230,20 @@ const char* act_label(Act a) {
     }
     return act_info(a).name;
 }
+
+// "Mouse3" and "WheelUp" read badly next to key names in the generated reference card.
+std::string pretty_input(const InputId& id) {
+    if (id.kind == InKind::Mouse) {
+        switch (id.code) {
+            case 1: return tr("鼠标左键", "Mouse left");
+            case 2: return tr("鼠标中键", "Mouse middle");
+            case 3: return tr("鼠标右键", "Mouse right");
+            default: return tr("鼠标侧键", "Mouse side");
+        }
+    }
+    if (id.kind == InKind::Wheel) return id.code > 0 ? tr("滚轮上", "Wheel up") : tr("滚轮下", "Wheel down");
+    return input_name(id);
+}
 float px(float v) { return v * ImGui::GetFontSize() / 18.0f; }
 
 void stop_rebind(UiHost& host, Page& p) {
@@ -1423,22 +1437,35 @@ void tab_controls(UiHost& host, const LiveStatus& live, Page& p, float bottom_h)
     }
     ImGui::PopItemFlag();
 
-    card_group("当前键位速查表 (实时映射)", "Active Controls Reference");
-    card_button("kb_move", "角色移动 (左摇杆)", "Move (Left Stick)",
-                "键盘 WASD 或方向键控制左摇杆移动；连接手柄后直接用左摇杆。",
-                "Keyboard WASD or Arrow keys control Left Stick.", "WASD / 方向键");
-    card_button("kb_cam", "旋转视角 (右摇杆)", "Camera (Right Stick)",
-                "移动鼠标即转视角（指针会被锁定在窗口内，按 F1 打开本菜单时放出）；键盘 I / J / K / L 备用，灵敏度在本页「鼠标」分组里调。",
-                "Moving the mouse turns the camera (the pointer is captured; F1 releases it). I/J/K/L also work; the slider is in the Mouse group on this page.", "鼠标 / I J K L");
-    card_button("kb_abxy", "确认 / 取消 / 功用键 (A B X Y)", "Face Buttons (A B X Y)",
-                "左键或 E = A（确认/攻击），空格 = B（跳跃），退格或 Esc = B（取消），1 / 2 / 3 / 4 = Y / A / B / X。",
-                "Left click or E = A (confirm/attack), Space = B (jump), Backspace/Esc = B (cancel), 1/2/3/4 = Y/A/B/X.", "左键 · E · 空格 · 1 2 3 4");
-    card_button("kb_shld", "肩键与扳机 + 锁定 (L / R / ZL / ZR)", "Shoulders, Triggers & Lock-on",
-                "F = L，G = R，Q / R = ZL / ZR（技能盘翻页），右键 = R（锁定）。",
-                "F = L, G = R, Q/R = ZL/ZR (arts palette paging), right click = R (lock on).", "F / G / Q / R / 右键");
-    card_button("kb_sys", "菜单 / 地图 / 滚轮 / 摇杆下压", "PLUS / MINUS / Wheel / L3 / R3",
-                "Tab = PLUS（主菜单），M = 左摇杆按下，滚轮 = 十字键上/下，Ctrl = 右摇杆按下；手柄同时按 - 与 + 可呼出本 F1 菜单。",
-                "Tab = PLUS (menu), M = left stick click, wheel = d-pad up/down, Ctrl = right stick click. Gamepad MINUS + PLUS toggles F1 menu.", "Tab / M / 滚轮 / Ctrl");
+    // Generated from the bindings that are actually loaded, so the card cannot drift from them again: the previous
+    // version was hand-written and described a layout two revisions out of date.
+    card_group("当前键位 (由绑定表生成)", "Active Controls (from the bindings)");
+    {
+        static const Act kOrder[] = {
+            Act::MoveForward, Act::MoveBack, Act::MoveLeft, Act::MoveRight,
+            Act::LookUp, Act::LookDown, Act::LookLeft, Act::LookRight,
+            Act::BtnA, Act::BtnB, Act::BtnX, Act::BtnY,
+            Act::BtnL, Act::BtnR, Act::BtnZL, Act::BtnZR,
+            Act::DpadUp, Act::DpadDown, Act::DpadLeft, Act::DpadRight,
+            Act::BtnPlus, Act::BtnMinus, Act::BtnLStick, Act::BtnRStick,
+        };
+        int shown = 0;
+        for (Act a : kOrder) {
+            std::string keys;
+            for (const Binding& b : p.edit.bindings) {
+                if (b.act != a) continue;
+                if (b.ctx != Ctx::All && b.ctx != Ctx::Menu) continue;   // the layers that apply while the game runs
+                if (!keys.empty()) keys += "  /  ";
+                keys += pretty_input(b.in);
+            }
+            if (keys.empty()) continue;
+            ImGui::Text("%s  -  %s", act_label(a), keys.c_str());
+            ++shown;
+        }
+        if (shown == 0) ImGui::TextColored(kDimText, "%s", tr("（没有任何绑定）", "(no bindings)"));
+    }
+    ImGui::TextColored(kDimText, "%s", tr("鼠标转视角在「鼠标」分组里调灵敏度；手柄同时按 - 与 + 可呼出本菜单。",
+                                         "Mouse sensitivity is in the Mouse group above; gamepad MINUS + PLUS opens this menu."));
 
     pane_end(live);
 }
