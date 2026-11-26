@@ -1,5 +1,5 @@
 [package]
-name = "xc2-launcher"
+name = "xcde-launcher"
 version = "0.2.5"
 description = "Launcher for the Xenoblade Chronicles 2 NS2 static recompilation: set up from your own dump, build, configure and play"
 edition = "2021"

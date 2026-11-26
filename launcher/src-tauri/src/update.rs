@@ -25,11 +25,11 @@ pub const REPO: &str = match option_env!("FEFW_UPDATE_REPO") {
 pub const BUILD_ID: Option<&str> = option_env!("FEFW_BUILD_ID");
 /// The release asset for this platform, and files a downloaded package must have.
 #[cfg(windows)]
-const PACKAGE: (&str, &str, [&str; 4]) = (".zip", "Windows", ["xc2-launcher.exe", "runtime/xc2_rt.dll", "engine/xc2_setup.py", "tools/python/python.exe"]);
+const PACKAGE: (&str, &str, [&str; 4]) = (".zip", "Windows", ["xcde-launcher.exe", "runtime/xc2_rt.dll", "engine/xcde_setup.py", "tools/python/python.exe"]);
 #[cfg(not(windows))]
 const PACKAGE: (&str, &str, [&str; 4]) =
-    ("-linux-x64.tar.gz", "Linux", ["xc2-launcher.AppImage", "runtime/xc2_rt.dll", "engine/xc2_setup.py", "tools/python/bin/python3"]);
-const AGENT: &str = "xc2-launcher";
+    ("-linux-x64.tar.gz", "Linux", ["xcde-launcher.AppImage", "runtime/xc2_rt.dll", "engine/xcde_setup.py", "tools/python/bin/python3"]);
+const AGENT: &str = "xcde-launcher";
 const CURL: &str = if cfg!(windows) { "curl.exe" } else { "curl" };
 const TAR: &str = if cfg!(windows) { "tar.exe" } else { "tar" };
 /// The launcher's working folder inside the install folder: downloads, the unpacked package, the previous version's files.

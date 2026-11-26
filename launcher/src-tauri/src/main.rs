@@ -866,7 +866,7 @@ fn cancel_fsr_download(state: State<'_, Arc<fsr::Shared>>) {
 fn restart_launcher(app: AppHandle) -> Result<(), String> {
     let exe = match std::env::var_os("APPIMAGE") {
         Some(a) if !cfg!(windows) => PathBuf::from(a),
-        _ => exe_dir().join(if cfg!(windows) { "xc2-launcher.exe" } else { "xc2-launcher" }),
+        _ => exe_dir().join(if cfg!(windows) { "xcde-launcher.exe" } else { "xcde-launcher" }),
     };
     let mut c = std::process::Command::new(&exe);
     setup::host_env(&mut c); // not this AppImage's environment: its mount goes away when this launcher exits

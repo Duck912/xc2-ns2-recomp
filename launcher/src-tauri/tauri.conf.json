@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "xc2-launcher",
+  "productName": "xcde-launcher",
   "version": "0.2.5",
   "identifier": "io.github.weile10000.xc2-ns2-recomp",
   "build": {

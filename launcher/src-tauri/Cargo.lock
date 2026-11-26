@@ -4301,7 +4301,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "xc2-launcher"
+name = "xcde-launcher"
 version = "0.2.5"
 dependencies = [
  "serde",

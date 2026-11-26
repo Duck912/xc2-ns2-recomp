@@ -46,7 +46,8 @@ The .NET and Vulkan SDKs that the XC2 build lists are not needed: NVN-HLE transl
 
 ## Set up and play
 
-**With the launcher** (`launcher/`, build it with `npm install` then `npm run tauri build -- --no-bundle`):
+**With the launcher** (`launcher/`, build it with `npm install` then `npm run tauri build -- --no-bundle`; it is
+`launcher/src-tauri/target/release/xcde-launcher.exe`):
 pick your dump, press **Set up**, then **Play**. Download Streamline from the launcher's Settings first if you
 want DLSS. Setup takes a while the first time (it compiles the whole game) and continues where it stopped.
 
