@@ -47,6 +47,8 @@
 #include "nxrt/services.h"
 #include "nv12_convert.h"
 
+#include "nxrt/nvn_n2den.h"
+
 #if NXRT_HAVE_DAV1D
 #include <dav1d/dav1d.h>
 #endif
@@ -259,6 +261,7 @@ void deliver(Decoder& d) {
             const uint64_t buf = rd64(f + kVfBuf), cap = rd64(f + kVfSize);
             if (buf && y + uv <= cap) {
                 std::memcpy(reinterpret_cast<void*>(buf), p.nv12.data(), y + uv);
+                nvn::n2den::notify_cpu_write(buf, y + uv);   // NVN-HLE: the frame is host-written guest memory (no-op otherwise)
                 // NXRT_FILM_DUMP: write the frame as the guest will read it back, so a difference between what the decoder
                 // produced and what sits in the game's buffer is visible (a green picture with correct decode data means the
                 // copy or the buffer layout is wrong, not the decoder).

@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "nxrt/config.h"
+#include "nxrt/nvn_n2den.h"
 #include "nxrt/ftrace.h"
 #include "nxrt/gauge.h"
 #include "nvn_texdata.h"
@@ -244,6 +245,12 @@ bool film_texture_is(uint32_t id) {
 }
 
 void textures_cpu_wrote(const void* lo, uint64_t size) {
+    // NVN-HLE draws the game (--nvn n2den): the host wrote guest memory its GPU copy may hold (movie frames); this
+    // runtime's texture registry is empty then
+    if (n2den::active()) {
+        n2den::notify_cpu_write(reinterpret_cast<uint64_t>(lo), size);
+        return;
+    }
     const uint64_t a = reinterpret_cast<uint64_t>(lo), b = a + size;
     std::vector<Ref<Texture>> hit;
     {
