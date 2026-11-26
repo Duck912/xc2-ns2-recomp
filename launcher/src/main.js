@@ -11,7 +11,7 @@ import * as mods from './pages/mods.js';
 import * as settings from './pages/settings.js';
 import * as about from './pages/about.js';
 import * as files from './pages/files.js';
-import { checkNow } from './update.js';
+import { checkNow, upd, available } from './update.js';
 
 /*
  * The shell: a frameless window (tauri.conf.json decorations: false) with its own title bar, the home flow
@@ -46,6 +46,7 @@ function drawShell() {
   document.getElementById('tb-name').textContent = t('brand.name');
   document.getElementById('tb-settings').title = t('nav.settings');
   document.getElementById('tb-saves').title = t('nav.saves');
+  document.getElementById('tb-update').title = available() ? t('about.updateTo', { version: upd.check.latest.version }) : t('nav.checkUpdate');
   document.getElementById('tb-min').title = t('shell.minimize');
   document.getElementById('tb-close').title = t('shell.close');
 }
@@ -60,6 +61,35 @@ async function renderPanel(page) {
   view.querySelector('#panel-back').addEventListener('click', () => go('home'));
   view.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => go(b.dataset.tab)));
   await PANEL[page].mod.render(view.querySelector('#panel-body'), ctx);
+}
+
+/** The title bar's Update page: a Back button and the Updates card (pages/about.js, mode 'update'). */
+async function renderUpdate() {
+  document.getElementById('tb-center').innerHTML = '';
+  view.innerHTML = `<div class="panel-tabs">
+      <button class="btn quiet" id="panel-back">${icon('arrow-left')}${esc(t('shell.back'))}</button>
+    </div><div id="panel-body"></div>`;
+  view.querySelector('#panel-back').addEventListener('click', () => go('home'));
+  await about.render(view.querySelector('#panel-body'), 'update');
+}
+
+/** The update button: a dot while an update is waiting; its tooltip names the version. */
+function drawUpdateButton() {
+  const b = document.getElementById('tb-update');
+  b.classList.toggle('has-update', available());
+  b.classList.toggle('spin-icon', upd.checking);
+  b.title = available() ? t('about.updateTo', { version: upd.check.latest.version }) : t('nav.checkUpdate');
+}
+
+/** Click: with an update waiting, open the Update page; otherwise check, then open it if one was found. */
+async function onUpdateClick() {
+  if (current === 'update') return go('home');
+  if (!available()) {
+    await checkNow();
+    if (upd.error) return toast(upd.error, 'error');
+    if (!available()) return toast(upd.check && !upd.check.package ? t('about.checkout') : t('nav.upToDate'));
+  }
+  go('update');
 }
 
 /** The title bar's Saves page: a Back button and the page. */
@@ -83,6 +113,7 @@ async function go(page, opts = {}) {
   view.scrollTop = 0;
   try {
     if (page === 'saves') await renderSaves();
+    else if (page === 'update') await renderUpdate();
     else if (PANEL[page]) await renderPanel(page);
     else await home.render(view, { ...ctx, ...opts });
   } catch (e) {
@@ -98,6 +129,8 @@ async function boot() {
   document.getElementById('tb-close').addEventListener('click', () => win.close());
   document.getElementById('tb-settings').addEventListener('click', () => go(PANEL[current] ? 'home' : 'settings'));
   document.getElementById('tb-saves').addEventListener('click', () => go(current === 'saves' ? 'home' : 'saves'));
+  document.getElementById('tb-update').addEventListener('click', onUpdateClick);
+  upd.listeners.add(drawUpdateButton);
   await listen('game-status', (ev) => statusHandler && statusHandler(ev.payload));
   await listen('setup-status', (ev) => setupHandler && setupHandler(ev.payload));
   await listen('setup-log', (ev) => logHandler && logHandler(ev.payload));
@@ -107,7 +140,7 @@ async function boot() {
   // before the language loads, whose callback draws `current`, so home never draws over it.
   const start = await api('start_page').catch(() => '');
   if (['files', 'options', 'build'].includes(start)) home.start(start);
-  if (['saves', ...Object.keys(PANEL)].includes(start)) current = start;
+  if (['saves', 'update', ...Object.keys(PANEL)].includes(start)) current = start;
   await initLang(() => { drawShell(); go(current); }, cfg.lang);
   document.documentElement.lang = getLang();
   drawShell();

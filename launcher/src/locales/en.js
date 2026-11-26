@@ -500,6 +500,8 @@ export const en = {
     // ----- about -----
     'about.launcherWord': 'launcher',
     'nav.saves': 'Saves',
+    'nav.checkUpdate': 'Check for updates',
+    'nav.upToDate': 'You have the latest version.',
     'nav.clean': 'Clean up',
     'files.loading': 'Looking at your files...',
     'files.savesTitle': 'Saves',
@@ -575,7 +577,7 @@ export const en = {
     'about.licence': 'Licence',
     'about.builtWith': 'Built with',
     'about.credits': 'Credits',
-    'about.creditsText': 'See README.md: nxrecomp, the fefw-recomp runtime, Ryujinx\'s shader translator and the other projects this builds on.',
+    'about.creditsText': 'NVN-HLE (written by duck912 in the Eglantine Community, ported to n2den), xc2-ns2-recomp by weile10000, nxrecomp and the fefw-recomp runtime; see README.md.',
     'about.noGameFiles': 'No game files included.',
     'about.reportTitle': 'Something went wrong?',
     'about.reportHint':

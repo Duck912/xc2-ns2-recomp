@@ -218,3 +218,8 @@ html, body { background: transparent; }
 #panel-body .hero { height: auto; align-items: flex-start; justify-content: flex-start; text-align: left; padding-bottom: 0; gap: var(--space-1); }
 #panel-body .hero h1 { font-size: var(--font-size-xl); }
 #panel-body .hero p, #panel-body .hero .lead { max-width: none; font-size: var(--font-size-sm); }
+/* the title bar's update button: a dot while an update is waiting */
+#tb-update { position: relative; }
+#tb-update.has-update { color: var(--color-accent); }
+#tb-update.has-update::after { content: ""; position: absolute; top: 6px; right: 6px; width: 8px; height: 8px; border-radius: 50%; background: var(--color-accent); box-shadow: 0 0 0 2px var(--color-bg, #0d1020); }
+#tb-update.spin-icon svg { animation: spin 1s linear infinite; }
