@@ -74,7 +74,7 @@ const SECTIONS = [
   {
     title: 'settings.sec.sound', icon: 'volume-2', file: 'game',
     fields: [
-      { id: 'audio_device', type: 'text', label: 'settings.audioDevice.label', sec: 'audio', key: 'device', def: 'default',
+      { id: 'audio_device', type: 'text', file: 'controls', label: 'settings.audioDevice.label', sec: 'audio', key: 'device', def: 'default',
         placeholder: 'settings.audioDevice.placeholder', hint: 'settings.audioDevice.hint' },
       { id: 'audio_channels', type: 'select', label: 'settings.audioChannels.label', sec: 'audio', key: 'channels', def: '2',
         options: [['2', 'settings.audioChannels.stereo'], ['6', 'settings.audioChannels.surround51']],
@@ -176,7 +176,10 @@ export async function render(el, ctx) {
     language: () => [],
   };
 
-  const all = SECTIONS.flatMap((s) => s.fields.map((f) => ({ ...f, file: s.file })));
+  // A field may name its own file: HDR and the output device belong to controls.ini, which is the file the F1 page
+  // writes. Without the field winning here, both were written to nxrt.ini instead - and nxrt.ini overrides
+  // controls.ini, so a change made in F1 was silently reverted on the next launch.
+  const all = SECTIONS.flatMap((s) => s.fields.map((f) => ({ ...f, file: f.file || s.file })));
   const model = {};
   const orig = {};
   for (const f of all) {
