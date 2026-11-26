@@ -123,7 +123,7 @@ if ($Defines -notmatch 'XC2_BUILD_STAMP') {
 $defArgs = @()
 if ($Defines) { foreach ($d in $Defines.Split(' ')) { if ($d) { $defArgs += "/D$d" } } }
 & clang-cl.exe /nologo /std:c++20 /O2 /MT /c (Join-Path $root 'src\xc2_boot.cpp') "/Fo$obj" @defArgs `
-    "/I$nxinc" "/I$rt\runtime\include" "/I$rt\runtime\games" "/I$volk" "/I$vkinc" "/I$vma" "/I$sdlinc"
+    "/I$nxinc" "/I$rt\runtime\include" "/I$rt\runtime\games" "/I$rt\runtime\src\gfx\play" "/I$volk" "/I$vkinc" "/I$vma" "/I$sdlinc"
 if ($LASTEXITCODE -ne 0) { throw 'compile failed: xc2_boot.cpp' }
 & clang-cl.exe /nologo /std:c++20 /O2 /MT /c (Join-Path $root 'src\x2_opus301.cpp') "/Fo$objOpus" @defArgs `
     "/I$nxinc" "/I$rt\runtime\include" "/I$rt\runtime\games" "/I$volk" "/I$vkinc" "/I$vma" "/I$sdlinc"

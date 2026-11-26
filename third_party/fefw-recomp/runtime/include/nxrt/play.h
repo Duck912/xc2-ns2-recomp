@@ -53,6 +53,11 @@ bool start(const StartOptions& opt);        // after nxrt::init, the renderer an
 void stop();                                // saves changed settings, removes the hooks and the input source
 bool overlay_blocks_game();                 // true while the F1 overlay (or on-screen keyboard) wants keyboard/mouse/pad input
 
+// The binding engine's contribution at `now_ns`: Switch buttons plus stick deflection in -1..1. Play mode installs its
+// own input source (PlaySource) that already merges this, but a game whose own source replaces it (xc2_boot's LiveInput
+// does, on purpose) gets nothing from the keyboard unless it asks for this. False when play mode is not running.
+bool binding_output(uint64_t now_ns, uint64_t* buttons, float* lx, float* ly, float* rx, float* ry);
+
 // Live gamepad tuning read by external input sources (e.g. xc2_boot's LiveInput). Lock-free snapshot.
 struct LivePadConfig {
     bool label_abxy = false;

@@ -69,6 +69,9 @@ target_include_directories(xc2_rt PRIVATE
     "${XC2_ROOT}/third_party/nxrecomp/recomp/include"
     "${FEFW}/runtime/include"
     "${FEFW}/runtime/games"
+    # play_types.h (the binding engine's vocabulary) lives beside the play sources, not in include/: xc2_boot.cpp
+    # registers the game's factory bindings, so it needs this one directory.
+    "${FEFW}/runtime/src/gfx/play"
     "${GFX}/_deps/volk-src"
     "${GFX}/_deps/vulkan_headers-src/include"
     "${GFX}/_deps/vma-src/include"

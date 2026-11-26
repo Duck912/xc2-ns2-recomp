@@ -21,6 +21,8 @@ This directory is a **modified fork** of `Goldoire/fefw-recomp` (the original Gi
 
 | `file` | date | change |
 |---|---|---|
+| `runtime/include/nxrt/play.h` | 2026-11-26 | new `play::binding_output()`: the binding engine's Switch output (buttons + sticks) for a game whose own input source replaces PlaySource, which xc2_boot's LiveInput does on purpose |
+| `runtime/src/gfx/play/play.cpp` | 2026-11-26 | implement `binding_output()` over the engine the play mode already owns |
 | `runtime/src/services/fs_romfs.cpp` | 2026-11-23 | fix `RomfsImage::build()` (`ard_index` / `ard_at` / `ard_real_size`), multi-mod `append.bin` (`TailSlice` + `read_tail`), in-memory `bf2.arh` delta relocation/composition (`compose_arh_layers`) + `serve_ard()` locking, plus M4 `.mod_layers.tsv` option sub-layers, `.` dotfile skip, and `[mods] pending_rebuild` hold-off |
 | `runtime/include/nxrt/cheats.h` | 2026-11-23 | new (M4c): Atmosphère DMNT cheat VM interface (`parse_txt_filtered`, `load_from_mods_dir`, `init_from_config`, `tick`) |
 | `runtime/src/core/cheats.cpp` | 2026-11-23 | new (M4c): DMNT cheat VM (Opcodes `0`–`9`, `VirtualQuery`/`mem::is_mapped` safe bounds, skips M3 `.text` static cheats via `nso.cpp` / `[fs] exefs` info & respects `[mods] pending_rebuild`) |

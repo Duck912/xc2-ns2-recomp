@@ -58,6 +58,100 @@
 #include "xc2ns2/xc2ns2_game.h"
 #include "xc2_modules.h"
 
+#include "play_types.h"
+
+// ---- the keyboard/mouse scheme the game starts with ---------------------------------------------------------------
+// Play mode already feeds the binding engine (src/gfx/play/play_engine.h) from the SDL event pump and merges its
+// Switch-pad output into every snapshot, for any game. XC2 had no factory bindings, so the engine had nothing to
+// apply and the hardcoded keys in LiveInput below were the only way in. These are the defaults a fresh controls.ini
+// is written with, and every one of them can be changed in the F1 page (controls.ini is the file that page edits).
+static const char* const kXc2SettingsText = R"INI(
+[meta]
+defaults_rev = 4
+
+[bindings.play]
+# movement: WASD and the arrow keys
+W = move_forward
+S = move_back
+A = move_left
+D = move_right
+Up = move_forward
+Down = move_back
+Left = move_left
+Right = move_right
+# camera by keyboard; the mouse is a separate path
+I = look_up
+K = look_down
+J = look_left
+L = look_right
+# face buttons and shoulders
+Space = btn_a
+Return = btn_a
+Backspace = btn_b
+Escape = btn_b
+U = btn_x
+O = btn_y
+Q = btn_l
+E = btn_r
+1 = btn_zl
+2 = btn_zr
+Tab = btn_plus
+Left Shift = btn_lstick
+Left Ctrl = btn_rstick
+)INI";
+
+// controls.ini files written before those bindings existed carry empty [bindings.*] sections, and an empty section
+// means "this file is the whole truth", so the factory text above never reaches them. The additions are what play
+// mode appends to such a file (defaults_rev 3 -> 4), keeping the old one as .bak.
+static const nxrt::play::GameDefaultAddition kXc2Additions[] = {
+    {4, nxrt::play::Ctx::Play, "W", nxrt::play::Act::MoveForward},
+    {4, nxrt::play::Ctx::Play, "S", nxrt::play::Act::MoveBack},
+    {4, nxrt::play::Ctx::Play, "A", nxrt::play::Act::MoveLeft},
+    {4, nxrt::play::Ctx::Play, "D", nxrt::play::Act::MoveRight},
+    {4, nxrt::play::Ctx::Play, "Up", nxrt::play::Act::MoveForward},
+    {4, nxrt::play::Ctx::Play, "Down", nxrt::play::Act::MoveBack},
+    {4, nxrt::play::Ctx::Play, "Left", nxrt::play::Act::MoveLeft},
+    {4, nxrt::play::Ctx::Play, "Right", nxrt::play::Act::MoveRight},
+    {4, nxrt::play::Ctx::Play, "I", nxrt::play::Act::LookUp},
+    {4, nxrt::play::Ctx::Play, "K", nxrt::play::Act::LookDown},
+    {4, nxrt::play::Ctx::Play, "J", nxrt::play::Act::LookLeft},
+    {4, nxrt::play::Ctx::Play, "L", nxrt::play::Act::LookRight},
+    {4, nxrt::play::Ctx::Play, "Space", nxrt::play::Act::BtnA},
+    {4, nxrt::play::Ctx::Play, "Return", nxrt::play::Act::BtnA},
+    {4, nxrt::play::Ctx::Play, "Backspace", nxrt::play::Act::BtnB},
+    {4, nxrt::play::Ctx::Play, "Escape", nxrt::play::Act::BtnB},
+    {4, nxrt::play::Ctx::Play, "U", nxrt::play::Act::BtnX},
+    {4, nxrt::play::Ctx::Play, "O", nxrt::play::Act::BtnY},
+    {4, nxrt::play::Ctx::Play, "Q", nxrt::play::Act::BtnL},
+    {4, nxrt::play::Ctx::Play, "E", nxrt::play::Act::BtnR},
+    {4, nxrt::play::Ctx::Play, "1", nxrt::play::Act::BtnZL},
+    {4, nxrt::play::Ctx::Play, "2", nxrt::play::Act::BtnZR},
+    {4, nxrt::play::Ctx::Play, "Tab", nxrt::play::Act::BtnPlus},
+    {4, nxrt::play::Ctx::Play, "Left Shift", nxrt::play::Act::BtnLStick},
+    {4, nxrt::play::Ctx::Play, "Left Ctrl", nxrt::play::Act::BtnRStick},
+};
+
+static const nxrt::play::GameDefaults& xc2_play_defaults() {
+    static const nxrt::play::GameDefaults d = [] {
+        nxrt::play::GameDefaults g;
+        g.settings_text = kXc2SettingsText;
+        g.defaults_rev = 4;
+        g.additions = kXc2Additions;
+        g.addition_count = static_cast<unsigned>(sizeof kXc2Additions / sizeof kXc2Additions[0]);
+        return g;
+    }();
+    return d;
+}
+
+static const nxrt::game::Info& xc2_game_info() {
+    static const nxrt::game::Info info = [] {
+        nxrt::game::Info g = nxrt::games::xc2ns2::core_info();
+        g.play_defaults = &xc2_play_defaults();
+        return g;
+    }();
+    return info;
+}
+
 // The build the log reports. Both build paths fill this in: tools\build\build-boot.ps1 and xc2\release\CMakeLists.txt
 // run `git describe --tags --always --dirty`, so a player's log says which build ran (tag, commit, and whether the
 // tree was dirty) instead of a literal that goes stale the moment a release ships.
@@ -264,28 +358,22 @@ void LiveInput::live(nxrt::hid::InputSnapshot &out) {
                 focused ? "keys go to the game" : "the game does not have the focus: keys are ignored");
     }
     if (focused && !menu_blocked) {
-        // left stick: WASD or the arrow keys; right stick (camera): IJKL
-        if (down('W') || down(VK_UP)) ky += 32767;
-        if (down('S') || down(VK_DOWN)) ky -= 32767;
-        if (down('D') || down(VK_RIGHT)) kx += 32767;
-        if (down('A') || down(VK_LEFT)) kx -= 32767;
-        if (down('I')) kly += 32767;
-        if (down('K')) kly -= 32767;
-        if (down('L')) klx += 32767;
-        if (down('J')) klx -= 32767;
-        // face buttons and shoulders: Space/Enter = A, Backspace/Esc = B, U = X, O = Y, Q/E = L/R, 1/2 = ZL/ZR
-        if (down(VK_SPACE) || down(VK_RETURN)) kb |= btn(kBtnA);
-        if (down(VK_BACK) || down(VK_ESCAPE)) kb |= btn(kBtnB);
-        if (down('U')) kb |= btn(kBtnX);
-        if (down('O')) kb |= btn(kBtnY);
-        if (down('Q')) kb |= btn(kBtnL);
-        if (down('E')) kb |= btn(kBtnR);
-        if (down('1')) kb |= btn(kBtnZL);
-        if (down('2')) kb |= btn(kBtnZR);
-        if (down(VK_TAB) || down(VK_OEM_PLUS)) kb |= btn(kBtnPlus);
-        if (down(VK_OEM_MINUS)) kb |= btn(kBtnMinus);
-        if (down(VK_SHIFT)) kb |= btn(kBtnStickL);
-        if (down(VK_CONTROL)) kb |= btn(kBtnStickR);
+        // The keyboard and mouse buttons are not read here: play mode's binding engine owns them (kXc2SettingsText at the
+        // top of this file, rebindable in the F1 page). PlaySource would merge the engine's output itself, but this source
+        // replaces PlaySource on purpose (see the set_input_source call below), so ask the engine directly.
+        uint64_t eb = 0;
+        float blx = 0, bly = 0, brx = 0, bry = 0;
+        if (nxrt::play::binding_output(nxrt::FrameLimiter::now_ns(), &eb, &blx, &bly, &brx, &bry)) {
+            kb |= eb;
+            if (blx != 0.0f || bly != 0.0f) {
+                kx += static_cast<int>(std::lround(blx * 32767.0f));
+                ky += static_cast<int>(std::lround(bly * 32767.0f));
+            }
+            if (brx != 0.0f || bry != 0.0f) {
+                klx += static_cast<int>(std::lround(brx * 32767.0f));
+                kly += static_cast<int>(std::lround(bry * 32767.0f));
+            }
+        }
     }
     if (focused) {
         // F12: write the next presented frame as shots_manual/shot_NNNN.png (RGBA8). Works any time, also mid-cutscene.
@@ -2424,7 +2512,9 @@ int main(int argc, char **argv) {
     if (!prepare_only && exefs.empty()) die("--exefs is required: point it at the ExeFS you dumped from your own copy");
     if (!exefs.empty() && exefs.back() == '\\') exefs.pop_back();
 
-    nxrt_register_game_xc2ns2_core();   // before nxrt::init reads the title facts
+    // The game boundary: the core facts plus the factory bindings above, so play mode's binding engine has something to
+    // apply. Before nxrt::init reads the title facts.
+    nxrt::game::set_current(&xc2_game_info());
 
     nxrt::InitOptions opt;
     opt.log_path = logp;

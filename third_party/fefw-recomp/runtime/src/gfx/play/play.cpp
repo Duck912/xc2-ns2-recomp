@@ -1612,6 +1612,18 @@ bool overlay_blocks_game() {
     return st.started && st.overlay && st.overlay->blocks_game();
 }
 
+bool binding_output(uint64_t now_ns, uint64_t* buttons, float* lx, float* ly, float* rx, float* ry) {
+    const G& st = g();
+    if (!st.started || !st.engine) return false;
+    const EngineOut o = st.engine->output(now_ns);
+    if (buttons) *buttons = o.buttons;
+    if (lx) *lx = o.lx;
+    if (ly) *ly = o.ly;
+    if (rx) *rx = o.rx;
+    if (ry) *ry = o.ry;
+    return true;
+}
+
 LivePadConfig live_pad_config() {
     const G& st = g();
     LivePadConfig c;
