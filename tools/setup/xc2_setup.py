@@ -669,6 +669,14 @@ def link_stamp_matches(stamp, sig):
         return False
 
 
+def install_runtime_signature(install):
+    """The runtime an install runs: the package's own copy while it is there, else the one beside the exe."""
+    for candidate in (Path(install) / "runtime" / "xc2_rt.dll", Path(install) / "xc2_rt.dll"):
+        if candidate.is_file():
+            return runtime_signature(candidate)
+    return None
+
+
 def step_link_package(r, repo, install, zig, rtlib, jobs):
     started = r.step("link")
     exe = install / "xc2_boot.exe"
@@ -964,6 +972,14 @@ def step_shaders_package(r, repo, install, py, jobs):
     # cache, 5 missing, black title) and every later setup skipped the step entirely.
     scanned = (spirv / "results.tsv").is_file() and any(spirv.glob("*.spv"))
     prefilled = install / "build" / "prefilled"
+    # The prefill names the blocks no file contains, and which blocks those are depends on the runtime - a new
+    # xc2_rt.dll can ask for a different set. The translated cache is keyed by shader hash and stays as it is, so
+    # only the headless pass is redone; the marker therefore carries the runtime signature it was made against.
+    sig = install_runtime_signature(install)
+    prefill_stamp = install / "build" / "prefill-stamp.json"
+    if prefilled.is_file() and not link_stamp_matches(prefill_stamp, sig):
+        r.log("  the runtime changed since the shader prefill; running that pass again (the cache is kept)")
+        prefilled = install / "build" / "prefilled.stale"   # keep the old marker for the log, but do not trust it
     if scanned and prefilled.is_file():
         return r.end_step("shaders", started, True, "the shader cache is already there")
     if not scanned:
@@ -1016,6 +1032,9 @@ def step_shaders_package(r, repo, install, py, jobs):
     if not prefilled.is_file():
         return r.end_step("shaders", started, False,
                           note or "the headless prefill named no block; the cache has the archive's share only")
+    if not r.dry and sig is not None:
+        prefill_stamp.parent.mkdir(parents=True, exist_ok=True)
+        prefill_stamp.write_text(json.dumps(sig), encoding="utf-8")
     exe = install / "xc2_boot.exe"
     if exe.is_file() and programs.is_file():
         patched = install / "build" / "exefs-patched"

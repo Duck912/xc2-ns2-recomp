@@ -47,6 +47,19 @@ class LinkStampTest(unittest.TestCase):
         self.dll.write_bytes(b"y" * 256)     # what an upgrade does: new runtime, same exe
         self.assertFalse(self.setup.link_stamp_matches(self.stamp, self.setup.runtime_signature(self.dll)))
 
+    def test_install_signature_prefers_the_package_copy(self):
+        runtime = self.dir / "runtime"
+        runtime.mkdir()
+        (runtime / "xc2_rt.dll").write_bytes(b"z" * 64)
+        self.assertEqual(self.setup.install_runtime_signature(self.dir)["size"], 64)
+
+    def test_install_signature_falls_back_to_the_one_beside_the_exe(self):
+        self.assertEqual(self.setup.install_runtime_signature(self.dir)["size"], 128)
+
+    def test_install_without_a_runtime_has_no_signature(self):
+        empty = pathlib.Path(tempfile.mkdtemp())
+        self.assertIsNone(self.setup.install_runtime_signature(empty))
+
     def test_missing_runtime_is_not_a_signature(self):
         self.assertIsNone(self.setup.runtime_signature(self.dir / "nope.dll"))
         self.assertFalse(self.setup.link_stamp_matches(self.stamp, None))
