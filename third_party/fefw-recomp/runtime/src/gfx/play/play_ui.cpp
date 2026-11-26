@@ -1456,7 +1456,7 @@ void tab_controls(UiHost& host, const LiveStatus& live, Page& p, float bottom_h)
     // Generated from the bindings that are actually loaded, and editable in place: a key chip starts a capture for
     // that row, "x" removes it, "+" adds another key to the action. Conflicts unbind the other action (see
     // poll_capture), so one input never drives two things.
-    card_group("按键绑定 (点按键重新绑定 · x 删除 · + 添加)", "Key bindings (click to rebind, x to remove, + to add)");
+    card_group("按键绑定（点按键重新绑定 · × 移除 · + 增加）", "Key bindings (click a key to rebind · × remove · + add)");
     {
         static const Act kOrder[] = {
             Act::MoveForward, Act::MoveBack, Act::MoveLeft, Act::MoveRight,
@@ -1488,7 +1488,7 @@ void tab_controls(UiHost& host, const LiveStatus& live, Page& p, float bottom_h)
                     host.begin_capture();
                 }
                 ImGui::SameLine();
-                if (ImGui::SmallButton("x")) erase_at = idx;
+                if (ImGui::SmallButton("×")) erase_at = idx;
                 ImGui::PopID();
                 ImGui::SameLine();
             }
@@ -1508,7 +1508,7 @@ void tab_controls(UiHost& host, const LiveStatus& live, Page& p, float bottom_h)
             set_notice(p, tr("已删除该按键绑定", "Binding removed"), false);
         }
     }
-    ImGui::TextColored(kDimText, "%s", tr("鼠标转视角在「鼠标」分组里调灵敏度；手柄同时按 - 与 + 可呼出本菜单。",
+    ImGui::TextColored(kDimText, "%s", tr("鼠标灵敏度在「鼠标」分组里调；按 F1（或手柄同时按 - 与 +）呼出本菜单。",
                                          "Mouse sensitivity is in the Mouse group above; gamepad MINUS + PLUS opens this menu."));
 
     pane_end(live);
@@ -1739,13 +1739,13 @@ void draw_settings_page(UiHost& host) {
         ImGui::TextColored(kGold, "%s", tr("请按下要绑定的按键，按 Esc 取消...", "Press a key to bind, Esc to cancel..."));
     } else if (p.dirty) {
         ImGui::AlignTextToFramePadding();
-        ImGui::TextColored(kOrange, "%s", tr("● 有未保存的修改 (按 ZR 应用并保存)", "● Unsaved changes (ZR to apply)"));
+        ImGui::TextColored(kOrange, "%s", tr("● 有未保存的修改（点「应用并保存」保存）", "● Unsaved changes (click Apply & Save)"));
     } else if (!p.notice.empty()) {
         ImGui::AlignTextToFramePadding();
         ImGui::TextColored(p.notice_warn ? kOrange : kEmerald, "%s", p.notice.c_str());
     } else {
         ImGui::AlignTextToFramePadding();
-        ImGui::TextColored(kDimText, "%s", tr("提示：方向键选条，左右调节，L/R 换页，ZR 应用保存", "Tip: D-pad select, Left/Right adjust, L/R tabs, ZR apply"));
+        ImGui::TextColored(kDimText, "%s", tr("提示：鼠标点左侧标签换页、点条目修改，滑块可以直接拖；手柄方向键与 L/R 同样可用。", "Tip: click a tab on the left and a row to edit, drag a slider; the gamepad d-pad and L/R also work."));
     }
 }
 
