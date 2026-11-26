@@ -67,7 +67,7 @@
 // is written with, and every one of them can be changed in the F1 page (controls.ini is the file that page edits).
 static const char* const kXc2SettingsText = R"INI(
 [meta]
-defaults_rev = 11
+defaults_rev = 12
 
 [bindings.all]
 # movement: WASD and the arrow keys
@@ -112,6 +112,12 @@ WheelUp = dpad_up
 WheelDown = dpad_down
 # stick clicks (the left one sits on M, see above)
 Left Ctrl = btn_rstick
+
+[mouse]
+# The mouse drives the camera and its buttons are bound above, so it must not also act as a menu pointer: with
+# menu_cursor on, the game's touch path takes the left click before the binding sees it, and Mouse1 = btn_a does
+# nothing (issue #69). Set it back to 1 to use the mouse as a pointer in menus.
+menu_cursor = 0
 )INI";
 
 // The `all` layer, not `play`: play mode takes the engine's context from the game table's frame callback, and XC2
@@ -195,14 +201,22 @@ static const nxrt::play::GameVocabulary& xc2_vocabulary() {
     }();
     return v;
 }
+// Settings a later revision changed, for a controls.ini that still holds the old factory value: the mouse pointer
+// (rev 12) was on by default until the keyboard/mouse scheme made it take the left click.
+static const nxrt::play::GameDefaultChange kXc2Changes[] = {
+    {12, "mouse", "menu_cursor", "1", "0"},
+};
+
 static const nxrt::play::GameDefaults& xc2_play_defaults() {
     static const nxrt::play::GameDefaults d = [] {
         nxrt::play::GameDefaults g;
         g.settings_text = kXc2SettingsText;
-        g.defaults_rev = 11;
+        g.defaults_rev = 12;
         g.additions = kXc2Additions;
         g.addition_count = static_cast<unsigned>(sizeof kXc2Additions / sizeof kXc2Additions[0]);
         g.vocabulary = &xc2_vocabulary();
+        g.changes = kXc2Changes;
+        g.change_count = static_cast<unsigned>(sizeof kXc2Changes / sizeof kXc2Changes[0]);
         return g;
     }();
     return d;
