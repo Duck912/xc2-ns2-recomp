@@ -359,11 +359,33 @@ fn free_bytes(_: &Path) -> Option<u64> {
     None
 }
 
+/// What the build writes into the game folder (lifted code, objects, the exe, Streamline, logs): measured 1.4 GB, with room.
+const GAME_NEED: u64 = 3 << 30;
+/// An unpacked XC2 S2E .nup: the RomFS (27.6 GB) and the add-ons (4.9 GB), with room.
+const UNPACK_NEED: u64 = 35 << 30;
+
 #[derive(Serialize)]
 struct FolderInfo {
     path: String,
     is_default: bool,
     free: Option<u64>,
+    /// bytes this folder still needs (0 once its work is done: built, or already unpacked)
+    need: u64,
+}
+
+fn gib(n: u64) -> String {
+    format!("{:.0} GB", n as f64 / (1u64 << 30) as f64)
+}
+
+/// Err when the volume holding `dir` has less than `need` free (unknown free space is not an error).
+fn check_space(dir: &Path, need: u64, what: &str) -> Result<(), String> {
+    match free_bytes(dir) {
+        Some(free) if free < need => Err(format!(
+            "Not enough disk space: {} needs about {}, and only {} is free where it goes ({}). Free some space or choose another folder on the Game files step.",
+            what, gib(need), gib(free), dump::fwd(dir)
+        )),
+        _ => Ok(()),
+    }
 }
 
 #[derive(Serialize)]
@@ -388,8 +410,13 @@ fn get_folders(app: AppHandle) -> Result<Folders, String> {
     let unpack = unpack_dir_of(&cfg, &repo);
     let exe = if package_tools().is_some() { game.join("xc2.exe") } else { setup::exe_path(&repo) };
     Ok(Folders {
-        game: FolderInfo { path: dump::fwd(&game), is_default: cfg.game_dir.trim().is_empty(), free: free_bytes(&game) },
-        unpack: FolderInfo { path: dump::fwd(&unpack), is_default: cfg.unpack_dir.trim().is_empty(), free: free_bytes(&unpack) },
+        game: FolderInfo { path: dump::fwd(&game), is_default: cfg.game_dir.trim().is_empty(), free: free_bytes(&game), need: if exe.is_file() { 0 } else { GAME_NEED } },
+        unpack: FolderInfo {
+            path: dump::fwd(&unpack),
+            is_default: cfg.unpack_dir.trim().is_empty(),
+            free: free_bytes(&unpack),
+            need: if unpack.join(nup::MARKER).is_file() { 0 } else { UNPACK_NEED },
+        },
         built: exe.is_file(),
     })
 }
@@ -493,6 +520,11 @@ async fn import_nup(app: AppHandle, state: State<'_, Arc<setup::Shared>>, path: 
     let repo = need_repo(&cfg)?;
     let out = unpack_dir_of(&cfg, &repo);
     let src = PathBuf::from(path.trim());
+    // A first unpack needs about the .nup's own size again (and a bit more: some of it is compressed inside the .nup).
+    if !out.join(nup::MARKER).is_file() {
+        let need = fs::metadata(&src).map(|m| m.len() / 100 * 115).unwrap_or(UNPACK_NEED).max(1 << 30);
+        check_space(&out, need, "unpacking the .nup")?;
+    }
     let emitter = app.clone();
     let res = tauri::async_runtime::spawn_blocking(move || {
         let mut last = 0u64;
@@ -671,6 +703,10 @@ fn start_setup(app: AppHandle, state: State<Arc<setup::Shared>>) -> Result<(), S
     }
     let cfg = load_config(&app);
     let p = paths(&cfg)?;
+    let exe = if package_tools().is_some() { p.game_dir.join("xc2.exe") } else { setup::exe_path(&p.repo) };
+    if !exe.is_file() {
+        check_space(&p.game_dir, GAME_NEED, "building the game")?;
+    }
     {
         let mut pr = state.progress.lock().unwrap();
         if pr.state == "running" {

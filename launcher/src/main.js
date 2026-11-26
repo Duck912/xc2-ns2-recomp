@@ -103,13 +103,16 @@ async function boot() {
   await listen('setup-log', (ev) => logHandler && logHandler(ev.payload));
   let cfg = {};
   try { cfg = await api('get_config'); } catch (e) { toast(errText(e), 'error'); }
+  // XC2_LAUNCHER_PAGE (screenshots, docs): open on files | options | build | saves | clean | settings | mods | about. Chosen
+  // before the language loads, whose callback draws `current`, so home never draws over it.
+  const start = await api('start_page').catch(() => '');
+  if (['files', 'options', 'build'].includes(start)) home.start(start);
+  if (['saves', ...Object.keys(PANEL)].includes(start)) current = start;
   await initLang(() => { drawShell(); go(current); }, cfg.lang);
   document.documentElement.lang = getLang();
   drawShell();
   refreshIcons();
-  // XC2_LAUNCHER_PAGE (screenshots, docs): open on files | saves | clean | settings | mods | about instead of home
-  const start = await api('start_page').catch(() => '');
-  go(start === 'files' ? 'setup' : ['saves', ...Object.keys(PANEL)].includes(start) ? start : 'home');
+  go(current);
   if (!cfg.skip_update_check && !start) checkNow();   // quietly: the About page shows the result
 }
 

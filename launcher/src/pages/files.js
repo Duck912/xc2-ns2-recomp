@@ -7,7 +7,7 @@ import { t } from '../i18n.js';
  */
 
 const fmtBytes = (n) =>
-  n >= 1 << 30 ? `${(n / (1 << 30)).toFixed(1)} GB` : n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+  n >= 1 << 30 ? `${(n / (1 << 30)).toFixed(1)} GB` : n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)} MB` : `${n ? Math.max(1, Math.round(n / 1024)) : 0} KB`;
 const fmtTime = (secs) => (secs ? new Date(secs * 1000).toLocaleString() : '');
 
 /** The game's own file names, said in words; anything else shows its name. */
@@ -87,69 +87,69 @@ async function render(el, mode) {
     await load();
   }
 
+  const sm = (cls, attrs, ic, label) => `<button class="btn sm ${cls}" ${attrs}>${icon(ic)}${esc(label)}</button>`;
+
   function savesCard() {
-    if (!saves) return `<div class="card"><p class="dim">${icon('loader-circle', 'spin')} ${esc(t('files.loading'))}</p></div>`;
+    if (!saves) return `<div class="card files-card"><p class="dim">${icon('loader-circle', 'spin')} ${esc(t('files.loading'))}</p></div>`;
     const files = saves.files.length
-      ? `<div class="stack">${saves.files
-          .map((f) => `<div class="tile"><span class="dot"></span><div class="grow"><div class="title">${esc(saveLabel(f.name))}</div>
-              <div class="detail">${esc(fmtBytes(f.size))} · ${esc(t('files.changed', { time: fmtTime(f.modified) }))}</div></div></div>`)
-          .join('')}</div>`
-      : `<p class="dim">${esc(t('files.noSaves'))}</p>`;
+      ? saves.files
+          .map((f) => `<div class="tile compact"><span class="dot"></span><span class="title">${esc(saveLabel(f.name))}</span>
+              <span class="faint grow">${esc(fmtBytes(f.size))} · ${esc(t('files.changed', { time: fmtTime(f.modified) }))}</span></div>`)
+          .join('')
+      : `<div class="tile compact"><span class="faint">${esc(t('files.noSaves'))}</span></div>`;
     const backups = saves.backups.length
-      ? `<div class="stack">${saves.backups
-          .map((b) => `<div class="tile"><span class="badge">${icon('archive')}</span><div class="grow">
-              <div class="title">${esc(fmtTime(b.created))}${b.id.includes('before-restore') ? ` <span class="faint">${esc(t('files.beforeRestore'))}</span>` : ''}</div>
-              <div class="detail">${esc(t('files.backupMeta', { count: b.files, size: fmtBytes(b.size) }))}</div></div>
-              <button class="btn" data-restore="${esc(b.id)}" ${busy ? 'disabled' : ''}>${icon('rotate-ccw')}${esc(t('files.restore'))}</button>
-              <button class="btn quiet" data-delete="${esc(b.id)}" ${busy ? 'disabled' : ''}>${icon('trash')}${esc(t('files.delete'))}</button></div>`)
-          .join('')}</div>`
-      : `<p class="dim">${esc(t('files.noBackups'))}</p>`;
+      ? saves.backups
+          .map((b) => `<div class="tile compact">${icon('archive')}
+              <span class="title">${esc(fmtTime(b.created))}</span>
+              <span class="faint grow">${esc(t('files.backupMeta', { count: b.files, size: fmtBytes(b.size) }))}${b.id.includes('before-restore') ? ` ${esc(t('files.beforeRestore'))}` : ''}</span>
+              ${sm('', `data-restore="${esc(b.id)}" ${busy ? 'disabled' : ''}`, 'rotate-ccw', t('files.restore'))}
+              ${sm('quiet', `data-delete="${esc(b.id)}" ${busy ? 'disabled' : ''}`, 'trash', t('files.delete'))}</div>`)
+          .join('')
+      : `<div class="tile compact"><span class="faint">${esc(t('files.noBackups'))}</span></div>`;
     return `
-      <div class="card stack files-card">
-        <div class="files-intro">
-          <p class="dim">${esc(t('files.savesHint'))}</p>
-          <p class="faint files-path"><code>${esc(saves.save_dir)}</code></p>
-        </div>
+      <div class="card files-card">
+        <div class="files-title"><h2>${icon('save')}${esc(t('files.yourSaves'))}</h2><code class="faint path" title="${esc(saves.save_dir)}">${esc(saves.save_dir)}</code></div>
         ${files}
         <div class="row wrap">
-          <button class="btn primary" id="backup" ${busy || !saves.files.length ? 'disabled' : ''}>${icon('archive')}${esc(t('files.backupNow'))}</button>
-          <button class="btn" id="open-saves">${icon('folder-open')}${esc(t('files.openSaves'))}</button>
-          <button class="btn quiet" id="import" ${busy ? 'disabled' : ''}>${icon('folder-input')}${esc(t('files.import'))}</button>
+          ${sm('primary', `id="backup" ${busy || !saves.files.length ? 'disabled' : ''}`, 'archive', t('files.backupNow'))}
+          ${sm('', 'id="open-saves"', 'folder-open', t('files.openSaves'))}
+          ${sm('quiet', `id="import" ${busy ? 'disabled' : ''}`, 'folder-input', t('files.import'))}
         </div>
       </div>
-      <div class="card stack files-card">
-        <h2>${icon('archive')}${esc(t('files.backupsTitle'))}</h2>
+      <div class="card files-card">
+        <div class="files-title"><h2>${icon('archive')}${esc(t('files.backupsTitle'))}</h2>
+          ${sm('quiet', 'id="open-backups"', 'folder-open', t('files.openBackups'))}</div>
         ${backups}
-        <div class="row wrap"><button class="btn" id="open-backups">${icon('folder-open')}${esc(t('files.openBackups'))}</button></div>
       </div>`;
   }
 
   function cleanCard() {
-    if (!items) return `<div class="card"><p class="dim">${icon('loader-circle', 'spin')} ${esc(t('files.loading'))}</p></div>`;
+    if (!items) return `<div class="card files-card"><p class="dim">${icon('loader-circle', 'spin')} ${esc(t('files.loading'))}</p></div>`;
     const shown = CLEAN.map((id) => items.find((i) => i.id === id)).filter(Boolean);
     const total = shown.filter((i) => picked.has(i.id)).reduce((a, i) => a + i.bytes, 0);
     const rows = shown.length
-      ? `<div class="stack">${shown
-          .map((i) => `<label class="tile">
+      ? shown
+          .map((i) => `<label class="tile compact" title="${esc(i.blocked ? t(`files.cleanBlocked.${i.id}`) : t(`files.cleanHint.${i.id}`))}">
               <input type="checkbox" data-pick="${esc(i.id)}" ${picked.has(i.id) ? 'checked' : ''} ${i.blocked || busy ? 'disabled' : ''}>
-              <div class="grow"><div class="title">${esc(t(`files.clean.${i.id}`))} <span class="faint">${esc(fmtBytes(i.bytes))}</span></div>
-              <div class="detail">${esc(i.blocked ? t(`files.cleanBlocked.${i.id}`) : t(`files.cleanHint.${i.id}`))}</div></div></label>`)
-          .join('')}</div>`
-      : `<p class="dim">${esc(t('files.cleanNothing'))}</p>`;
+              <span class="title">${esc(t(`files.clean.${i.id}`))}</span>
+              <span class="faint grow clip">${esc(i.blocked ? t(`files.cleanBlocked.${i.id}`) : t(`files.cleanHint.${i.id}`))}</span>
+              <span class="faint">${esc(fmtBytes(i.bytes))}</span></label>`)
+          .join('')
+      : `<div class="tile compact"><span class="faint">${esc(t('files.cleanNothing'))}</span></div>`;
     return `
-      <div class="card stack files-card">
-        <p class="dim">${esc(t('files.cleanHint'))}</p>
+      <div class="card files-card">
         ${rows}
         <div class="row wrap">
-          <button class="btn primary" id="clean" ${busy || !picked.size ? 'disabled' : ''}>${icon('trash')}${esc(t('files.cleanRun', { size: fmtBytes(total) }))}</button>
-          <button class="btn quiet" id="rescan" ${busy ? 'disabled' : ''}>${icon('refresh-cw')}${esc(t('files.rescan'))}</button>
+          ${sm('primary', `id="clean" ${busy || !picked.size ? 'disabled' : ''}`, 'trash', t('files.cleanRun', { size: fmtBytes(total) }))}
+          ${sm('quiet', `id="rescan" ${busy ? 'disabled' : ''}`, 'refresh-cw', t('files.rescan'))}
         </div>
       </div>`;
   }
 
   function draw() {
-    el.innerHTML = `<div class="page">
-      <div class="hero"><h1>${esc(t(mode === 'saves' ? 'files.savesTitle' : 'files.cleanTitle'))}</h1></div>
+    el.innerHTML = `<div class="page files-page">
+      <div class="files-head"><h1>${esc(t(mode === 'saves' ? 'files.savesTitle' : 'files.cleanTitle'))}</h1>
+        <p class="dim">${esc(t(mode === 'saves' ? 'files.savesHint' : 'files.cleanHint'))}</p></div>
       ${mode === 'saves' ? savesCard() : cleanCard()}
     </div>`;
     refreshIcons();

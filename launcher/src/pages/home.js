@@ -113,7 +113,7 @@ async function renderFiles(el, ctx, cfg, status) {
     // One compact line per folder: name, path, free space, Change (the hint is the row's tooltip)
     const folderRow = (which, f, title, hint) => `<div class="tile compact folder-row" title="${esc(hint)}">${icon(which === 'game' ? 'hard-drive' : 'file-archive')}
         <span class="title">${esc(title)}</span><code class="grow path">${esc(f.path)}</code>
-        <span class="faint">${f.free != null ? esc(gb(f.free)) : ''}${f.is_default ? ` · ${esc(t('wiz.folders.default'))}` : ''}</span>
+        <span class="${f.need && f.free != null && f.free < f.need ? 'bad-text' : 'faint'}">${f.need ? `${esc(t('wiz.folders.needs', { size: (f.need / (1 << 30)).toFixed(0) }))} · ` : ''}${f.free != null ? esc(gb(f.free)) : ''}</span>
         <button class="btn sm" data-folder="${which}" ${busy ? 'disabled' : ''}>${esc(t('wiz.folders.change'))}</button>
         ${f.is_default ? '' : `<button class="btn quiet sm" data-folder-reset="${which}" ${busy ? 'disabled' : ''}>${esc(t('wiz.folders.reset'))}</button>`}</div>`;
     const foldersHtml = folders
