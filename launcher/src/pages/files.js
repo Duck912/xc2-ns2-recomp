@@ -105,18 +105,22 @@ async function render(el, mode) {
           .join('')}</div>`
       : `<p class="dim">${esc(t('files.noBackups'))}</p>`;
     return `
-      <div class="card">
-        <p class="dim">${esc(t('files.savesHint'))}</p>
-        <p class="faint"><code>${esc(saves.save_dir)}</code></p>
+      <div class="card stack files-card">
+        <div class="files-intro">
+          <p class="dim">${esc(t('files.savesHint'))}</p>
+          <p class="faint files-path"><code>${esc(saves.save_dir)}</code></p>
+        </div>
         ${files}
         <div class="row wrap">
           <button class="btn primary" id="backup" ${busy || !saves.files.length ? 'disabled' : ''}>${icon('archive')}${esc(t('files.backupNow'))}</button>
           <button class="btn" id="open-saves">${icon('folder-open')}${esc(t('files.openSaves'))}</button>
           <button class="btn quiet" id="import" ${busy ? 'disabled' : ''}>${icon('folder-input')}${esc(t('files.import'))}</button>
         </div>
-        <div class="section-label">${esc(t('files.backupsTitle'))}</div>
+      </div>
+      <div class="card stack files-card">
+        <h2>${icon('archive')}${esc(t('files.backupsTitle'))}</h2>
         ${backups}
-        <div class="row wrap"><button class="btn quiet" id="open-backups">${icon('folder-open')}${esc(t('files.openBackups'))}</button></div>
+        <div class="row wrap"><button class="btn" id="open-backups">${icon('folder-open')}${esc(t('files.openBackups'))}</button></div>
       </div>`;
   }
 
@@ -133,7 +137,7 @@ async function render(el, mode) {
           .join('')}</div>`
       : `<p class="dim">${esc(t('files.cleanNothing'))}</p>`;
     return `
-      <div class="card">
+      <div class="card stack files-card">
         <p class="dim">${esc(t('files.cleanHint'))}</p>
         ${rows}
         <div class="row wrap">
