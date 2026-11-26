@@ -26,49 +26,25 @@ const SECTIONS = [
       { id: 'operation_mode', type: 'select', label: 'settings.opMode.label', sec: 'am', key: 'operation_mode', def: 'docked',
         options: [['docked', 'settings.opMode.docked'], ['handheld', 'settings.opMode.handheld']],
         hint: 'settings.opMode.hint' },
-      { id: 'upscaler', type: 'select', label: 'settings.upscaler.label', sec: 'dlss', key: 'upscaler', def: 'taau',
-        options: [['taau', 'settings.upscaler.taau'], ['fsr3', 'settings.upscaler.fsr3'], ['dlss', 'settings.upscaler.dlss'],
-          ['auto', 'settings.upscaler.auto']],
-        hint: 'settings.upscaler.hint',
-        // the DLSS files (NVIDIA's, not in the package) and the button that fetches them, while DLSS is chosen for upscaling or frames
-        status: 'dlss', showStatus: (m) => m.upscaler === 'dlss' || m.upscaler === 'auto' || m.frame_gen === 'dlss' },
-      { id: 'lockRenderSize', type: 'toggle', label: 'settings.lockRenderSize.label', sec: 'upscale', key: 'lock_render_size', def: '1',
-        hint: 'settings.lockRenderSize.hint' },
-      { id: 'fsr_dll', type: 'path', label: 'settings.fsrDll.label', sec: 'upscale', key: 'fsr_dll', def: '', placeholder: 'settings.fsrDll.placeholder',
-        hint: 'settings.fsrDll.hint',
-        status: 'fsr', showStatus: (m) => m.upscaler === 'fsr3' || m.upscaler === 'auto' || m.frame_gen === 'fsr3' },
-      { id: 'frame_gen', type: 'select', label: 'settings.frameGen.label', sec: 'dlss', key: 'frame_gen', def: '0',
-        options: [['0', 'settings.frameGen.off'], ['dlss', 'settings.frameGen.dlss'], ['fsr3', 'settings.frameGen.fsr3']],
-        hint: 'settings.frameGen.hint' },
-      // HDR lives in controls.ini, the file the in-game F1 page writes: nxrt.ini wins over it (play.cpp merge_env),
-      // so writing this field to nxrt.ini would pin the mode and quietly override whatever the player picked in F1
-      // (#57). The field is disabled until the game has run once and created controls.ini (exists[file] -> dis()).
-      { id: 'hdr_mode', type: 'select', file: 'controls', label: 'settings.hdr.label', sec: 'hdr', key: 'mode', def: 'auto',
-        options: [['auto', 'settings.hdr.auto'], ['on', 'settings.hdr.on'], ['native', 'settings.hdr.native'], ['off', 'settings.hdr.off']],
-        hint: 'settings.hdr.hint' },
-      // FIFO is the default and is written explicitly: an empty value left the mode to [display] vsync, which the page
-      // does not offer, so the entry labelled "FIFO" produced Immediate (issue 12).
-      { id: 'present_mode', type: 'select', label: 'settings.presentMode.label', sec: 'gfx', key: 'present_mode', def: 'fifo',
-        options: [['fifo', 'settings.presentMode.default'], ['fifo_relaxed', 'settings.presentMode.vrr'],
-          ['mailbox', 'mailbox'], ['immediate', 'immediate']],
-        hint: 'settings.presentMode.hint' },
-    ],
-  },
-  {
-    title: 'settings.sec.frameRate', icon: 'gauge', file: 'game',
-    fields: [
-      // [xc2] fps: 0/30 keeps the 30 Hz cadence/cap; 60 is retail 3.0.1 native (recommended); 90/120 scale via dual-clock (experimental, cutscenes stay 60).
-      { id: 'fps', type: 'select', label: 'settings.fps.label', sec: 'xc2', key: 'fps', def: '60',
-        options: [['0', 'settings.fps.native'], ['60', 'settings.fps.fps60'], ['90', 'settings.fps.fps90'], ['120', 'settings.fps.fps120']],
-        normalize: (v) => {
-          const s = String(v).trim();
-          if (s === '0' || s === '30') return '0';
-          if (s === '90' || s === '120') return s;
-          return '60';
-        },
-        hint: 'settings.fps.hint' },
-      { id: 'vsync_cap', type: 'toggle', label: 'settings.vsyncCap.label', sec: 'latency', key: 'vsync_cap', def: '1',
-        hint: 'settings.vsyncCap.hint' },
+      // NVN-HLE draws XC:DE: its own upscaler, DLSS model, window scaler and VSync ([nvnhle] in nxrt.ini; the in-game F1
+      // Graphics page writes the same keys). The runtime renderer's options (TAAU, FSR 3, frame generation, HDR, present
+      // mode) do not reach NVN-HLE and are not offered.
+      { id: 'nh_upscaler', type: 'select', label: 'settings.nhUpscaler.label', sec: 'nvnhle', key: 'upscaler', def: 'console',
+        options: [['console', 'settings.nhUpscaler.console'], ['dlss', 'settings.nhUpscaler.dlss'],
+          ['fsr1', 'settings.nhUpscaler.fsr1'], ['off', 'settings.nhUpscaler.off']],
+        hint: 'settings.nhUpscaler.hint',
+        // the DLSS files (NVIDIA's Streamline, downloaded here) while DLSS can run
+        status: 'dlss', showStatus: (m) => m.nh_upscaler === 'console' || m.nh_upscaler === 'dlss' },
+      { id: 'nh_model', type: 'select', label: 'settings.nhModel.label', sec: 'nvnhle', key: 'dlss_model', def: 'K',
+        options: [['K', 'settings.nhModel.k'], ['J', 'J'], ['L', 'L'], ['M', 'M'], ['default', 'settings.nhModel.default']],
+        hint: 'settings.nhModel.hint' },
+      { id: 'nh_filter', type: 'select', label: 'settings.nhFilter.label', sec: 'nvnhle', key: 'window_filter', def: 'bilinear',
+        options: [['bilinear', 'Bilinear'], ['bicubic', 'Bicubic'], ['lanczos', 'Lanczos'], ['fsr', 'AMD FSR 1'],
+          ['sgsr', 'Snapdragon GSR'], ['area', 'Area']],
+        hint: 'settings.nhFilter.hint' },
+      { id: 'nh_vsync', type: 'select', label: 'settings.nhVsync.label', sec: 'nvnhle', key: 'vsync', def: 'mailbox',
+        options: [['mailbox', 'settings.nhVsync.mailbox'], ['fifo', 'settings.nhVsync.fifo'], ['immediate', 'settings.nhVsync.immediate']],
+        hint: 'settings.nhVsync.hint' },
     ],
   },
   {
@@ -88,7 +64,6 @@ const SECTIONS = [
   {
     title: 'settings.sec.input', icon: 'folder', file: 'game',
     fields: [
-      { id: 'save_dir', type: 'path', label: 'settings.saveDir.label', sec: 'fs', key: 'save_dir', def: '', placeholder: 'settings.saveDir.placeholder' },
       { id: 'controls', type: 'path', label: 'settings.controls.label', sec: 'play', key: 'controls', def: 'controls.ini',
         placeholder: 'settings.controls.placeholder', hint: 'settings.controls.hint' },
       { id: 'log_path', type: 'path', label: 'settings.logPath.label', sec: 'log', key: 'path', def: 'nxrt.log',
