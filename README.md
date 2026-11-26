@@ -13,9 +13,21 @@ calls on Vulkan. It is not an emulator.
 
 ## Status
 
-STATUS_TABLE
+The game builds from your dump and starts: the title screen and the 3D scenes after it draw correctly at 60 fps.
+This is a first release and testing beyond the start of the game has been light.
 
-Testing so far has been narrow, so expect rough edges (AMD and Intel GPUs are untried). See
+| | |
+|---|---|
+| Picture | drawn by NVN-HLE on Vulkan; the game's own DLSS runs on real NVIDIA DLSS (FSR 1 without it) |
+| Speed | 60 fps |
+| Add-ons | the add-ons in your dump (the Expansion Pass, Torna – The Golden Country) are handed to the game |
+| Window | windowed or borderless fullscreen (F11), any size; the picture follows the window |
+| Menu and overlay | F1 settings menu, F10 performance overlay, F12 screenshots |
+| Launcher | builds the game, saves manager with backups, clean-up, folder choice, updates |
+
+The settings menu, overlay, screenshots, movies and saves are the same code as in
+[xcde-ns2-recomp](https://github.com/Duck912/xcde-ns2-recomp), where they are tested; on XC2 they have been tried less.
+Expect rough edges (AMD and Intel GPUs are untried). See
 [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md), and open an issue with the log if something goes wrong.
 
 ## Play it
