@@ -357,18 +357,34 @@ void poll_capture(UiHost& host, Page& p) {
                 host.begin_capture();
                 return;
             }
-            p.edit.bindings[static_cast<std::size_t>(p.rebind)].in = id;
+            const std::size_t row = static_cast<std::size_t>(p.rebind);
+            const Ctx ctx = p.edit.bindings[row].ctx;
+            p.edit.bindings[row].in = id;
             mark(p);
-            const std::vector<int> other = conflicts_of(p, p.rebind);
-            if (other.empty()) {
+            // One input drives one action: whatever else was on this input is unbound rather than left to fight it.
+            std::string unbound;
+            for (int i = static_cast<int>(p.edit.bindings.size()) - 1; i >= 0; --i) {
+                if (i == p.rebind) continue;
+                const Binding& o = p.edit.bindings[static_cast<std::size_t>(i)];
+                if (!(o.in == id) || o.ctx != ctx) continue;
+                if (!unbound.empty()) unbound += " / ";
+                unbound += act_label(o.act);
+                p.edit.bindings.erase(p.edit.bindings.begin() + i);
+            }
+            if (unbound.empty()) {
                 set_notice(p, std::string(tr("已绑定 ", "Bound ")) + name, false);
             } else {
-                const Binding& o = p.edit.bindings[static_cast<std::size_t>(other[0])];
-                set_notice(p, name + tr(" 与以下操作冲突：", " conflicts with: ") + act_label(o.act), true);
+                set_notice(p, std::string(tr("已绑定 ", "Bound ")) + name + tr("，并解绑了 ", "; unbound ") + unbound, false);
             }
         }
         p.rebind = -1;
     } else if ((p.rebind >= 0 || p.fps_capture) && !host.capturing()) {
+        // A row added for "bind another key" carries no input yet: drop it when the capture is cancelled.
+        if (p.rebind >= 0) {
+            p.edit.bindings.erase(std::remove_if(p.edit.bindings.begin(), p.edit.bindings.end(),
+                                                 [](const Binding& b) { return b.in.kind == InKind::None; }),
+                                  p.edit.bindings.end());
+        }
         p.rebind = -1;
         p.fps_capture = false;
         set_notice(p, tr("已取消按键捕获", "Capture cancelled"), false);
@@ -1437,9 +1453,10 @@ void tab_controls(UiHost& host, const LiveStatus& live, Page& p, float bottom_h)
     }
     ImGui::PopItemFlag();
 
-    // Generated from the bindings that are actually loaded, so the card cannot drift from them again: the previous
-    // version was hand-written and described a layout two revisions out of date.
-    card_group("当前键位 (由绑定表生成)", "Active Controls (from the bindings)");
+    // Generated from the bindings that are actually loaded, and editable in place: a key chip starts a capture for
+    // that row, "x" removes it, "+" adds another key to the action. Conflicts unbind the other action (see
+    // poll_capture), so one input never drives two things.
+    card_group("按键绑定 (点按键重新绑定 · x 删除 · + 添加)", "Key bindings (click to rebind, x to remove, + to add)");
     {
         static const Act kOrder[] = {
             Act::MoveForward, Act::MoveBack, Act::MoveLeft, Act::MoveRight,
@@ -1450,19 +1467,46 @@ void tab_controls(UiHost& host, const LiveStatus& live, Page& p, float bottom_h)
             Act::BtnPlus, Act::BtnMinus, Act::BtnLStick, Act::BtnRStick,
         };
         int shown = 0;
+        int erase_at = -1;
         for (Act a : kOrder) {
-            std::string keys;
-            for (const Binding& b : p.edit.bindings) {
-                if (b.act != a) continue;
+            std::vector<int> rows;
+            for (int i = 0; i < static_cast<int>(p.edit.bindings.size()); ++i) {
+                const Binding& b = p.edit.bindings[static_cast<std::size_t>(i)];
+                if (b.act != a || b.in.kind == InKind::None) continue;
                 if (b.ctx != Ctx::All && b.ctx != Ctx::Menu) continue;   // the layers that apply while the game runs
-                if (!keys.empty()) keys += "  /  ";
-                keys += pretty_input(b.in);
+                rows.push_back(i);
             }
-            if (keys.empty()) continue;
-            ImGui::Text("%s  -  %s", act_label(a), keys.c_str());
+            if (rows.empty()) continue;
             ++shown;
+            ImGui::TextUnformatted(act_label(a));
+            ImGui::SameLine(230.0f);
+            for (int idx : rows) {
+                ImGui::PushID(idx);
+                const std::string nm = pretty_input(p.edit.bindings[static_cast<std::size_t>(idx)].in);
+                if (ImGui::SmallButton(nm.c_str())) {
+                    p.rebind = idx;
+                    host.begin_capture();
+                }
+                ImGui::SameLine();
+                if (ImGui::SmallButton("x")) erase_at = idx;
+                ImGui::PopID();
+                ImGui::SameLine();
+            }
+            ImGui::PushID(1000 + static_cast<int>(a));
+            if (ImGui::SmallButton("+")) {
+                p.edit.bindings.push_back(Binding{InputId{}, Ctx::All, a, Trig::Press, 0});
+                p.rebind = static_cast<int>(p.edit.bindings.size()) - 1;
+                mark(p);
+                host.begin_capture();
+            }
+            ImGui::PopID();
         }
         if (shown == 0) ImGui::TextColored(kDimText, "%s", tr("（没有任何绑定）", "(no bindings)"));
+        if (erase_at >= 0) {
+            p.edit.bindings.erase(p.edit.bindings.begin() + erase_at);
+            mark(p);
+            set_notice(p, tr("已删除该按键绑定", "Binding removed"), false);
+        }
     }
     ImGui::TextColored(kDimText, "%s", tr("鼠标转视角在「鼠标」分组里调灵敏度；手柄同时按 - 与 + 可呼出本菜单。",
                                          "Mouse sensitivity is in the Mouse group above; gamepad MINUS + PLUS opens this menu."));
