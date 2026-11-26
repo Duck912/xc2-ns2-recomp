@@ -335,6 +335,8 @@
 `xc2`	`period_probe`	`0`	`NXRT_XC2_PERIOD_PROBE`	`xc2/src/xc2_boot.cpp`	Debugging: log the guest's vsync period writes.
 `xc2`	`delta_scan_at`	`0`	`NXRT_XC2_DELTA_SCAN_AT`	`xc2/src/xc2_boot.cpp`	Debugging: at this frame, scan the frame-time deltas and log the outliers.
 `xc2`	`obj_scan_at`	`0`	`NXRT_XC2_OBJ_SCAN_AT`	`xc2/src/xc2_boot.cpp`	Debugging: at this frame, scan for guest objects pointing outside the mapped ranges.
+`xc2`	`mouse_capture`	`1`	`NXRT_XC2_MOUSE_CAPTURE`	`xc2/src/xc2_boot.cpp`	Mouse camera: capture the pointer (relative mode, raw counts) while the game has the focus and the F1 page is closed; the counts become right-stick deflection. 0 leaves the pointer to the game, which is what the touch path uses.
+`xc2`	`mouse_invert_y`	`0`	`NXRT_XC2_MOUSE_INVERT_Y`	`xc2/src/xc2_boot.cpp`	Mouse camera: flip the vertical. The gain is not here: it is `[mouse] stick_scale` in controls.ini, which the F1 page shows as a live slider.
 `xc2`	`native_res`	`0`	`NXRT_XC2_NATIVE_RES`	`xc2/src/xc2_boot.cpp`	Native 3D resolution override: `0` off, `1` native 100% with DLSS off, `2` DLSS/FSR 1:1 Native AA at `native_w` x `native_h`.
 `xc2`	`native_w`	`2560`	`NXRT_XC2_NATIVE_W`	`xc2/src/xc2_boot.cpp`	Target 3D render width for `native_res = 2`; the default follows `[am] resolution`, 2560 when that is not set.
 `xc2`	`native_h`	`1440`	`NXRT_XC2_NATIVE_H`	`xc2/src/xc2_boot.cpp`	Target 3D render height for `native_res = 2`; the default follows `[am] resolution`, 1440 when that is not set.

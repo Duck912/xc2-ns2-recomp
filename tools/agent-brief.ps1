@@ -1,4 +1,4 @@
-﻿# agent-brief.ps1 -- print everything a fresh session needs, or verify closeout state.
+# agent-brief.ps1 -- print everything a fresh session needs, or verify closeout state.
 #
 #   pwsh -File tools/agent-brief.ps1
 #   pwsh -File tools/agent-brief.ps1 -VerifyCloseout [-FixHardlink]
@@ -162,6 +162,9 @@ try {
                 @('tools/ci/config_table.py', '--check'),
                 @('tools/ci/check_play_settings.py'),
                 @('tools/ci/check_install_template.py'),
+                # A dev/test profile must launch the game with the switches a package does: a missing
+                # NXRT_NVN_EARLYZ_FS=auto once made the dev build show a game bug that a package did not have.
+                @('tools/ci/check_profiles.py', '--check'),
                 @('-m', 'unittest', 'discover', '-s', 'tools/tests', '-p', 'test_*.py')
             )
             foreach ($args in $checks) {
