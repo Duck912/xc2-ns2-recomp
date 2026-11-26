@@ -1376,6 +1376,13 @@ void tab_controls(UiHost& host, const LiveStatus& live, Page& p, float bottom_h)
                       "Multiplier for right-stick camera rotation speed (0.25x - 3.00x).", &pad.look_sens, 0.25, 3.00, 0.05, "%.2fx", false, true)) {
         mark(p);
     }
+    card_group("鼠标 (应用后实时生效)", "Mouse (Live)");
+    if (card_slider_f("mouse_scale", "鼠标灵敏度", "Mouse sensitivity",
+                      "鼠标移动多少计数让右摇杆满偏：数值越小转得越快（1 ~ 60）。",
+                      "Mouse counts for a fully deflected right stick: smaller turns faster (1 - 60).",
+                      &p.edit.mouse.stick_scale, 1.0, 60.0, 1.0, "%.0f", false, true)) {
+        mark(p);
+    }
     if (card_toggle("pad_invy", "反转手柄垂直视角", "Invert right-stick Y",
                     "开启后右摇杆向上推会向下看（实时生效）。",
                     "Pushing right stick up looks down (applies live).", &pad.invert_y, false, true)) {

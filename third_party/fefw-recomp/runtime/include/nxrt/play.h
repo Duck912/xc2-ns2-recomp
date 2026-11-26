@@ -69,6 +69,7 @@ struct LivePadConfig {
     float stick_deadzone = 0.10f;
     float right_deadzone = 0.10f;
     float look_sens = 1.0f;
+    float mouse_stick_scale = 8.0f;   // keyboard/mouse camera: mouse counts for a full right-stick deflection
     bool invert_y = false;
     bool rumble = true;
     float rumble_scale = 1.0f;

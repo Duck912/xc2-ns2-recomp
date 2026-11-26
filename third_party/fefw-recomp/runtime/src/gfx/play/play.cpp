@@ -280,6 +280,7 @@ struct G {
     std::atomic<float> pad_cfg_ls_dz{0.10f};
     std::atomic<float> pad_cfg_rs_dz{0.10f};
     std::atomic<float> pad_cfg_look_sens{1.0f};
+    std::atomic<float> mouse_cfg_stick_scale{8.0f};
     std::atomic<bool> pad_cfg_invert_y{false};
     std::atomic<bool> pad_cfg_rumble{true};
     std::atomic<float> pad_cfg_rumble_scale{1.0f};
@@ -352,6 +353,10 @@ void publish_live_pad_config(const PadSettings& p) {
     st.pad_cfg_invert_y.store(p.invert_y, std::memory_order_relaxed);
     st.pad_cfg_rumble.store(p.rumble, std::memory_order_relaxed);
     st.pad_cfg_rumble_scale.store(static_cast<float>(std::clamp(p.rumble_scale, 0.0, 1.0)), std::memory_order_relaxed);
+}
+
+void publish_live_mouse_config(const MouseSettings& m) {
+    g().mouse_cfg_stick_scale.store(static_cast<float>(std::clamp(m.stick_scale, 1.0, 200.0)), std::memory_order_relaxed);
 }
 
 // The F1 render quality: the upscaler's input as a share of the output height (table in nxrt/render_quality.h).
@@ -909,6 +914,7 @@ void apply_pending_settings(uint64_t now) {
     lk.unlock();
     if (st.engine) st.engine->set_settings(s, now);
     publish_live_pad_config(s.pad);
+    publish_live_mouse_config(s.mouse);
     apply_frame_cap(s);
     display_tuning(s.display);
     nvn::set_keep_aspect(s.display.keep_aspect);
@@ -1449,6 +1455,7 @@ bool load() {
     st.settings.extras = merge_env(st.settings.extras);
     st.settings.game3d = hydrate_game3d_from_config();
     publish_live_pad_config(st.settings.pad);
+    publish_live_mouse_config(st.settings.mouse);
     extras::set_settings(st.settings.extras);
     // S38 GPU paths: the file's choice becomes [nvn] pool_mirror / pass_barriers unless mpr.ini or the environment set them. The replay
     // reads both once, at its first pool and its first submission, after this.
@@ -1642,6 +1649,7 @@ LivePadConfig live_pad_config() {
     c.stick_deadzone = st.pad_cfg_ls_dz.load(std::memory_order_relaxed);
     c.right_deadzone = st.pad_cfg_rs_dz.load(std::memory_order_relaxed);
     c.look_sens = st.pad_cfg_look_sens.load(std::memory_order_relaxed);
+    c.mouse_stick_scale = st.mouse_cfg_stick_scale.load(std::memory_order_relaxed);
     c.invert_y = st.pad_cfg_invert_y.load(std::memory_order_relaxed);
     c.rumble = st.pad_cfg_rumble.load(std::memory_order_relaxed);
     c.rumble_scale = st.pad_cfg_rumble_scale.load(std::memory_order_relaxed);

@@ -67,7 +67,7 @@
 // is written with, and every one of them can be changed in the F1 page (controls.ini is the file that page edits).
 static const char* const kXc2SettingsText = R"INI(
 [meta]
-defaults_rev = 8
+defaults_rev = 9
 
 [bindings.all]
 # movement: WASD and the arrow keys
@@ -88,18 +88,17 @@ L = look_right
 E = btn_a
 Mouse1 = btn_a
 Return = btn_a
-# jump / cancel (B): Space, and the right mouse button
+# jump / cancel (B)
 Space = btn_b
-Mouse2 = btn_b
 Backspace = btn_b
 Escape = btn_b
-# lock-on (R): middle click
+# lock-on (R): right click. SDL numbers the buttons 1 left, 2 middle, 3 right, so Mouse3 is the right one.
 Mouse3 = btn_r
-# the arts palette: 1-4 pick the four slots, Q/R page through it (ZL/ZR)
-1 = dpad_up
-2 = dpad_down
-3 = dpad_left
-4 = dpad_right
+# the face buttons on the number row; Q/R page the arts palette (ZL/ZR)
+1 = btn_y
+2 = btn_a
+3 = btn_b
+4 = btn_x
 Q = btn_zl
 R = btn_zr
 # the shoulders
@@ -136,14 +135,13 @@ static const nxrt::play::GameDefaultAddition kXc2Additions[] = {
     {7, nxrt::play::Ctx::All, "Mouse1", nxrt::play::Act::BtnA},
     {7, nxrt::play::Ctx::All, "Return", nxrt::play::Act::BtnA},
     {7, nxrt::play::Ctx::All, "Space", nxrt::play::Act::BtnB},
-    {7, nxrt::play::Ctx::All, "Mouse2", nxrt::play::Act::BtnB},
     {7, nxrt::play::Ctx::All, "Backspace", nxrt::play::Act::BtnB},
     {7, nxrt::play::Ctx::All, "Escape", nxrt::play::Act::BtnB},
     {7, nxrt::play::Ctx::All, "Mouse3", nxrt::play::Act::BtnR},
-    {7, nxrt::play::Ctx::All, "1", nxrt::play::Act::DpadUp},
-    {7, nxrt::play::Ctx::All, "2", nxrt::play::Act::DpadDown},
-    {7, nxrt::play::Ctx::All, "3", nxrt::play::Act::DpadLeft},
-    {7, nxrt::play::Ctx::All, "4", nxrt::play::Act::DpadRight},
+    {9, nxrt::play::Ctx::All, "1", nxrt::play::Act::BtnY},
+    {9, nxrt::play::Ctx::All, "2", nxrt::play::Act::BtnA},
+    {9, nxrt::play::Ctx::All, "3", nxrt::play::Act::BtnB},
+    {9, nxrt::play::Ctx::All, "4", nxrt::play::Act::BtnX},
     {7, nxrt::play::Ctx::All, "Q", nxrt::play::Act::BtnZL},
     {7, nxrt::play::Ctx::All, "R", nxrt::play::Act::BtnZR},
     {7, nxrt::play::Ctx::All, "F", nxrt::play::Act::BtnL},
@@ -158,7 +156,7 @@ static const nxrt::play::GameDefaults& xc2_play_defaults() {
     static const nxrt::play::GameDefaults d = [] {
         nxrt::play::GameDefaults g;
         g.settings_text = kXc2SettingsText;
-        g.defaults_rev = 8;
+        g.defaults_rev = 9;
         g.additions = kXc2Additions;
         g.addition_count = static_cast<unsigned>(sizeof kXc2Additions / sizeof kXc2Additions[0]);
         return g;
@@ -377,10 +375,7 @@ void LiveInput::live(nxrt::hid::InputSnapshot &out) {
     // page is open, and turn the counts into right-stick deflection for this frame. The game's own camera curve runs on top,
     // which is why this drives the stick instead of a yaw angle. [xc2] mouse_capture = 0 leaves the pointer to the game.
     static const bool mouse_cam = nxrt::config_get_bool("xc2", "mouse_capture", true);
-    static const double mouse_full = [] {
-        const double v = nxrt::config_get_double("xc2", "mouse_stick_scale", 18.0);   // counts for full deflection
-        return v > 1.0 ? v : 1.0;
-    }();
+    // The gain is the F1 page's [mouse] stick_scale (controls.ini), read live so its slider needs no restart.
     static const bool mouse_invert_y = nxrt::config_get_bool("xc2", "mouse_invert_y", false);
     static bool mouse_held = false;
     const bool want_mouse = mouse_cam && own != nullptr && focused && !menu_blocked;
@@ -423,10 +418,11 @@ void LiveInput::live(nxrt::hid::InputSnapshot &out) {
             const nxrt::input::MouseDelta d = nxrt::input::mouse_delta_take();
             acc_x += d.dx;
             acc_y += d.dy;
+            const double full = (std::max)(1.0, static_cast<double>(nxrt::play::live_pad_config().mouse_stick_scale));
             if (acc_x != 0.0 || acc_y != 0.0) {
                 const double dy = mouse_invert_y ? -acc_y : acc_y;
-                klx += static_cast<int>(std::lround(std::clamp(acc_x / mouse_full, -1.0, 1.0) * 32767.0));
-                kly += static_cast<int>(std::lround(std::clamp(-dy / mouse_full, -1.0, 1.0) * 32767.0));
+                klx += static_cast<int>(std::lround(std::clamp(acc_x / full, -1.0, 1.0) * 32767.0));
+                kly += static_cast<int>(std::lround(std::clamp(-dy / full, -1.0, 1.0) * 32767.0));
             }
             acc_x *= 0.55;      // ~10 ms of memory: a frame's worth at 60 fps, and no leftover after a stop
             acc_y *= 0.55;
