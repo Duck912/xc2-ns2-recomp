@@ -2,6 +2,17 @@
 
 Written 2026-11-26. Decision record: [RENDERER.md](RENDERER.md).
 
+## Decisions (user, 2026-11-26)
+
+- The library is also where the Galaxia renderer rebuild lands: extracted first with no behaviour change,
+  then improved in place (residency, parallel recording, bindless pools), each change checked in both
+  Galaxia and the recomp.
+- **DLSS:** the game's native path first (its own `nvnCommandBufferEvaluateDlss` on NVIDIA DLSS, then its
+  own NDSR network: n2den's "Console native"). PC DLSS (host DLSS replacing the game's upscale chain) later.
+- **Movies:** either n2den's or the XC2 recomp's decoders, whichever plugs in more easily.
+- **Settings:** follow the XC2 recomp's ini/profile style (`config/profiles/*.ini`, `[nvn]` keys); n2den
+  switches the recomp needs get ini keys there, the rest keep their defaults.
+
 ## Why now
 
 fefw-recomp's renderer runs XC2 (same `sdk`/NVN/DLSS/CUDA modules as XC:DE) but stalls on NVIDIA: about
