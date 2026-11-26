@@ -281,8 +281,8 @@ struct G {
     std::atomic<float> pad_cfg_rs_dz{0.10f};
     std::atomic<float> pad_cfg_look_sens{1.0f};
     std::atomic<float> mouse_cfg_stick_scale{8.0f};
-    std::atomic<int> pad_cfg_ls_cx{0}, pad_cfg_ls_cy{0};
-    std::atomic<float> pad_raw_ls_x{0.0f}, pad_raw_ls_y{0.0f};
+    std::atomic<int> pad_cfg_ls_cx{0}, pad_cfg_ls_cy{0}, pad_cfg_rs_cx{0}, pad_cfg_rs_cy{0};
+    std::atomic<float> pad_raw_ls_x{0.0f}, pad_raw_ls_y{0.0f}, pad_raw_rs_x{0.0f}, pad_raw_rs_y{0.0f};
     std::atomic<bool> pad_cfg_invert_y{false};
     std::atomic<bool> pad_cfg_rumble{true};
     std::atomic<float> pad_cfg_rumble_scale{1.0f};
@@ -357,6 +357,8 @@ void publish_live_pad_config(const PadSettings& p) {
     st.pad_cfg_rumble_scale.store(static_cast<float>(std::clamp(p.rumble_scale, 0.0, 1.0)), std::memory_order_relaxed);
     st.pad_cfg_ls_cx.store(std::clamp(p.ls_center_x, -32767, 32767), std::memory_order_relaxed);
     st.pad_cfg_ls_cy.store(std::clamp(p.ls_center_y, -32767, 32767), std::memory_order_relaxed);
+    st.pad_cfg_rs_cx.store(std::clamp(p.rs_center_x, -32767, 32767), std::memory_order_relaxed);
+    st.pad_cfg_rs_cy.store(std::clamp(p.rs_center_y, -32767, 32767), std::memory_order_relaxed);
 }
 
 void publish_live_mouse_config(const MouseSettings& m) {
@@ -1634,6 +1636,12 @@ void set_external_mouse_capture(bool on) {
     if (was && !on && platform::relative_mouse()) platform::set_relative_mouse(false);
 }
 
+void publish_raw_right_stick(float x, float y) {
+    G& st = g();
+    st.pad_raw_rs_x.store(x, std::memory_order_relaxed);
+    st.pad_raw_rs_y.store(y, std::memory_order_relaxed);
+}
+
 void publish_raw_left_stick(float x, float y) {
     G& st = g();
     st.pad_raw_ls_x.store(x, std::memory_order_relaxed);
@@ -1664,6 +1672,10 @@ LivePadConfig live_pad_config() {
     c.ls_center_y = st.pad_cfg_ls_cy.load(std::memory_order_relaxed);
     c.raw_ls_x = st.pad_raw_ls_x.load(std::memory_order_relaxed);
     c.raw_ls_y = st.pad_raw_ls_y.load(std::memory_order_relaxed);
+    c.rs_center_x = st.pad_cfg_rs_cx.load(std::memory_order_relaxed);
+    c.rs_center_y = st.pad_cfg_rs_cy.load(std::memory_order_relaxed);
+    c.raw_rs_x = st.pad_raw_rs_x.load(std::memory_order_relaxed);
+    c.raw_rs_y = st.pad_raw_rs_y.load(std::memory_order_relaxed);
     c.invert_y = st.pad_cfg_invert_y.load(std::memory_order_relaxed);
     c.rumble = st.pad_cfg_rumble.load(std::memory_order_relaxed);
     c.rumble_scale = st.pad_cfg_rumble_scale.load(std::memory_order_relaxed);

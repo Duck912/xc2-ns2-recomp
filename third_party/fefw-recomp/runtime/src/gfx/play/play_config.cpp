@@ -361,6 +361,8 @@ bool apply_fixed(Sec sec, const std::string& k, const std::string& v, Settings* 
             if (k == "deadzone") return set_real(0.0, 0.5, &s->pad.stick_deadzone);
             if (k == "ls_center_x") return set_int(-32767, 32767, &s->pad.ls_center_x);
             if (k == "ls_center_y") return set_int(-32767, 32767, &s->pad.ls_center_y);
+            if (k == "rs_center_x") return set_int(-32767, 32767, &s->pad.rs_center_x);
+            if (k == "rs_center_y") return set_int(-32767, 32767, &s->pad.rs_center_y);
             if (k == "right_deadzone") return set_real(0.0, 0.5, &s->pad.right_deadzone);
             if (k == "stick_max") return set_real(0.5, 1.0, &s->pad.stick_max);
             if (k == "invert_y") return set_bool(&s->pad.invert_y);
@@ -929,6 +931,8 @@ std::string format_settings(const Settings& s) {
     kv("deadzone", num(s.pad.stick_deadzone));
     if (s.pad.ls_center_x != 0) kv("ls_center_x", std::to_string(s.pad.ls_center_x));
     if (s.pad.ls_center_y != 0) kv("ls_center_y", std::to_string(s.pad.ls_center_y));
+    if (s.pad.rs_center_x != 0) kv("rs_center_x", std::to_string(s.pad.rs_center_x));
+    if (s.pad.rs_center_y != 0) kv("rs_center_y", std::to_string(s.pad.rs_center_y));
     kv("right_deadzone", num(s.pad.right_deadzone));
     kv("invert_y", flag(s.pad.invert_y));
     kv("look_sens", num(s.pad.look_sens));

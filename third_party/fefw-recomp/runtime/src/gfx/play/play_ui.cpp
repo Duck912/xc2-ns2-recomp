@@ -1410,35 +1410,46 @@ void tab_controls(UiHost& host, const LiveStatus& live, Page& p, float bottom_h)
                       "Filters minor right-stick drift near centre.", &pad.right_deadzone, 0.0, 0.50, 0.02, "%.2f", false, true)) {
         mark(p);
     }
-    {   // Left-stick calibration (issue #76): a stick that rests off zero cannot be fixed by a dead zone.
+    {   // Stick calibration (issue #76): a stick that rests off zero cannot be fixed by a dead zone - the dead zone
+        // removes the small signal, but the axis still leans, so one direction walks slowly (left) or the camera
+        // creeps (right). The measured rest position is subtracted from the raw axis before the dead zone.
         const nxrt::play::LivePadConfig lp = nxrt::play::live_pad_config();
-        ImGui::TextColored(kDimText, "%s  x %+.2f  y %+.2f", tr("左摇杆原始值:", "Left stick, raw:"), lp.raw_ls_x, lp.raw_ls_y);
-        ImGui::SameLine();
-        if (ImGui::SmallButton(tr("以此为中位", "Set centre here"))) {
-            p.edit.pad.ls_center_x = static_cast<int>(std::lround(static_cast<double>(lp.raw_ls_x) * 32767.0));
-            p.edit.pad.ls_center_y = static_cast<int>(std::lround(static_cast<double>(lp.raw_ls_y) * 32767.0));
-            mark(p);
-        }
-        ImGui::SameLine();
-        if (ImGui::SmallButton(tr("清除校准", "Clear"))) {
-            p.edit.pad.ls_center_x = p.edit.pad.ls_center_y = 0;
-            mark(p);
-        }
-        double cx = static_cast<double>(p.edit.pad.ls_center_x), cy = static_cast<double>(p.edit.pad.ls_center_y);
-        if (card_slider_f("ls_cx", "左摇杆中位 X", "Left stick centre X",
-                          "静止时摇杆报出的 X 值（原始单位）。手柄用久了会偏向一侧，导致一个方向走得慢；把静止位置设成中位即可抵消。",
-                          "The X the stick reports at rest, in raw units. A worn stick leans one way and that direction then walks slowly.",
-                          &cx, -8000.0, 8000.0, 25.0, "%.0f", false, true)) {
-            p.edit.pad.ls_center_x = static_cast<int>(std::lround(cx));
-            mark(p);
-        }
-        if (card_slider_f("ls_cy", "左摇杆中位 Y", "Left stick centre Y",
-                          "同上，Y 轴。先按住不动，看上面的原始值稳定后点「以此为中位」。",
-                          "Same for Y. Hold the stick still, watch the raw value settle, then press Set centre here.",
-                          &cy, -8000.0, 8000.0, 25.0, "%.0f", false, true)) {
-            p.edit.pad.ls_center_y = static_cast<int>(std::lround(cy));
-            mark(p);
-        }
+        auto stick_calibration = [&](const char* id, const char* zh, const char* en, float rawX, float rawY, int* cx, int* cy) {
+            ImGui::PushID(id);
+            ImGui::TextColored(kDimText, "%s  x %+.2f  y %+.2f", tr(zh, en), rawX, rawY);
+            ImGui::SameLine();
+            if (ImGui::SmallButton(tr("以此为中位", "Set centre here"))) {
+                *cx = static_cast<int>(std::lround(static_cast<double>(rawX) * 32767.0));
+                *cy = static_cast<int>(std::lround(static_cast<double>(rawY) * 32767.0));
+                mark(p);
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton(tr("清除校准", "Clear"))) {
+                *cx = *cy = 0;
+                mark(p);
+            }
+            double dx = static_cast<double>(*cx), dy = static_cast<double>(*cy);
+            const std::string sid_x = std::string(id) + "_x", sid_y = std::string(id) + "_y";
+            if (card_slider_f(sid_x.c_str(), "中位 X", "Centre X",
+                              "静止时摇杆报出的 X 值（原始单位）。手柄用久了会偏向一侧，把静止位置设成中位即可抵消。",
+                              "The X the stick reports at rest, in raw units. A worn stick leans one way and that direction then walks slowly.",
+                              &dx, -8000.0, 8000.0, 25.0, "%.0f", false, true)) {
+                *cx = static_cast<int>(std::lround(dx));
+                mark(p);
+            }
+            if (card_slider_f(sid_y.c_str(), "中位 Y", "Centre Y",
+                              "同上，Y 轴。先按住不动，看上面的原始值稳定后点「以此为中位」。",
+                              "Same for Y. Hold the stick still, watch the raw value settle, then press Set centre here.",
+                              &dy, -8000.0, 8000.0, 25.0, "%.0f", false, true)) {
+                *cy = static_cast<int>(std::lround(dy));
+                mark(p);
+            }
+            ImGui::PopID();
+        };
+        stick_calibration("ls_cal", "左摇杆原始值:", "Left stick, raw:", lp.raw_ls_x, lp.raw_ls_y,
+                          &p.edit.pad.ls_center_x, &p.edit.pad.ls_center_y);
+        stick_calibration("rs_cal", "右摇杆原始值:", "Right stick, raw:", lp.raw_rs_x, lp.raw_rs_y,
+                          &p.edit.pad.rs_center_x, &p.edit.pad.rs_center_y);
     }
     if (card_slider_f("look_s", "右摇杆视角灵敏度", "Right-stick look sensitivity",
                       "控制手柄右摇杆旋转镜头的速度倍率（0.25x ~ 3.00x，实时生效）。",
