@@ -1,6 +1,6 @@
 <p align="center"><img src="docs/images/xc2-icon.png" alt="xc2-ns2-recomp icon" width="160"></p>
 
-# xc2-ns2-recomp (NVN-HLE)
+# xc2-ns2-recomp
 
 A native Windows PC port of **Xenoblade Chronicles 2 – Nintendo Switch 2 Edition**, made by static recompilation:
 the game's code is translated into a regular Windows program on your own PC, and runs on a small runtime that
