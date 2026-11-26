@@ -41,9 +41,9 @@ EXE = "xcde.exe"
 
 # The prebuilt NVN-HLE library this checkout links against (docs/RELEASE-PLAN.md). XCDE_NVNHLE_DIST (a folder with
 # lib/n2den_nvnhle_bundle.lib and include/nvnhle/embed.h) wins over the download, for a library built locally.
-NVNHLE_VERSION = ""                     # set with the first release of the library
-NVNHLE_URL = ""                         # its zip on that release
-NVNHLE_SHA256 = ""
+NVNHLE_VERSION = "0.1.0"                # the library zip attached to this repository's v0.1.0 release (source beside it)
+NVNHLE_URL = "https://github.com/Duck912/xcde-ns2-recomp/releases/download/v0.1.0/n2den-nvnhle-0.1.0-windows-x64.zip"
+NVNHLE_SHA256 = "9c47c2404d1aa74cb833a272fa8932efaec8d4ae7d3005ef8fb40ce6cbfca293"
 
 # The compiler a release package recompiles the dump with. Not shipped in the package (it would be 360 of its 420 MB):
 # the first setup downloads it from ziglang.org and checks it against the SHA-256 ziglang.org publishes.

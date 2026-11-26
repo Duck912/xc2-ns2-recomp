@@ -80,7 +80,7 @@ lifted game code ── BLR ──> fefw dispatch ──> kHleBase thunk
 ```
 
 - **Library.** n2den's NVN-HLE is built as a static library (`n2den_nvnhle`) in the Galaxia n2den fork
-  (`Duck912/galaxia-n2den`), per the Galaxia rewrite plan: extracted with no behaviour change, then embedded
+  (private; each release attaches the library's source), per the Galaxia rewrite plan: extracted with no behaviour change, then embedded
   in both Galaxia and this recomp. Never in n2den main. The fork's `galaxia/stage1` already contains public
   main `aef02f2`; cherry-pick `63ddb5c` (XC:DE classic GOB).
 - **Host interface (`HostServices`).** One struct the embedder fills: guest clock, program ID, wait/sleep
@@ -137,7 +137,7 @@ lifted game code ── BLR ──> fefw dispatch ──> kHleBase thunk
 
 Done and verified without launching a game:
 
-- **Step 1** (fork `Duck912/galaxia-n2den`, branch `galaxia/nvnhle-lib`): `n2den_nvnhle` builds standalone
+- **Step 1** (the Galaxia fork, branch `galaxia/nvnhle-lib`): `n2den_nvnhle` builds standalone
   with clang-cl and `/MT`. `nvnhle_smoke` records and replays a clear + copy in a host-memory pool on
   the GPU (0 wrong words).
 - **Step 2 (code)**: the NVN API layer is in the library. The emulator glue moved to
@@ -153,14 +153,10 @@ Done and verified without launching a game:
 - **Step 4 (code)**: `--game xcde` skips XC2's `main` hooks. XC:DE's `main` lifted (0 untranslated) and
   compiled without XC2's site list; `config/profiles/xcde.ini`.
 
-To run (needs a person at the machine; RAM/VRAM guard for `xc2_boot.exe` in `C:/re/xcde-work`):
+To run: XC2 on NVN-HLE in the recomp `play.ps1 -Profile n2den -Seconds 100`; XC:DE `play.ps1 -Profile xcde -Seconds 100`.
 
-1. n2den emulator boot checks for step 2: `C:/re/play/galaxia-fork/check6-{oot,kirby,ui,xc2,xcde}.bat`.
-2. XC2 on n2den in the recomp: `play.ps1 -Profile n2den -Seconds 100`.
-3. XC:DE in the recomp: `play.ps1 -Profile xcde -Seconds 100`.
-
-Known gaps: movies (no texture hookup yet), the F1 overlay and F12 screenshots (this runtime's
-renderer is off in n2den mode), guest pool write tracking (`GuestMemory::Track` is not implemented
+Known gaps at the time (movies, the F1 overlay and F12 screenshots were connected later the same day, see below):
+guest pool write tracking (`GuestMemory::Track` is not implemented
 for identity memory: n2den then keeps those ranges in guest memory instead of device-local copies, slower
 but correct), and
 `vi::ListFrameHistory` display ticks use 19.2 MHz while this runtime's Switch 2 tick is 31.25 MHz.
