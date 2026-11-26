@@ -1,0 +1,69 @@
+name: Compatibility report
+description: This game area runs (or does not run) on your hardware
+labels: [compatibility]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **If you are on an older build, update first.** Releases before **0.2.5** have known issues already fixed
+        (`#54` NVIDIA 3D black stripes, flicker, cutscene freezes, 4K dynres blur, `FORCE_UNORM` black bands, Intel pipeline cache crash).
+        Use **About → Check now** in `xc2-launcher.exe` or download the latest release:
+        <https://github.com/weile10000/xc2-ns2-recomp/releases/latest>
+
+        **报 issue 前请先确认版本是 0.2.5 或更新**，此前版本的大量渲染与过场问题已经修复（可在启动器「关于 → 检查更新」一键升级）。
+  - type: input
+    id: area
+    attributes:
+      label: Game area / chapter
+      placeholder: Gormott, the open plain after the first camp
+    validations:
+      required: true
+  - type: input
+    id: build
+    attributes:
+      label: Build
+      placeholder: 0.2.5
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      description: Native Windows 11 x64 is the primary target covered by release testing. Windows 10 x64 and Linux / SteamOS (Proton / Wine) receive best-effort compatibility without guaranteed full regression support — community PRs and forks are welcome.
+      options:
+        - "Windows 11 x64 (primary target)"
+        - "Windows 10 x64 (best-effort compatibility)"
+        - "Linux / SteamOS / Proton / Wine (best-effort compatibility)"
+        - "Other (community / fork)"
+    validations:
+      required: true
+  - type: input
+    id: hw
+    attributes:
+      label: CPU / GPU / driver / RAM
+    validations:
+      required: true
+  - type: input
+    id: fps
+    attributes:
+      label: Frame rate
+      description: The "hitch: N frames in 10 s: mean X fps, 1% low Y" line from the log is ideal.
+    validations:
+      required: true
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result
+      options:
+        - Perfect
+        - Playable
+        - Runs with glitches
+        - Loads but unplayable
+        - Does not load
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Settings that mattered, glitches, anything that would save the next person time.

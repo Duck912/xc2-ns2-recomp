@@ -1,0 +1,86 @@
+# xc2 hook sites for main (retail 3.0.1). Shipped with the repository.
+#
+# What this is: the list of addresses the lifter turns into nx_hook_entry / mid-function hooks, so that
+# xc2_boot.cpp's hook_add_entry calls have somewhere to fire. Without --sites the lifter emits no hook at all and
+# every hook_add_entry silently does nothing.
+#
+# Most of these are diagnostics: they log a function's arguments when the matching NXRT_* switch is set.
+# build.ps1 uses build\sites-main.txt when it exists and falls back to this file, so put your own additions
+# in build\sites-main.txt and leave this one alone.
+
+entryhook 7100781798   # mtl::MemManager::allocate
+entryhook 710077ef28   # mtl::MemManager::initialize
+entryhook 710077f770   # mtl::MemManager::create(char const*)
+entryhook 710077ff84   # mtl::MemManager::create(HANDLE, size, ...)
+entryhook 710077fc6c   # mtl::MemManager::create(void*, size, ...)
+entryhook 710077fb44   # mtl::MemManager::Region::initialize
+entryhook 7100000658   # apps::FrameworkLauncher::update()
+entryhook 710000076c   # apps::FrameworkLauncher::getScn()
+entryhook 7100000790   # apps::FrameworkLauncher::isInitialized()
+entryhook 71000007b4   # apps::FrameworkLauncher::isInitializing()
+entryhook 71000009f8   # apps::FrameworkLauncher::mlthFnBuild
+entryhook 7100001254   # apps::FrameworkLauncher::mlthFnLoadResource
+entryhook 71000013a0   # apps::FrameworkLauncher::mlthFnAppletInitialize
+entryhook 7100001488   # apps::FrameworkLauncher::wkUpdate()
+entryhook 71000014d0   # apps::FrameworkLauncher::wkTail()
+entryhook 7100001558   # apps::FrameworkLauncher::cbRenderAfter
+entryhook 7100001620   # apps::FrameworkLauncher::drawTask()
+entryhook 7100001684   # apps::FrameworkLauncher::wkStandbyLogin()
+entryhook 7100001688   # apps::FrameworkLauncher::wkStandbyLogout()
+entryhook 7100001fc0   # apps::LauncherApp::wkUpdate()
+entryhook 7100001fc4   # apps::LauncherApp::wkRender()
+entryhook 710073fc4c   # ml::Scn::Scn(ml::ScnSetup const*)
+entryhook 7100740860   # ml::Scn::addRenderCB
+entryhook 71007409ac   # ml::Scn::createMdl
+entryhook 7100844120   # renderer: render-target ladder input (XC2_RENDER_SIZE_PROBE, see xc2_boot.cpp)
+entryhook 710142c50    # tl::TitleApplet::initialize(fw::Framework const&)
+entryhook 710142cf0    # tl::TitleApplet::update(fw::UpdateInfo const&)
+entryhook 710142d18    # tl::TitleApplet::postUpdate(fw::UpdateInfo const&)
+entryhook 7101427b8    # tl::TitleApp::execute()
+entryhook 7101420a0    # tl::TitleApp::now_loading(bool)
+entryhook 710142f44    # tl::TitleMain::create()
+entryhook 71014303c    # tl::TitleMain::initialize()
+entryhook 7101439f4    # tl::TitleMain::update(fw::UpdateInfo const&)
+entryhook 7101438a4    # tl::TitleMain::fnUpdate(tl::TitleMain*)
+entryhook 710143aa8    # tl::TitleMain::sleep(unsigned int)
+entryhook 710143620    # tl::TitleMain::destroy()
+entryhook 71007570d4   # ml::MicroThread::update(ml::MLTHG*)
+entryhook 710075731c   # ml::MicroThread::tail()
+entryhook 7100756ef4   # ml::MicroThread::sleep(unsigned int, bool)
+entryhook 710075749c   # ml::MicroThread::createThread(ml::MLTHG*, entry, arg)
+entryhook 7100756890   # ml::MicroThread::create()
+entryhook 7100756928   # ml::MicroThread::createGroup()
+entryhook 7100756908   # ml::MicroThread::createHandle(ml::MLTHG*, unsigned int)
+entryhook 7100756bdc   # ml::MicroThread::releaseThread(MLTH*)
+entryhook 7100756728   # ml::MicroThreadNx::switchThread(MTHREAD*, MTHREAD*)
+entryhook 7100756720   # ml::MicroThreadNx::switchThreadMain(MTHREAD*)
+entryhook 71007564cc   # ml::MicroThreadNx::setupThread(MTHREAD*, entry)
+entryhook 7100756614   # ml::MicroThreadNx::destroyThread(MTHREAD*)
+midhook 710075680c
+midhook 7100756824
+midhook 71007571fc
+entryhook 710073a8f4   # the vsync period virtual: returns 1/60 from 0x7100f65a44 (frame rate)
+entryhook 7100722a04   # ml::DevGraphNx::renderSyncSys (the frame clock of the census and the frame counters, HANDOVER 58/59)
+entryhook 71002a0000   # f_2a0000: id -> class, then f_2a14b0 -> f_2a870c (bitflag.h:133 index < Size)
+# patch 71002a8828 is NOT shipped: it rewrites one instruction word of the game.
+# See the note at the end of this file.
+midhook 71006fa790   # bl mtl::MemManager::create(MenuResource) - x1 is the size
+midhook 71007802e4   # ret of mtl::MemManager::create(HANDLE,size,...): x0 = the new region's handle (XC2_NS2_PROBE)
+entryhook 710036e594   # gf::GfQuestManager::reqistLinkQuest(QuestID)
+
+# Notes
+#  - Every line is an address the lifter turns into a hook; no game bytes are here.
+#  - ASCII only: the lifter reads this file with the locale encoding, and a non-ASCII byte breaks the lift.
+#  - Add your own with "entryhook <address>" (called on entry) or "midhook <address>" (called mid-function).
+#    Use tools\analysis\symat.py to name an address, and xc2_boot.cpp's hook_add_entry to act on it.
+
+# Native resolution hooks (3.0.1)
+entryhook 710084d230   # rtmgr::isDlssEnabled (also tail-called by 0x71007d2180)
+entryhook 710085f090   # dlss_obj::updateDynamicResScale
+entryhook 710085f3c0   # dlss_obj::applyScale(obj, w*, h*)
+entryhook 7100844120   # rtmgr::rebuildRenderTargets
+inline 71007cfc2c      # scale_x/y *= s0 (0.5f when DLSS on)
+entryhook 71008d9ce0   # display resolution class (2 -> 1440p mode 5, 1 -> 4K mode 1)
+entryhook 71007b8b30   # dynres::update (lock dynamic resolution stepping when native_res=2)
+entryhook 71008eab90   # nvn_dlss::getPresetInputSize (return native_w x native_h when native_res=2)
+entryhook 710083f660   # dlss_obj::getHaltonJitter (zero sub-pixel jitter when upscaler is bilinear)

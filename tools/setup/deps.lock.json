@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "note": "Every external thing this build needs, where it comes from, and how to tell it is the right bytes. `sha256` is empty where the source is a git checkout rather than an archive; `pinned` says whether a fixed commit is recorded.",
+  "updated": "2026-11-17",
+  "toolchain": {
+    "note": "Installed on the machine, not fetched by the repository. doctor.ps1 checks the version, not a hash.",
+    "clang-cl": {
+      "version": "23.1.5",
+      "note": "MSVC-compatible driver; /O2 /W3 and the MSVC CRT come from the VS Build Tools install"
+    },
+    "cmake": {
+      "version": "4.4.5"
+    },
+    "ninja": {
+      "version": "1.13.2"
+    },
+    "dotnet": {
+      "version": "10.0.403",
+      "note": "only needed to build the shader harness; prebuilt binaries make it a developer-only requirement"
+    },
+    "python": {
+      "version": "3.12.14",
+      "note": "the tools under tools/ are stdlib-only; uv can supply it"
+    },
+    "rustc": {
+      "version": "1.99.1",
+      "note": "only for xwin, if that route is taken for the Windows SDK"
+    }
+  },
+  "sources": [
+    {
+      "name": "sdl3",
+      "kind": "archive",
+      "url": "https://github.com/libsdl-org/SDL/releases/download/release-3.4.18/SDL3-3.4.18.tar.gz",
+      "sha256": "9c75cf16330322c217dedd2e0609f1124f1b54b8633e763467b4684d0f4334a3",
+      "license": "Zlib",
+      "used_by": "runtime/cmake/gfx_deps.cmake (FetchContent, hash checked)"
+    },
+    {
+      "name": "vulkan_headers",
+      "kind": "archive",
+      "url": "https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/vulkan-sdk-1.4.363.0.zip",
+      "sha256": "f4be95220ff0ee0b1c620301ff4fe9ae48592d71f4c30f2d5c571351a153ae81",
+      "license": "Apache-2.0",
+      "used_by": "runtime/cmake/gfx_deps.cmake (FetchContent, hash checked)",
+      "cache_note": "both Vulkan archives are named vulkan-sdk-1.4.363.0.zip, so the CMake download dir holds one file for two sources"
+    },
+    {
+      "name": "volk",
+      "kind": "archive",
+      "url": "https://github.com/zeux/volk/archive/refs/tags/vulkan-sdk-1.4.363.0.zip",
+      "sha256": "889b90fdcbe9cee7b118339d640c6895b7be5c920d309c44b744692063275b3d",
+      "license": "MIT",
+      "used_by": "runtime/cmake/gfx_deps.cmake (FetchContent, hash checked)",
+      "cache_note": "both Vulkan archives are named vulkan-sdk-1.4.363.0.zip, so the CMake download dir holds one file for two sources"
+    },
+    {
+      "name": "vma",
+      "kind": "archive",
+      "url": "https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator/archive/refs/tags/v3.4.0.zip",
+      "sha256": "ce9a61ea5e72284ac9ccc152c214eef381ab57bfd7383f20232e5a652e3afda6",
+      "license": "MIT",
+      "used_by": "runtime/cmake/gfx_deps.cmake (FetchContent, hash checked)"
+    },
+    {
+      "name": "imgui",
+      "kind": "archive",
+      "url": "https://github.com/ocornut/imgui/archive/refs/tags/v1.92.9b.zip",
+      "sha256": "e1c46d676c2bcb7ced847ba27f50553e33a19db97b3cadaec7f8be64449139f8",
+      "license": "MIT",
+      "used_by": "runtime/cmake/gfx_deps.cmake (FetchContent, hash checked)"
+    },
+    {
+      "name": "zstd",
+      "kind": "archive",
+      "url": "https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz",
+      "sha256": "eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3",
+      "license": "BSD-3-Clause",
+      "used_by": "runtime/cmake/gfx_deps.cmake (FetchContent, hash checked)"
+    },
+    {
+      "name": "ryubing",
+      "kind": "archive",
+      "url": "https://git.ryujinx.app/projects/Ryubing/archive/a82350bb774f70fcbd41c9987bf67a3775409963.tar.gz",
+      "sha256": "0092586e9fcff0f6029b44d89061c5e8959243df9e9ca4fade2202168749ecf8",
+      "size": 12781153,
+      "license": "MIT",
+      "used_by": "tools/shaders/scripts/setup_ryujinx.ps1 (downloads it when there is no local checkout)",
+      "dest": "third_party/fefw-recomp/tools/shaders/third_party/ryubing"
+    },
+    {
+      "name": "nxrecomp",
+      "kind": "archive",
+      "url": "https://github.com/weile10000/xc2-ns2-recomp/releases/download/v0.1.0/nxrecomp-e7a5a54-xc2.tar.gz",
+      "sha256": "6b140959ada4d74b1843783736569db03ab307d8b84fb376da9c77cdc0729419",
+      "size": 4802000,
+      "license": "GPL-3.0-or-later",
+      "used_by": "the recompiler; BUILD.md section 2",
+      "note": "Upstream at e7a5a54 plus this project's three recompiler patches and the xc2ns2 game profile, which live in third_party/nxrecomp (git-ignored) and would otherwise be lost. The upstream repository rewrote its history on 2026-11-16: the commit is no longer fetchable (git says 'not our ref', the API returns 422) and the default branch has a different layout (base/ + games/ instead of recomp/ + runtime/ + tools/). A git clone of that repository therefore produces a tree this build cannot use, which is what the first clean-room build found.",
+      "dest": "third_party/nxrecomp"
+    },
+    {
+      "name": "astc-encoder",
+      "kind": "git",
+      "url": "https://github.com/ARM-software/astc-encoder.git",
+      "ref": "5.7.0",
+      "commit": "baff485b0ff36d2f95d28961605106502c653966",
+      "checkout": "third_party/fefw-recomp/tools/textures/third_party/astc-encoder",
+      "license": "Apache-2.0",
+      "used_by": "tools/textures/scripts/fetch_third_party.ps1 (git checkout 5.7.0)",
+      "risk": "medium: a git repository, so the tag could be moved. It decides the texture bytes, so drift here is visible as different textures rather than as a failed build",
+      "mirror": "not mirrored: ARM-software is a stable upstream and 5.7.0 is a release tag",
+      "dest": "third_party/fefw-recomp/tools/textures/third_party/astc-encoder"
+    },
+    {
+      "name": "bc7enc_rdo",
+      "kind": "git",
+      "url": "https://github.com/richgel999/bc7enc_rdo.git",
+      "ref": "b9438627eef73a1157e84201b6fa6eb2ffd6d9f0",
+      "commit": "b9438627eef73a1157e84201b6fa6eb2ffd6d9f0",
+      "checkout": "third_party/fefw-recomp/tools/textures/third_party/bc7enc_rdo",
+      "license": "public domain / MIT",
+      "used_by": "tools/textures/scripts/fetch_third_party.ps1 (git checkout b9438627)",
+      "risk": "medium: a bare commit with no tag, so a history rewrite would make it unreachable - the same way nxrecomp disappeared",
+      "mirror": "not mirrored yet; mirror this one first if any of the three goes missing",
+      "dest": "third_party/fefw-recomp/tools/textures/third_party/bc7enc_rdo"
+    },
+    {
+      "name": "ispc",
+      "kind": "archive",
+      "url": "https://github.com/ispc/ispc/releases/download/v1.32.0/ispc-v1.32.0-windows.zip",
+      "sha256": "148d5cd96abe7501c730d5fbd00f1f0c893b96bfeada38d1811c9b6251e86a5c",
+      "license": "BSD-3-Clause",
+      "used_by": "tools/textures/scripts/fetch_third_party.ps1 (hash checked against the same value)",
+      "dest": "third_party/fefw-recomp/tools/textures/third_party/ispc",
+      "optional": true
+    }
+  ],
+  "generated_artifacts": [
+    {
+      "name": "shader patches",
+      "note": "Authoritative shader patch inventory and manual/open status live in tools/shader/PATCHES.md. A clean build gets no pre-patched game modules; tools/shader/patch_ds_samplers.py reproduces the stencil-plane sampler family from the player's own cache.",
+      "action": "keep tools/shader/PATCHES.md aligned with xc2/game/shader-patch/, and automate any remaining items there rather than duplicating lists here"
+    },
+    {
+      "name": "spirv.preload.pack",
+      "note": "built from the cache by tools/shader/cache/pack.py; the runtime reads it BEFORE the loose .spv files, so a stale pack hides a freshly installed shader"
+    }
+  ]
+}

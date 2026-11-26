@@ -10,7 +10,7 @@ and any services or NVN features XC2 never used.
 
 ## Steps
 
-1. **Base import.** Bring in xc2-ns2-recomp (GPL-3.0, keep its history, notices and credits) and pin the
+1. **Base import.** (Imported 2026-11-26, upstream 8f83def; build not yet tried.) Bring in xc2-ns2-recomp (GPL-3.0, keep its history, notices and credits) and pin the
    nxrecomp revision it uses. Build it once unchanged to prove the toolchain.
 2. **Dump tooling.** ExeFS extraction from `.nup` for program index 1, RomFS from program 0, add-on RomFS.
    Hash-check the modules against docs/TARGET.md.

@@ -1,0 +1,47 @@
+# xc2/tests/rexface.nxs - cut straight to the prologue's Rex/dragon scene and capture it frame by frame.
+#
+# Built from the first sweep (testout_deck): the deck conversation with Rex lands at frames ~6300-7100 at 30 game steps per
+# second. Run with the same [test] keys as deck.nxs; add NXRT_NVN_TRACE_FRAME=6600 to trace that exact frame (deterministic
+# mode makes the frame number reproducible, which is the whole point).
+
+@rate 30
+@timeout 20000          # every later wait may take this many frames (default 3600 is under the opening's length)
+@log rexface.nxs: boot + title presses
+600
+press A
+60
+press A
+60
+press A
+@sleep 3000
+
+@frame 5600
+@shot f5600
+@frame 5800
+@shot f5800
+@frame 6000
+@shot f6000
+@frame 6100
+@shot f6100
+@frame 6200
+@shot f6200
+@frame 6300
+@shot f6300
+@frame 6400
+@shot f6400
+@frame 6500
+@shot f6500
+@frame 6600
+@shot f6600
+@frame 6700
+@shot f6700
+@frame 6800
+@shot f6800
+@frame 6900
+@shot f6900
+@frame 7000
+@shot f7000
+@frame 7100
+@shot f7100
+
+@pass

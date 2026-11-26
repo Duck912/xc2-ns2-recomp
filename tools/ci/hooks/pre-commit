@@ -1,0 +1,40 @@
+#!/bin/sh
+# Refuse a commit that would publish something private.
+#
+# Install with:  pwsh -File tools/ci/install-git-hooks.ps1
+#
+# Two layers, because "git add -f" bypasses .gitignore:
+#   1. the staged path list is checked directly (fast, and it is the exact thing being committed);
+#   2. tools/ci/check_invariants.py --hook runs the project rules.
+#
+# Bypass once with:  git commit --no-verify   (and then think about why you needed to)
+
+private_paths=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '^(docs/internal/|work/|xc2/game/|xc2/build/)' || true)
+if [ -n "$private_paths" ]; then
+    echo "commit refused: these staged paths must never be published:" >&2
+    echo "$private_paths" | sed 's/^/    /' >&2
+    echo "" >&2
+    echo "Unstage them with:  git restore --staged <path>" >&2
+    exit 1
+fi
+
+# Find a python that actually runs. The Windows Store stub answers "command -v" but exits non-zero,
+# so each candidate is probed rather than trusted.
+py=""
+for cand in "$XC2_PYTHON" python3 python py; do
+    if [ -z "$cand" ]; then continue; fi
+    if command -v "$cand" >/dev/null 2>&1 && "$cand" -c "import sys" >/dev/null 2>&1; then
+        py="$cand"; break
+    fi
+done
+if [ -z "$py" ]; then
+    echo "pre-commit: no working python found; skipping the invariant check" >&2
+    echo "            (set XC2_PYTHON to the interpreter the build uses)" >&2
+    exit 0
+fi
+
+"$py" tools/ci/check_invariants.py --hook || {
+    echo "" >&2
+    echo "commit refused: the project invariants do not hold (see above)" >&2
+    exit 1
+}

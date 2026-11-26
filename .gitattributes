@@ -1,0 +1,13 @@
+# 统一用 LF 存库，避免 Windows 上 autocrlf 造成的整文件伪改动
+* text=auto eol=lf
+
+# Batch files: cmd.exe wants CRLF, and these must stay pure ASCII (project rule).
+*.cmd   text eol=crlf
+
+# 二进制：绝不做行尾/编码转换
+*.spv   binary
+*.bin   binary
+*.png   binary
+*.pfm   binary
+*.dll   binary
+*.exe   binary

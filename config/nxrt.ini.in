@@ -1,0 +1,53 @@
+; nxrt.ini - settings of the XC2 NS2 recompilation runtime.
+; Rendered by the setup from config/nxrt.ini.in; the launcher edits values and leaves every other line alone.
+; Every key below is listed in config/keys.tsv, and tools/ci/config_table.py --check fails if one is not.
+
+[fs]
+exefs = {exefs}
+romfs = {romfs}
+mods = {mods}
+save_dir = save
+
+[aoc]
+dir = {dlc}
+
+[nvn]
+shader_cache = {shader_cache}
+bc7_cache = {bc7_cache}
+
+[log]
+path = nxrt.log
+
+[am]
+operation_mode = docked
+resolution = 1920x1080
+
+[gfx]
+; The window size belongs to controls.ini ([display] width/height), which is what the F1 page edits. A value here
+; overrides it, and the player's choice then never survives a restart (issue #73). Uncomment only to pin a size.
+; window_width = 1920
+; window_height = 1080
+present_mode = fifo
+
+[dlss]
+upscaler = taau
+frame_gen = 0
+
+[upscale]
+render_quality = native
+lock_render_size = 1
+
+[hdr]
+; HDR belongs to controls.ini ([hdr] mode), which is what the F1 page edits. A [hdr] mode here overrides that page
+; on every launch, so the mode the player picked never stuck (issue #57). Set it only to pin one regardless of F1.
+
+[xc2]
+fps = 60
+
+[system]
+language = auto
+
+[media]
+video_decoder = library
+movie_timer_poke = 1
+movie_pts_wallclock = 0

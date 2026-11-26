@@ -1,0 +1,90 @@
+name: Bug report
+description: Something is wrong with the emulator, a build step or a tool
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **If you are on an older build, update first.** Releases before **0.2.5** have known issues already fixed
+        (`#54`/`#61`/`#62`/`#64` NVIDIA 3D oblique black stripes/hatching, `#15` flicker, cutscene freezes, Intel `vkGetPipelineCacheData` exit `4`,
+        `v0.2.3` `FORCE_UNORM` dark bands, FSR 3 FG HUD ghosting, 4K dynres blur, `dav1d` EOS hang, PS 5.1 Setup fallback, and stronger NVIDIA/Intel GPU fault diagnostics).
+        Use **About → Check now** in `xc2-launcher.exe` or grab the latest build:
+        <https://github.com/weile10000/xc2-ns2-recomp/releases/latest>
+
+        **请先确认版本是 0.2.5 或更新。** `0.2.5` 之前的多项已知问题已修复（`#54`/`#61`/`#62`/`#64` N 卡 3D 斜向黑条/摩尔纹、`#15` 闪烁、过场冻结、Intel `vkGetPipelineCacheData`
+        闪退、`v0.2.3` 黑条回归、FSR 3 FG HUD 重影、4K 动态分辨率变糊、`dav1d` 结尾卡死、无 `pwsh` 安装报错等，并增强了 N 卡/I 卡图形错误与 TDR 诊断）。
+        可通过启动器 **关于 → 检查更新** 一键升级，或前往上方链接下载最新版。
+
+        Before you open this: please read [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) —
+        the known issues are listed there, and the three project invariants are in
+        [docs/INVARIANTS.md](docs/INVARIANTS.md).
+  - type: input
+    id: build
+    attributes:
+      label: Build (optional)
+      description: Release tag or commit you ran; the report zip carries it too.
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      description: Native Windows 11 x64 is the primary target covered by release testing. Windows 10 x64 and Linux / SteamOS (Proton / Wine) receive best-effort compatibility without guaranteed full regression support — community PRs and forks are welcome.
+      options:
+        - "Windows 11 x64 (primary target)"
+        - "Windows 10 x64 (best-effort compatibility)"
+        - "Linux / SteamOS / Proton / Wine (best-effort compatibility)"
+        - "Other (community / fork)"
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU, driver and OS build version
+      description: The report zip already records GPU/driver; please also confirm your OS build (e.g. `winver` or distro/Proton version).
+      placeholder: RX 6800 XT, Adrenalin 26.10.1, Windows 11 26200
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you saw, and where in the game.
+    validations:
+      required: true
+  - type: textarea
+    id: report
+    attributes:
+      label: Report zip
+      description: |
+        For anything about what the game draws, use the launcher: **Play -> Record a report** (or **About -> Record a report**). It starts the game with diagnostics on, and closing the window writes the zip. From a command prompt the same thing is:
+
+        ```
+        tools\python\python.exe tools\report.py
+        ```
+
+        Play until the problem shows, then close the game. It writes
+        `work\reports\report-<timestamp>.zip`; attach that file. Add `-Headless` if you also want a
+        frame-time CSV.
+
+        The zip holds the validation layer's messages, the capability lines your driver reports, whether
+        the device was lost, your settings and the full log. Nothing in it is game data.
+
+        For a build-step or tooling bug, a log from `work\logs\` or `setup.log` is enough.
+      placeholder: report-20261124-120000.zip
+    validations:
+      required: true
+  - type: dropdown
+    id: upscaler
+    attributes:
+      label: Does it also happen on default TAAU (Frame Gen off)? (optional)
+      description: Only if you feel like testing against the v0.2.4 baseline - switch Upscaler to built-in TAAU and turn Frame Generation off, restart, and try the same spot.
+      options:
+        - "Not tried"
+        - "Yes, it happens on TAAU (FG off) too"
+        - "No, only with FSR / DLSS / Frame Gen"
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Confirmation
+      options:
+        - label: This repository contains no game files, and I have not attached any.
+          required: true

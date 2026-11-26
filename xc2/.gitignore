@@ -1,0 +1,8 @@
+build/
+# game/ holds game data (xc2ns2 + romfs) and never goes in the repository.
+#
+# game/shader-patch was excepted here on the theory that "the patches are ours". They are not: a patched shader is a
+# modified copy of the game's own module, so it is a derivative work and cannot be published. The pre-commit hook
+# already refused to commit it; this rule used to let git add stage it first, which is a trap. The patches live in
+# the maintenance tree instead, and tools/shader/patch_ds_samplers.py rebuilds them from the player's own cache.
+game/*
