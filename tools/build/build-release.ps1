@@ -18,7 +18,8 @@ param(
     [switch]$SkipExe,
     [switch]$SkipHarness,
     [switch]$SkipPython,
-    [ValidateSet('auto', 'fma', 'compat')][string]$Cpu = 'auto'
+    [ValidateSet('auto', 'fma', 'compat')][string]$Cpu = 'auto',
+    [string]$N2denDist = ''   # XC:DE: the NVN-HLE library's distribution folder, linked into xc2_rt.dll (NXRT_N2DEN_DIST)
 )
 $ErrorActionPreference = 'Stop'
 $root = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'xc2'   # tools\build -> the checkout's xc2
@@ -62,6 +63,7 @@ if (-not $SkipDll) {
     $t = [Diagnostics.Stopwatch]::StartNew()
     $cfg = @('-S', (Join-Path $root 'release'), '-B', $DllBuildDir, '-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Release',
              '-DCMAKE_C_COMPILER=clang-cl', '-DCMAKE_CXX_COMPILER=clang-cl')
+    if ($N2denDist) { $cfg += '-DNXRT_N2DEN_DIST=' + $N2denDist.Replace('\', '/') }
     # Reuse the runtime's fetched third-party sources instead of downloading them again.
     $deps = Join-Path $rt 'build\runtime-gfx\_deps'
     if (Test-Path $deps) { $cfg += "-DFETCHCONTENT_BASE_DIR=$deps" }

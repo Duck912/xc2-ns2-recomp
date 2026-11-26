@@ -125,11 +125,11 @@ def step_runtime(r, repo):
     return r.end_step("runtime", started, True)
 
 
-def step_ingest(r, repo, install, nup, exefs_in, romfs_in, dlc_in):
+def step_ingest(r, repo, install, nup, exefs_in, romfs_in, dlc_in, package=False):
     """ExeFS into the checkout (xcde/game/xcde200: small, the lift reads it); RomFS and add-on under --install, linked
     where config/profiles/xcde.ini looks (xcde/build/200/game/romfs and .../dlc)."""
     started = r.step("ingest")
-    exefs = repo / EXEFS
+    exefs = install / "exefs" if package else repo / EXEFS   # a package recompiles from the run folder
     romfs = install / "romfs"
     dlc = install / "dlc" / ADDON_ID / "romfs"
     py = os.environ.get("XC2_PYTHON") or sys.executable
@@ -170,6 +170,8 @@ def step_ingest(r, repo, install, nup, exefs_in, romfs_in, dlc_in):
         if not (dlc / "dlcver.bin").is_file():
             return r.end_step("ingest", started, False,
                               "the add-on (%s) is missing: the Switch 2 Edition needs it to start" % ADDON_ID.upper())
+    if package:
+        return r.end_step("ingest", started, True)
     game = repo / BUILD / "game"
     if base.junction(game / "romfs", romfs, r) != 0 or base.junction(game / "dlc", install / "dlc", r) != 0:
         return r.end_step("ingest", started, False, "could not link the game data into xcde/build/200/game")
@@ -201,11 +203,11 @@ def step_link(r, repo):
     return r.end_step("link", started, rc == 0 and ok, "" if rc == 0 and ok else "build-boot.ps1 failed")
 
 
-def step_streamline(r, repo, install):
+def step_streamline(r, repo, install, package=False):
     """NVN-HLE loads Streamline from <boot>/user/streamline. The launcher downloads NVIDIA's release (verified) into
     <install>/upscalers/streamline; this copies it. Missing is not an error: the game then upscales with FSR 1."""
     started = r.step("streamline")
-    dest = repo / BOOT / "user" / "streamline"
+    dest = (install if package else repo / BOOT) / "user" / "streamline"
     if (dest / "sl.interposer.dll").is_file():
         return r.end_step("streamline", started, True, "already in place")
     for src in (install / "upscalers" / "streamline", Path(os.environ.get("XCDE_STREAMLINE_DIR", "") or "-")):
@@ -263,6 +265,21 @@ def main():
     r.log("repo    %s" % repo)
     r.log("install %s" % install)
     r.log("input   %s" % (nup or exefs_in))
+    tools = base.package_tools(repo)
+    if tools:
+        # A release package (docs/RELEASE-PLAN.md): runtime/xc2_rt.dll with NVN-HLE in it, the bundled Python and Zig.
+        # Nothing to fetch or build but the game's own code, into the run folder.
+        py, zig, rtlib = tools
+        r.log("mode    package: the runtime, Python and the compiler travel with it")
+        steps = [
+            ("doctor", lambda: base.step_doctor_package(r, repo, tools)),
+            ("ingest", lambda: step_ingest(r, repo, install, nup, exefs_in, romfs_in, dlc_in, package=True)),
+            ("lift", lambda: base.step_lift_package(r, repo, install, py, a.jobs, sites=repo / "xcde" / "sites")),
+            ("link", lambda: base.step_link_package(r, repo, install, zig, rtlib, a.jobs, exe_name=EXE)),
+            ("streamline", lambda: step_streamline(r, repo, install, package=True)),
+            ("done", lambda: step_done(r, repo, install)),
+        ]
+        return run_steps(r, steps, skip)
     base.import_toolchain(r)
     steps = [
         ("doctor", lambda: base.step_doctor(r, repo)),
@@ -275,6 +292,10 @@ def main():
         ("streamline", lambda: step_streamline(r, repo, install)),
         ("done", lambda: step_done(r, repo, install)),
     ]
+    return run_steps(r, steps, skip)
+
+
+def run_steps(r, steps, skip):
     r.total_steps = len(steps)
     r.announce()
     for name, fn in steps:

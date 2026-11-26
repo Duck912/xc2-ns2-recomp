@@ -84,6 +84,13 @@ endif()
 target_link_libraries(xc2_rt PRIVATE
     nxrt_game_xc2ns2_core nxrt_gfx nxrt
     kernel32 user32 gdi32 winmm imm32 ole32 oleaut32 version uuid advapi32 setupapi shell32 dinput8 psapi)
+# n2den's NVN-HLE (XC:DE's renderer, --nvn n2den): NXRT_N2DEN_DIST names the library's distribution folder (the runtime's
+# own configure takes the same variable and compiles its adapter). Same libraries as tools/build/build-boot.ps1 -N2denDist.
+if(NXRT_N2DEN_DIST)
+    target_link_libraries(xc2_rt PRIVATE "${NXRT_N2DEN_DIST}/lib/n2den_nvnhle_bundle.lib"
+        ws2_32 crypt32 wintrust bcrypt iphlpapi mswsock secur32 shlwapi dbghelp ntdll)
+    message(STATUS "xc2_rt: links n2den NVN-HLE from ${NXRT_N2DEN_DIST}")
+endif()
 # No /DEBUG: a release DLL should not carry a PDB path. /HIGHENTROPYVA:NO keeps the guest ranges at 0x71_0000_0000
 # free, which is what the runtime needs to map the game's address space.
 target_link_options(xc2_rt PRIVATE /HIGHENTROPYVA:NO /DEBUG "/PDB:${CMAKE_CURRENT_BINARY_DIR}/xc2_rt.pdb" "/MAP:${CMAKE_CURRENT_BINARY_DIR}/xc2_rt.map")

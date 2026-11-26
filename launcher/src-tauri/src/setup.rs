@@ -38,8 +38,8 @@ pub const STEPS: [(&str, &str); 9] = [
 ];
 
 /// The steps a release package runs: the engine has nothing to fetch and no runtime to build there, because the
-/// runtime and the compilers travel with it. Must match what xc2_setup.py reports in package mode.
-pub const PACKAGE_STEP_IDS: [&str; 6] = ["doctor", "ingest", "lift", "link", "shaders", "done"];
+/// runtime and the compilers travel with it. Must match what xcde_setup.py reports in package mode.
+pub const PACKAGE_STEP_IDS: [&str; 6] = ["doctor", "ingest", "lift", "link", "streamline", "done"];
 
 fn step_title(id: &str) -> &'static str {
     match id {

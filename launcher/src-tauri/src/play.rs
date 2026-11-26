@@ -274,15 +274,39 @@ fn package_command(dir: &Path, exe: &Path) -> Command {
     let (xc2_fps, present_hz) = fps_env_for_dir(dir);
     c.env("NXRT_XC2_FPS", xc2_fps)
         .env("NXRT_NVN_PRESENT_INTERVAL_HZ", present_hz);
-    c.env("NXRT_FS_ROMFS", dir.join("game").join("romfs-301"))
+    // XC:DE: the setup engine (tools/setup/xcde_setup.py) puts program 0's RomFS at <run folder>/romfs and the add-on at
+    // <run folder>/dlc/<title id>/romfs.
+    c.env("NXRT_FS_ROMFS", dir.join("romfs"))
         .env("NXRT_FS_SAVE_DIR", dir.join("save"))
         .env("NXRT_NVN_SHADER_CACHE", dir.join("shader_cache").join("spirv"))
         .env("NXRT_NVN_DUMP_MISSING", dir.join("work").join("missing"));
-    let dlc = dir.join("game").join("dlc-301");
+    let dlc = dir.join("dlc");
     if dlc.is_dir() {
         c.env("NXRT_AOC_DIR", dlc);
     }
+    copy_streamline(dir);
     c
+}
+
+/// NVN-HLE loads NVIDIA Streamline from user/streamline beside the exe (the run folder in a package); the Settings page
+/// downloads it to upscalers/streamline. Streamline fetched after setup lands there on the next Play. Missing is fine: the
+/// game then upscales with FSR 1.
+fn copy_streamline(dir: &Path) {
+    let src = dir.join("upscalers").join("streamline");
+    let dst = dir.join("user").join("streamline");
+    if !src.join("sl.interposer.dll").is_file() || dst.join("sl.interposer.dll").is_file() {
+        return;
+    }
+    if std::fs::create_dir_all(&dst).is_err() {
+        return;
+    }
+    if let Ok(rd) = std::fs::read_dir(&src) {
+        for e in rd.flatten() {
+            if e.path().is_file() {
+                let _ = std::fs::copy(e.path(), dst.join(e.file_name()));
+            }
+        }
+    }
 }
 
 pub fn start(app: &AppHandle, p: &crate::setup::Paths, launcher_dir: &Path, minimize: bool, runner_setting: &str) -> Result<(), String> {

@@ -567,13 +567,13 @@ def step_doctor_package(r, repo, tools):
     return r.end_step("doctor", started, True, "the package carries everything")
 
 
-def step_lift_package(r, repo, install, py, jobs):
+def step_lift_package(r, repo, install, py, jobs, sites=None):
     started = r.step("lift")
     exefs_dir = prepare_patched_exefs(r, repo, install)
     # Build products live with the game, not in the package: a player's install folder is theirs to fill, and the
     # package stays exactly as it was unpacked.
     lift = install / "build" / "lift"
-    sites = repo / "xc2" / "sites"
+    sites = Path(sites) if sites else repo / "xc2" / "sites"   # XC:DE passes xcde/sites (tools/setup/xcde_setup.py)
     n = jobs if jobs > 0 else max(2, (os.cpu_count() or 4) - 1)
     done = 0
     tasks = []
@@ -686,9 +686,9 @@ def install_runtime_signature(install):
     return None
 
 
-def step_link_package(r, repo, install, zig, rtlib, jobs):
+def step_link_package(r, repo, install, zig, rtlib, jobs, exe_name="xc2_boot.exe"):
     started = r.step("link")
-    exe = install / "xc2_boot.exe"
+    exe = install / exe_name   # XC:DE: xcde.exe
     stamp = install / "build" / "link-stamp.json"
     sig = runtime_signature(rtlib)
     # Same rule as the checkout: keep the exe only when it was linked against this exact runtime. The exe carries the
