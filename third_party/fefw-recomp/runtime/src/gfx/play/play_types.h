@@ -141,6 +141,10 @@ struct PadSettings {
     uint64_t remap[kPadSrcCount] = {kPadDefault, kPadDefault, kPadDefault, kPadDefault, kPadDefault, kPadDefault, kPadDefault, kPadDefault,
                                     kPadDefault, kPadDefault, kPadDefault, kPadDefault, kPadDefault, kPadDefault, kPadDefault, kPadDefault};
     bool label_abxy = false;       // false: by position (the bottom button is the bottom prompt on every pad); true: by the printed label (Xbox A = Switch A, which answers the wrong Arts slot on a pad, issue 14)
+    // Left-stick centre measured by the F1 calibration, in raw axis units (-32767..32767). A worn stick rests off zero,
+    // and a radial dead zone cannot fix that: it removes the small signal but the axis still leans one way, which is why
+    // "push back" turns into a slow walk (issue #76). Subtracted before the dead zone, so the game sees a centred stick.
+    int ls_center_x = 0, ls_center_y = 0;
     double stick_deadzone = 0.10;  // left stick, radial, 0..0.5, applied before the game's own dead zone
     double right_deadzone = 0.10;  // right stick (looking), same rule
     double stick_max = 1.0;        // left stick, 0.5..1: the fraction of the travel that counts as full deflection (1 = off). A pad whose stick tops out below 1 reaches full speed with this lowered

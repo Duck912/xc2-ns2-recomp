@@ -70,6 +70,8 @@ struct LivePadConfig {
     float right_deadzone = 0.10f;
     float look_sens = 1.0f;
     float mouse_stick_scale = 8.0f;   // keyboard/mouse camera: mouse counts for a full right-stick deflection
+    int ls_center_x = 0, ls_center_y = 0;   // left-stick centre from the F1 calibration, subtracted before the dead zone
+    float raw_ls_x = 0, raw_ls_y = 0;       // the left stick as the pad reports it, for the calibration readout
     bool invert_y = false;
     bool rumble = true;
     float rumble_scale = 1.0f;
@@ -79,6 +81,9 @@ LivePadConfig live_pad_config();
 // gamepad navigation (- + + chord, A/B/D-pad) and Live Switch Pad Monitor work live. Returns the Switch button mask
 // currently held back from the game by the overlay (e.g. buttons still held right after closing the menu).
 uint64_t note_external_pad(uint64_t buttons, int lx, int ly, int rx, int ry);
+// The left stick as the pad reports it (-1..1, y up), published by the external input source so the F1 calibration can
+// show it and the player can see how far the rest position has drifted (issue #76).
+void publish_raw_left_stick(float x, float y);
 
 // Counters for the tests and the log.
 struct Stats {

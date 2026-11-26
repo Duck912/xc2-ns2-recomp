@@ -653,6 +653,12 @@ void LiveInput::live(nxrt::hid::InputSnapshot &out) {
             if (raw.axes[2] * raw.axes[2] > prx * prx) prx = raw.axes[2];
             { const int v = -raw.axes[3]; if (v * v > pry * pry) pry = v; }
         }
+        // What the pad reports, before anything is applied: the F1 calibration shows it and stores the rest position.
+        nxrt::play::publish_raw_left_stick(static_cast<float>(px) / 32767.0f, static_cast<float>(py) / 32767.0f);
+        // A worn stick rests off zero, and a radial dead zone cannot fix that: it removes the small signal but the axis
+        // still leans one way, so "push back" becomes a slow walk (issue #76). Subtract the measured centre first.
+        px = std::clamp(px - pcfg.ls_center_x, -32767, 32767);
+        py = std::clamp(py - pcfg.ls_center_y, -32767, 32767);
         auto apply_deadzone = [](int &sx, int &sy, float dz) {
             const float fx = static_cast<float>(sx) / 32767.0f;
             const float fy = static_cast<float>(sy) / 32767.0f;

@@ -28,6 +28,7 @@
 #include "nxrt/nvn_backend.h"
 #include "nvn/nvn_mirror_cap.h"
 #include "nxrt/overlay.h"
+#include "nxrt/play.h"
 #include "nxrt/platform.h"
 #include "play_game.h"
 #include "play_hints.h"
@@ -1408,6 +1409,36 @@ void tab_controls(UiHost& host, const LiveStatus& live, Page& p, float bottom_h)
                       "过滤右摇杆（旋转视角）中心轻微漂移。",
                       "Filters minor right-stick drift near centre.", &pad.right_deadzone, 0.0, 0.50, 0.02, "%.2f", false, true)) {
         mark(p);
+    }
+    {   // Left-stick calibration (issue #76): a stick that rests off zero cannot be fixed by a dead zone.
+        const nxrt::play::LivePadConfig lp = nxrt::play::live_pad_config();
+        ImGui::TextColored(kDimText, "%s  x %+.2f  y %+.2f", tr("左摇杆原始值:", "Left stick, raw:"), lp.raw_ls_x, lp.raw_ls_y);
+        ImGui::SameLine();
+        if (ImGui::SmallButton(tr("以此为中位", "Set centre here"))) {
+            p.edit.pad.ls_center_x = static_cast<int>(std::lround(static_cast<double>(lp.raw_ls_x) * 32767.0));
+            p.edit.pad.ls_center_y = static_cast<int>(std::lround(static_cast<double>(lp.raw_ls_y) * 32767.0));
+            mark(p);
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton(tr("清除校准", "Clear"))) {
+            p.edit.pad.ls_center_x = p.edit.pad.ls_center_y = 0;
+            mark(p);
+        }
+        double cx = static_cast<double>(p.edit.pad.ls_center_x), cy = static_cast<double>(p.edit.pad.ls_center_y);
+        if (card_slider_f("ls_cx", "左摇杆中位 X", "Left stick centre X",
+                          "静止时摇杆报出的 X 值（原始单位）。手柄用久了会偏向一侧，导致一个方向走得慢；把静止位置设成中位即可抵消。",
+                          "The X the stick reports at rest, in raw units. A worn stick leans one way and that direction then walks slowly.",
+                          &cx, -8000.0, 8000.0, 25.0, "%.0f", false, true)) {
+            p.edit.pad.ls_center_x = static_cast<int>(std::lround(cx));
+            mark(p);
+        }
+        if (card_slider_f("ls_cy", "左摇杆中位 Y", "Left stick centre Y",
+                          "同上，Y 轴。先按住不动，看上面的原始值稳定后点「以此为中位」。",
+                          "Same for Y. Hold the stick still, watch the raw value settle, then press Set centre here.",
+                          &cy, -8000.0, 8000.0, 25.0, "%.0f", false, true)) {
+            p.edit.pad.ls_center_y = static_cast<int>(std::lround(cy));
+            mark(p);
+        }
     }
     if (card_slider_f("look_s", "右摇杆视角灵敏度", "Right-stick look sensitivity",
                       "控制手柄右摇杆旋转镜头的速度倍率（0.25x ~ 3.00x，实时生效）。",
