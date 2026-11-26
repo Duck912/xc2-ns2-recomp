@@ -10,7 +10,16 @@
 
 #include "nxrt/input_source.h"
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
 namespace nxrt::play {
+
+std::string default_menu_lang() {
+    return PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_CHINESE ? "zh" : "en";
+}
 namespace {
 
 std::string trim(const std::string& s) {

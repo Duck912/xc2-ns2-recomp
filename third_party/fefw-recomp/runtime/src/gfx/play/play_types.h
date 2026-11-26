@@ -24,6 +24,9 @@
 
 namespace nxrt::play {
 
+// The settings page's language before the player picks one: Chinese when Windows shows Chinese, else English.
+std::string default_menu_lang();
+
 // ---- contexts ----------------------------------------------------------------------------------------------------------------
 // Play: the game in play. Alt: in play in the alternate body (a second control scheme). Inspect: in play with an inspect mode on.
 enum class Ctx : uint8_t { All = 0, Play, Alt, Map, Menu, Inspect, kCount };
@@ -230,7 +233,7 @@ struct FpsSettings {
     Corner corner = Corner::TopLeft;                     // [fps] corner
     int detail = 1;                                      // [fps] detail: 0 frame rate only, 1 frame rate and frame time, 2 also the 1% low and the worst frame
     bool in_screenshots = false;                         // [fps] in_screenshots: the counter is drawn into screenshots too (test tooling asks for this)
-    std::string menu_lang = "zh";                        // [fps] menu_lang: "zh" (Simplified Chinese) or "en" (English)
+    std::string menu_lang = default_menu_lang();         // [fps] menu_lang: "zh" (Simplified Chinese) or "en" (English)
 };
 
 // ---- 3D game resolution & upscaler (synced with nxrt.ini: [am], [xc2], [dlss], [upscale], [nvn]) ----
