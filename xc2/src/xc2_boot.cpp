@@ -67,7 +67,7 @@
 // is written with, and every one of them can be changed in the F1 page (controls.ini is the file that page edits).
 static const char* const kXc2SettingsText = R"INI(
 [meta]
-defaults_rev = 10
+defaults_rev = 11
 
 [bindings.all]
 # movement: WASD and the arrow keys
@@ -104,14 +104,13 @@ R = btn_zr
 # the shoulders
 F = btn_l
 G = btn_r
-# menu (Tab) and map (M); Esc stays cancel (B), which is what people expect
+# menu (Tab); Esc stays cancel (B), which is what people expect. M carries the left-stick click (it was on V).
 Tab = btn_plus
-M = btn_minus
+M = btn_lstick
 # the wheel scrolls: one notch is one d-pad step (menus, lists, the arts palette)
 WheelUp = dpad_up
 WheelDown = dpad_down
-# stick clicks
-V = btn_lstick
+# stick clicks (the left one sits on M, see above)
 Left Ctrl = btn_rstick
 )INI";
 
@@ -141,6 +140,7 @@ static const nxrt::play::GameDefaultAddition kXc2Additions[] = {
     {7, nxrt::play::Ctx::All, "Backspace", nxrt::play::Act::BtnB},
     {7, nxrt::play::Ctx::All, "Escape", nxrt::play::Act::BtnB},
     {7, nxrt::play::Ctx::All, "Mouse3", nxrt::play::Act::BtnR},
+    {11, nxrt::play::Ctx::All, "M", nxrt::play::Act::BtnLStick},
     {10, nxrt::play::Ctx::All, "WheelUp", nxrt::play::Act::DpadUp},
     {10, nxrt::play::Ctx::All, "WheelDown", nxrt::play::Act::DpadDown},
     {9, nxrt::play::Ctx::All, "1", nxrt::play::Act::BtnY},
@@ -199,7 +199,7 @@ static const nxrt::play::GameDefaults& xc2_play_defaults() {
     static const nxrt::play::GameDefaults d = [] {
         nxrt::play::GameDefaults g;
         g.settings_text = kXc2SettingsText;
-        g.defaults_rev = 10;
+        g.defaults_rev = 11;
         g.additions = kXc2Additions;
         g.addition_count = static_cast<unsigned>(sizeof kXc2Additions / sizeof kXc2Additions[0]);
         g.vocabulary = &xc2_vocabulary();

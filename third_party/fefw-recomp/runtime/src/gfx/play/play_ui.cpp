@@ -1437,8 +1437,8 @@ void tab_controls(UiHost& host, const LiveStatus& live, Page& p, float bottom_h)
                 "F = L，G = R，Q / R = ZL / ZR（技能盘翻页），右键 = R（锁定）。",
                 "F = L, G = R, Q/R = ZL/ZR (arts palette paging), right click = R (lock on).", "F / G / Q / R / 右键");
     card_button("kb_sys", "菜单 / 地图 / 滚轮 / 摇杆下压", "PLUS / MINUS / Wheel / L3 / R3",
-                "Tab = PLUS（主菜单），M = MINUS（地图），滚轮 = 十字键上/下，V = 左摇杆按下，Ctrl = 右摇杆按下；手柄同时按 - 与 + 可呼出本 F1 菜单。",
-                "Tab = PLUS (menu), M = MINUS (map), wheel = d-pad up/down, V/Ctrl = L3/R3. Gamepad MINUS + PLUS toggles F1 menu.", "Tab / M / 滚轮 / V · Ctrl");
+                "Tab = PLUS（主菜单），M = 左摇杆按下，滚轮 = 十字键上/下，Ctrl = 右摇杆按下；手柄同时按 - 与 + 可呼出本 F1 菜单。",
+                "Tab = PLUS (menu), M = left stick click, wheel = d-pad up/down, Ctrl = right stick click. Gamepad MINUS + PLUS toggles F1 menu.", "Tab / M / 滚轮 / Ctrl");
 
     pane_end(live);
 }
