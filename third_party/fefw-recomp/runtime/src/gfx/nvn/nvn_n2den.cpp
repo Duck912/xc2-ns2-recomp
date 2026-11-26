@@ -6,6 +6,7 @@
 
 #ifdef NXRT_HAVE_N2DEN
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstring>
@@ -21,6 +22,7 @@
 #include "nxrt/dispatch.h"
 #include "nxrt/kernel.h"
 #include "nxrt/log.h"
+#include "nxrt/memory.h"
 #include "nxrt/nvn.h"
 
 namespace nxrt::nvn::n2den {
@@ -81,6 +83,22 @@ uint64_t TimeNs(void*) {
 }
 void SleepNs(void*, int64_t ns) { kernel::sleep_ns(ns); }
 
+// A small private view of heap pages (mem::heap_private_view, as this runtime's own pool import does): the
+// driver then walks only that mapping when n2den imports a pool (EDEN_NVN_ALIAS_IMPORT=1).
+void* MapView(void*, uint64_t address, uint64_t size, void** view) {
+    if (!mem::heap_has_section() || address < mem::kHeapBase) return nullptr;
+    const uint64_t soff = address - mem::kHeapBase;
+    if (soff + size > mem::heap_reserved()) return nullptr;
+    const uint64_t voff = soff & ~(mem::kAllocGranularity - 1);
+    const uint64_t delta = soff - voff;
+    const uint64_t vsize = (delta + size + mem::kAllocGranularity - 1) & ~(mem::kAllocGranularity - 1);
+    void* v = mem::heap_private_view(voff, std::min<uint64_t>(vsize, mem::heap_reserved() - voff));
+    if (!v) return nullptr;
+    *view = v;
+    return static_cast<uint8_t*>(v) + delta;
+}
+void UnmapView(void*, void* view) { mem::heap_private_view_unmap(view); }
+
 }  // namespace
 
 bool available() { return true; }
@@ -106,6 +124,8 @@ bool start(const StartDesc& desc, std::string* error) {
     info.host.guest_clock_ticks = ClockTicks;
     info.host.guest_time_ns = TimeNs;
     info.host.sleep_guest_ns = SleepNs;
+    info.host.map_view = MapView;
+    info.host.unmap_view = UnmapView;
     std::string err;
     if (!N2denNvnhle::Start(info, &err)) {
         NXLOG_E(kTag, "n2den NVN-HLE failed to start: %s", err.c_str());
