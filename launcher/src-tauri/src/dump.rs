@@ -59,10 +59,10 @@ pub fn game_path(p: &Path) -> String {
     }
 }
 
-/// The builds of main this recomp supports: xcde/supported_builds.txt, one `<40 hex build id> <version>` per line
+/// The builds of main this recomp supports: xc2/supported_builds.txt, one `<40 hex build id> <version>` per line
 /// ('#' comments). The Switch 2 program's main (the ExeFS the setup recompiles).
 pub fn supported_builds(repo: &Path) -> Vec<(String, String)> {
-    let text = fs::read_to_string(repo.join("xcde").join("supported_builds.txt")).unwrap_or_default();
+    let text = fs::read_to_string(repo.join("xc2").join("supported_builds.txt")).unwrap_or_default();
     let mut out = Vec::new();
     for line in text.lines() {
         let line = line.split('#').next().unwrap_or("").trim();

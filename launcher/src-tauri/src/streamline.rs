@@ -34,7 +34,7 @@ const FILES: [&str; 13] = [
     "license.txt",
     "3rd-party-licenses.md",
 ];
-pub(crate) const AGENT: &str = "xcde-launcher";
+pub(crate) const AGENT: &str = "xc2-launcher";
 /// Downloads and the unpacked zip, inside the folder the files go to (removed when done).
 const WORK: &str = ".download";
 

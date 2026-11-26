@@ -26,7 +26,7 @@ const SECTIONS = [
       { id: 'operation_mode', type: 'select', label: 'settings.opMode.label', sec: 'am', key: 'operation_mode', def: 'docked',
         options: [['docked', 'settings.opMode.docked'], ['handheld', 'settings.opMode.handheld']],
         hint: 'settings.opMode.hint' },
-      // NVN-HLE draws XC:DE: its own upscaler, DLSS model, window scaler and VSync ([nvnhle] in nxrt.ini; the in-game F1
+      // NVN-HLE draws XC2: its own upscaler, DLSS model, window scaler and VSync ([nvnhle] in nxrt.ini; the in-game F1
       // Graphics page writes the same keys). The runtime renderer's options (TAAU, FSR 3, frame generation, HDR, present
       // mode) do not reach NVN-HLE and are not offered.
       { id: 'nh_upscaler', type: 'select', label: 'settings.nhUpscaler.label', sec: 'nvnhle', key: 'upscaler', def: 'console',

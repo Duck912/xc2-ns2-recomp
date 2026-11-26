@@ -3,8 +3,8 @@
 //! platform (XC2-package-dist-*.zip) with curl (Windows' own curl.exe), checks it against the SHA-256 digest GitHub lists for
 //! the asset, unpacks it with tar (Windows' own tar.exe) and moves the new files over the install folder. Everything the old
 //! package had is moved to update/old first and moved back if any step fails.
-//! The player's files (xcde.exe, nxrt.ini, controls.ini, save/, shader_cache/, logs) are not in the zip and stay as they are.
-//! Afterwards `rebuild_needed` checks whether xcde.exe is missing or the hook tables / stub sources changed.
+//! The player's files (xc2.exe, nxrt.ini, controls.ini, save/, shader_cache/, logs) are not in the zip and stay as they are.
+//! Afterwards `rebuild_needed` checks whether xc2.exe is missing or the hook tables / stub sources changed.
 
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -18,18 +18,18 @@ use std::time::Duration;
 /// The GitHub repository whose releases the launcher follows. FEFW_UPDATE_REPO at build time: a fork's launcher follows the fork.
 pub const REPO: &str = match option_env!("FEFW_UPDATE_REPO") {
     Some(r) => r,
-    None => "Duck912/xcde-ns2-recomp",
+    None => "Duck912/xc2-ns2-recomp",
 };
 /// FEFW_BUILD_ID at build time: the release tag this launcher was built for (a fork tagging its releases by commit). Any other
 /// latest release then counts as newer, as tags like that have no order.
 pub const BUILD_ID: Option<&str> = option_env!("FEFW_BUILD_ID");
 /// The release asset for this platform, and files a downloaded package must have.
 #[cfg(windows)]
-const PACKAGE: (&str, &str, [&str; 4]) = (".zip", "Windows", ["xcde-launcher.exe", "runtime/xc2_rt.dll", "engine/xcde_setup.py", "tools/python/python.exe"]);
+const PACKAGE: (&str, &str, [&str; 4]) = (".zip", "Windows", ["xc2-launcher.exe", "runtime/xc2_rt.dll", "engine/xc2_nvnhle_setup.py", "tools/python/python.exe"]);
 #[cfg(not(windows))]
 const PACKAGE: (&str, &str, [&str; 4]) =
-    ("-linux-x64.tar.gz", "Linux", ["xcde-launcher.AppImage", "runtime/xc2_rt.dll", "engine/xcde_setup.py", "tools/python/bin/python3"]);
-const AGENT: &str = "xcde-launcher";
+    ("-linux-x64.tar.gz", "Linux", ["xc2-launcher.AppImage", "runtime/xc2_rt.dll", "engine/xc2_nvnhle_setup.py", "tools/python/bin/python3"]);
+const AGENT: &str = "xc2-launcher";
 const CURL: &str = if cfg!(windows) { "curl.exe" } else { "curl" };
 const TAR: &str = if cfg!(windows) { "tar.exe" } else { "tar" };
 /// The launcher's working folder inside the install folder: downloads, the unpacked package, the previous version's files.
@@ -464,11 +464,11 @@ pub fn install(install: &Path, top: &Path, old: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Whether the updated package requires rebuilding xcde.exe. Compares `install/xc2` against `update/old/xc2`
+/// Whether the updated package requires rebuilding xc2.exe. Compares `install/xc2` against `update/old/xc2`
 /// saved aside during `install()` (because `tar -m` gives all unpacked files the current timestamp).
 pub fn rebuild_needed(install: &Path, game_dir: &Path) -> (Option<bool>, String) {
-    if !game_dir.join("xcde.exe").is_file() {
-        return (Some(true), "xcde.exe is not built yet".into());
+    if !game_dir.join("xc2.exe").is_file() {
+        return (Some(true), "xc2.exe is not built yet".into());
     }
     let old_dir = install.join(WORK).join("old");
     if !old_dir.is_dir() {
@@ -649,7 +649,7 @@ mod tests {
         put(inst.join("xc2/sites/main.txt"), "same");
         put(old.join("xc2/sites/main.txt"), "same");
         assert_eq!(rebuild_needed(&inst, &inst).0, Some(true));
-        put(inst.join("xcde.exe"), "exe");
+        put(inst.join("xc2.exe"), "exe");
         assert_eq!(rebuild_needed(&inst, &inst), (Some(false), String::new()));
         put(inst.join("xc2/sites/main.txt"), "changed");
         assert_eq!(rebuild_needed(&inst, &inst).0, Some(true));

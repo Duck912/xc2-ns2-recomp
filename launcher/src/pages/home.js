@@ -104,11 +104,11 @@ async function renderFiles(el, ctx, cfg, status) {
       : chosen
         ? `<div class="tile"><span class="badge ok">${icon('check')}</span><div class="grow"><div class="title">${esc(t('wiz.files.ready'))}</div><div class="detail">${esc(report.path)}</div>
              <div class="checks">${chosen.checks.map((c) => `<span class="${c.ok ? 'ok' : 'bad'}">${c.ok ? '&#10003;' : '&#10007;'} ${esc(c.label)}</span>`).join('')}
-             ${report.dlc?.length ? `<span class="ok">&#10003; ${esc(t('wiz.files.addon'))} ${esc(report.dlc.join(', '))}</span>` : `<span class="bad">&#10007; ${esc(t('wiz.files.noAddon'))}</span>`}</div></div></div>`
+             ${report.dlc?.length ? `<span class="ok">&#10003; ${esc(t('wiz.files.addon'))} ${esc(report.dlc.join(', '))}</span>` : `<span>${esc(t('wiz.files.noAddon'))}</span>`}</div></div></div>`
         : report
           ? `<div class="tile"><span class="badge bad">${icon('x')}</span><div class="grow"><div class="title">${esc(t('wiz.files.notUsable'))}</div><div class="detail">${esc(report.path)}</div>${(report.errors || []).map((e) => `<div class="detail">${esc(e)}</div>`).join('')}</div></div>`
           : `<div class="tile"><div class="grow"><div class="detail">${esc(t('wiz.files.none'))}</div></div></div>`;
-    const ok = Boolean(chosen && report.dlc?.length) && missing.length === 0 && !busy;
+    const ok = Boolean(chosen) && missing.length === 0 && !busy;   // XC2's add-ons are optional
     el.innerHTML = `<div class="wiz">
       <h1>${esc(t('wiz.files.title'))}</h1>
       <p class="lead">${esc(t('wiz.files.lead'))}</p>

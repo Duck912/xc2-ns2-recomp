@@ -231,7 +231,7 @@ fn get_overview(app: AppHandle) -> Overview {
     let cfg = load_config(&app);
     match repo_of(&cfg) {
         Some(repo) => {
-            let exe = if package_tools().is_some() { game_dir_of(&cfg, &repo).join("xcde.exe") } else { setup::exe_path(&repo) };
+            let exe = if package_tools().is_some() { game_dir_of(&cfg, &repo).join("xc2.exe") } else { setup::exe_path(&repo) };
             Overview {
                 repo_dir: dump::fwd(&repo),
                 repo_ok: true,
@@ -388,7 +388,7 @@ fn upscaler_files(app: AppHandle, fsr_dir: String, dlss_dir: String) -> Result<U
     let cfg = load_config(&app);
     let repo = need_repo(&cfg)?;
     let game = game_dir_of(&cfg, &repo);
-    let exe = if package_tools().is_some() { game.join("xcde.exe") } else { setup::exe_path(&repo) };
+    let exe = if package_tools().is_some() { game.join("xc2.exe") } else { setup::exe_path(&repo) };
     let mut fsr = upscaler_dirs(&fsr_dir, "fsr3", &game, &exe);
     for d in upscaler_dirs(&fsr_dir, "fsr", &game, &exe) {
         if !fsr.contains(&d) {
@@ -749,7 +749,7 @@ fn game_run_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let cfg = load_config(app);
     let repo = need_repo(&cfg)?;
     let game = game_dir_of(&cfg, &repo);
-    let exe = if package_tools().is_some() { game.join("xcde.exe") } else { setup::exe_path(&repo) };
+    let exe = if package_tools().is_some() { game.join("xc2.exe") } else { setup::exe_path(&repo) };
     Ok(exe.parent().map(|d| d.to_path_buf()).unwrap_or(game))
 }
 
@@ -869,7 +869,7 @@ fn cancel_fsr_download(state: State<'_, Arc<fsr::Shared>>) {
 fn restart_launcher(app: AppHandle) -> Result<(), String> {
     let exe = match std::env::var_os("APPIMAGE") {
         Some(a) if !cfg!(windows) => PathBuf::from(a),
-        _ => exe_dir().join(if cfg!(windows) { "xcde-launcher.exe" } else { "xcde-launcher" }),
+        _ => exe_dir().join(if cfg!(windows) { "xc2-launcher.exe" } else { "xc2-launcher" }),
     };
     let mut c = std::process::Command::new(&exe);
     setup::host_env(&mut c); // not this AppImage's environment: its mount goes away when this launcher exits

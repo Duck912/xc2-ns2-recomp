@@ -24,7 +24,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// The steps tools/setup/xcde_setup.py runs in a checkout (XC:DE on NVN-HLE; docs/RELEASE-PLAN.md).
+/// The steps tools/setup/xc2_nvnhle_setup.py runs in a checkout (XC2 on NVN-HLE; docs/RELEASE-PLAN.md).
 pub const STEPS: [(&str, &str); 9] = [
     ("doctor", "Check this machine"),
     ("sources", "Fetch the build sources"),
@@ -38,7 +38,7 @@ pub const STEPS: [(&str, &str); 9] = [
 ];
 
 /// The steps a release package runs: the engine has nothing to fetch and no runtime to build there, because the
-/// runtime and the compilers travel with it. Must match what xcde_setup.py reports in package mode.
+/// runtime and the compilers travel with it. Must match what xc2_nvnhle_setup.py reports in package mode.
 pub const PACKAGE_STEP_IDS: [&str; 7] = ["tools", "doctor", "ingest", "lift", "link", "streamline", "done"];
 
 fn step_title(id: &str) -> &'static str {
@@ -115,7 +115,7 @@ impl Paths {
     }
     pub fn exe(&self) -> PathBuf {
         match &self.package {
-            Some(_) => self.in_game(&["xcde.exe"]),
+            Some(_) => self.in_game(&["xc2.exe"]),
             None => exe_path(&self.repo),
         }
     }
@@ -205,7 +205,7 @@ pub(crate) fn package_python(tools: &Path) -> PathBuf {
 }
 
 pub fn exe_path(repo: &Path) -> PathBuf {
-    repo.join("xcde").join("build").join("200").join("boot-n2den").join("xcde.exe")
+    repo.join("xc2").join("build").join("301").join("boot-n2den").join("xc2.exe")
 }
 
 pub const MODULES: [&str; 6] = ["main", "sdk", "subsdk0", "subsdk1", "subsdk2", "rtld"];
@@ -709,7 +709,7 @@ pub fn check_tools(package: bool) -> Vec<Tool> {
          "LLVM 23 or newer from github.com/llvm/llvm-project/releases (or set NX_LLVM to its bin folder, or NX_TOOLCHAIN to a folder with llvm\\bin)."),
         ("CMake", find_tool(&["cmake.exe"], &[pf(r"CMake\bin\cmake.exe")]), "CMake 3.25 or newer (winget install Kitware.CMake)."),
         ("Ninja", find_tool(&["ninja.exe"], &[local_appdata(r"Microsoft\WinGet\Links\ninja.exe")]), "winget install Ninja-build.Ninja"),
-        // XC:DE on NVN-HLE needs no .NET SDK (XC2's shader translator) and no uv (only the unused legacy setup path).
+        // XC2 on NVN-HLE needs no .NET SDK (XC2's shader translator) and no uv (only the unused legacy setup path).
         ("Python 3.12 (lz4, capstone, zstandard)", python_path(),
          "Python 3.12 with lz4, capstone and zstandard (pip install lz4 capstone zstandard), or set XC2_PYTHON to it. The Store alias on PATH is not one."),
         ("Git", find_tool(&["git.exe"], &[pf(r"Git\cmd\git.exe")]), "winget install Git.Git (fetches third-party sources during setup)."),
@@ -872,16 +872,16 @@ fn shader_steps(r: &Runner, p: &Paths, jobs: usize, cwd: &Path) -> Result<bool, 
 fn engine_script(repo: &Path) -> PathBuf {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            let p = dir.join("engine").join("xcde_setup.py");
+            let p = dir.join("engine").join("xc2_nvnhle_setup.py");
             if p.is_file() {
                 return p;
             }
         }
     }
-    repo.join("tools").join("setup").join("xcde_setup.py")
+    repo.join("tools").join("setup").join("xc2_nvnhle_setup.py")
 }
 
-/// Runs the setup engine (engine/xcde_setup.py). The launcher is only the view: the engine writes setup/status.json and the
+/// Runs the setup engine (engine/xc2_nvnhle_setup.py). The launcher is only the view: the engine writes setup/status.json and the
 /// checklist above reads it back.
 fn run_steps(r: &Runner, p: &Paths, _jobs: usize) -> Result<bool, String> {
     let engine = engine_script(&p.repo);

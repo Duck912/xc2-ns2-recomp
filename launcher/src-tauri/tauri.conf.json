@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "xcde-launcher",
+  "productName": "xc2-launcher",
   "version": "0.1.0",
   "identifier": "io.github.weile10000.xc2-ns2-recomp",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "XC:DE NS2 recomp launcher",
+        "title": "XC2 NS2 recomp launcher",
         "width": 980,
         "height": 660,
         "minWidth": 860,
