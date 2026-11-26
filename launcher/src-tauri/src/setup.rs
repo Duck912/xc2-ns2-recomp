@@ -706,10 +706,10 @@ pub fn check_tools(package: bool) -> Vec<Tool> {
          "LLVM 23 or newer from github.com/llvm/llvm-project/releases (or set NX_LLVM to its bin folder, or NX_TOOLCHAIN to a folder with llvm\\bin)."),
         ("CMake", find_tool(&["cmake.exe"], &[pf(r"CMake\bin\cmake.exe")]), "CMake 3.25 or newer (winget install Kitware.CMake)."),
         ("Ninja", find_tool(&["ninja.exe"], &[local_appdata(r"Microsoft\WinGet\Links\ninja.exe")]), "winget install Ninja-build.Ninja"),
-        ("uv (Python)", find_tool(&["uv.exe"], &[local_appdata(r"Microsoft\WinGet\Links\uv.exe")]), "winget install astral-sh.uv"),
-        ("Python 3.12 (zstandard)", python_path(), "Python 3.12 with zstandard (pip install zstandard), or set XC2_PYTHON to it. The Store alias on PATH is not one."),
-        (".NET SDK", find_tool(&["dotnet.exe"], &[pf(r"dotnet\dotnet.exe")]), ".NET 10 SDK (winget install Microsoft.DotNet.SDK.10)."),
-        ("Git", find_tool(&["git.exe"], &[pf(r"Git\cmd\git.exe")]), "winget install Git.Git (fetches the shader translator's sources)."),
+        // XC:DE on NVN-HLE needs no .NET SDK (XC2's shader translator) and no uv (only the unused legacy setup path).
+        ("Python 3.12 (lz4, capstone, zstandard)", python_path(),
+         "Python 3.12 with lz4, capstone and zstandard (pip install lz4 capstone zstandard), or set XC2_PYTHON to it. The Store alias on PATH is not one."),
+        ("Git", find_tool(&["git.exe"], &[pf(r"Git\cmd\git.exe")]), "winget install Git.Git (fetches third-party sources during setup)."),
     ];
     let mut out: Vec<Tool> = items
         .into_iter()

@@ -77,7 +77,16 @@ class Runner:
         if not self.dry:
             tmp = self.status_path.with_suffix(".tmp")
             tmp.write_text(json.dumps(self.status, indent=1), encoding="utf-8")
-            os.replace(tmp, self.status_path)
+            # The launcher reads status.json while the engine runs; on Windows a replace that meets its open handle fails
+            # with "Access is denied" (a finished XC:DE setup failed in its last step that way, 2026-11-26). Retry briefly.
+            for attempt in range(40):
+                try:
+                    os.replace(tmp, self.status_path)
+                    break
+                except PermissionError:
+                    if attempt == 39:
+                        raise
+                    time.sleep(0.05)
 
     def announce(self):
         """One "@progress setup <done> <total>" line: the launcher's bar, and nothing else reads it."""
