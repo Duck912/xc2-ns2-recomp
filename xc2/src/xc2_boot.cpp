@@ -67,6 +67,10 @@
 // Switch-pad output into every snapshot, for any game. XC2 had no factory bindings, so the engine had nothing to
 // apply and the hardcoded keys in LiveInput below were the only way in. These are the defaults a fresh controls.ini
 // is written with, and every one of them can be changed in the F1 page (controls.ini is the file that page edits).
+// The window title: the game module's title, or XC:DE's when xc2_boot runs that game (--game xcde).
+static const char* g_window_title = nullptr;
+static const char* window_title() { return g_window_title ? g_window_title : nxrt::game::info().title; }
+
 static const char* const kXc2SettingsText = R"INI(
 [meta]
 defaults_rev = 12
@@ -2585,7 +2589,7 @@ static bool run_shader_prepare(bool interactive, bool force, const std::string& 
                 title_changed = true;
                 char buf[160];
                 const int pct = static_cast<int>(d * 100 / t);
-                std::snprintf(buf, sizeof buf, "%s - Preparing Shaders %d%% (%llu / %llu)", nxrt::game::info().title, pct,
+                std::snprintf(buf, sizeof buf, "%s - Preparing Shaders %d%% (%llu / %llu)", window_title(), pct,
                               static_cast<unsigned long long>(d), static_cast<unsigned long long>(t));
                 nxrt::platform::set_window_title(buf);
             }
@@ -2593,7 +2597,7 @@ static bool run_shader_prepare(bool interactive, bool force, const std::string& 
             cv.wait_for(lk, std::chrono::milliseconds(100), [&] { return finished.load(std::memory_order_acquire); });
         }
         worker.join();
-        if (title_changed) nxrt::platform::set_window_title(nxrt::game::info().title);
+        if (title_changed) nxrt::platform::set_window_title(window_title());
     }
 
     if (cancelled) *cancelled = res.cancelled;
@@ -2687,6 +2691,7 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++)
         if (!std::strcmp(argv[i], "--game") && i + 1 < argc && !std::strcmp(argv[i + 1], "xcde")) game_xcde = true;
     if (const char* g = std::getenv("XC2_GAME"); g && !std::strcmp(g, "xcde")) game_xcde = true;
+    if (game_xcde) g_window_title = "Xenoblade Chronicles: Definitive Edition (Switch 2 Edition)";
     if (nvn_n2den && (headless || !nxrt::nvn::n2den::available()))
         die(headless ? "--nvn n2den needs a window" : "this build has no n2den NVN-HLE (configure the runtime with NXRT_N2DEN_DIST)");
     std::unique_ptr<nxrt::gfx::Device> gfx_device;
@@ -2697,7 +2702,7 @@ int main(int argc, char **argv) {
     if (!headless) {
         nxrt::platform::init();
         nxrt::platform::WindowDesc wd;
-        wd.title = nxrt::game::info().title;
+        wd.title = window_title();
         start_borderless = (play_disp.window_mode == "borderless");
         start_exclusive = (play_disp.window_mode == "exclusive");
         const bool start_fullscreen = start_borderless || start_exclusive;

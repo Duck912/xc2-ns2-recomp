@@ -192,3 +192,11 @@ Fixed on the way:
 
 Still open: the window title says XC2 (the registered game module's title), one fragment shader rejected
 by n2den's front end ("unknown bit 80", logged once), movies, overlay/screenshots, PC DLSS.
+
+### DLSS in the recomp needs Streamline (2026-11-26)
+
+n2den's library looks for NVIDIA Streamline in `<boot dir>\user\streamline` (sl.interposer.dll + nvidia-app). Without
+it the game's DLSS calls fall back to an FSR1 stretch ("written by the FSR1 (DLSS unavailable) stage" in
+`user\log\eden_log.txt`), which looks like no AA. Copying the emulator's `%APPDATA%\eden\streamline` there fixed it:
+"written by the DLSS stage". The F1 overlay and F10 counter stay off on the n2den path: n2den owns the swapchain and
+the play overlay draws through the runtime's own renderer, which is not started.
