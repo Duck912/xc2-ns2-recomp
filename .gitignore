@@ -1,0 +1,16 @@
+# Never commit game files, keys or build output
+game/
+dump/
+*.nup
+*.nso
+*.nsp
+*.xci
+exefs/
+romfs/
+build/
+out/
+*.spv
+*.bin
+keys.txt
+prod.keys
+third_party/nxrecomp/
