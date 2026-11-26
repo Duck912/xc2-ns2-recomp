@@ -67,7 +67,7 @@
 // is written with, and every one of them can be changed in the F1 page (controls.ini is the file that page edits).
 static const char* const kXc2SettingsText = R"INI(
 [meta]
-defaults_rev = 6
+defaults_rev = 8
 
 [bindings.all]
 # movement: WASD and the arrow keys
@@ -79,25 +79,37 @@ Up = move_forward
 Down = move_back
 Left = move_left
 Right = move_right
-# camera by keyboard; the mouse is a separate path
+# camera by keyboard; the mouse drives the stick separately (see LiveInput)
 I = look_up
 K = look_down
 J = look_left
 L = look_right
-# face buttons and shoulders
-Space = btn_b
+# attack / confirm (A): E, and the left mouse button the way a PC port does it
+E = btn_a
+Mouse1 = btn_a
 Return = btn_a
+# jump / cancel (B): Space, and the right mouse button
+Space = btn_b
+Mouse2 = btn_b
 Backspace = btn_b
 Escape = btn_b
-U = btn_x
-O = btn_y
-Q = btn_l
-E = btn_a
+# lock-on (R): middle click
 Mouse3 = btn_r
-1 = btn_zl
-2 = btn_zr
+# the arts palette: 1-4 pick the four slots, Q/R page through it (ZL/ZR)
+1 = dpad_up
+2 = dpad_down
+3 = dpad_left
+4 = dpad_right
+Q = btn_zl
+R = btn_zr
+# the shoulders
+F = btn_l
+G = btn_r
+# menu
 Tab = btn_plus
-Left Shift = btn_lstick
+M = btn_minus
+# stick clicks
+V = btn_lstick
 Left Ctrl = btn_rstick
 )INI";
 
@@ -108,39 +120,45 @@ Left Ctrl = btn_rstick
 // means "this file is the whole truth", so the factory text above never reaches them. The additions are what play
 // mode appends to such a file (defaults_rev 3 -> 4), keeping the old one as .bak.
 static const nxrt::play::GameDefaultAddition kXc2Additions[] = {
-    {5, nxrt::play::Ctx::All, "W", nxrt::play::Act::MoveForward},
-    {5, nxrt::play::Ctx::All, "S", nxrt::play::Act::MoveBack},
-    {5, nxrt::play::Ctx::All, "A", nxrt::play::Act::MoveLeft},
-    {5, nxrt::play::Ctx::All, "D", nxrt::play::Act::MoveRight},
-    {5, nxrt::play::Ctx::All, "Up", nxrt::play::Act::MoveForward},
-    {5, nxrt::play::Ctx::All, "Down", nxrt::play::Act::MoveBack},
-    {5, nxrt::play::Ctx::All, "Left", nxrt::play::Act::MoveLeft},
-    {5, nxrt::play::Ctx::All, "Right", nxrt::play::Act::MoveRight},
-    {5, nxrt::play::Ctx::All, "I", nxrt::play::Act::LookUp},
-    {5, nxrt::play::Ctx::All, "K", nxrt::play::Act::LookDown},
-    {5, nxrt::play::Ctx::All, "J", nxrt::play::Act::LookLeft},
-    {5, nxrt::play::Ctx::All, "L", nxrt::play::Act::LookRight},
-    {6, nxrt::play::Ctx::All, "Space", nxrt::play::Act::BtnB},
-    {6, nxrt::play::Ctx::All, "Mouse3", nxrt::play::Act::BtnR},
-    {5, nxrt::play::Ctx::All, "Return", nxrt::play::Act::BtnA},
-    {5, nxrt::play::Ctx::All, "Backspace", nxrt::play::Act::BtnB},
-    {5, nxrt::play::Ctx::All, "Escape", nxrt::play::Act::BtnB},
-    {5, nxrt::play::Ctx::All, "U", nxrt::play::Act::BtnX},
-    {5, nxrt::play::Ctx::All, "O", nxrt::play::Act::BtnY},
-    {5, nxrt::play::Ctx::All, "Q", nxrt::play::Act::BtnL},
-    {6, nxrt::play::Ctx::All, "E", nxrt::play::Act::BtnA},
-    {5, nxrt::play::Ctx::All, "1", nxrt::play::Act::BtnZL},
-    {5, nxrt::play::Ctx::All, "2", nxrt::play::Act::BtnZR},
-    {5, nxrt::play::Ctx::All, "Tab", nxrt::play::Act::BtnPlus},
-    {5, nxrt::play::Ctx::All, "Left Shift", nxrt::play::Act::BtnLStick},
-    {5, nxrt::play::Ctx::All, "Left Ctrl", nxrt::play::Act::BtnRStick},
+    {7, nxrt::play::Ctx::All, "W", nxrt::play::Act::MoveForward},
+    {7, nxrt::play::Ctx::All, "S", nxrt::play::Act::MoveBack},
+    {7, nxrt::play::Ctx::All, "A", nxrt::play::Act::MoveLeft},
+    {7, nxrt::play::Ctx::All, "D", nxrt::play::Act::MoveRight},
+    {7, nxrt::play::Ctx::All, "Up", nxrt::play::Act::MoveForward},
+    {7, nxrt::play::Ctx::All, "Down", nxrt::play::Act::MoveBack},
+    {7, nxrt::play::Ctx::All, "Left", nxrt::play::Act::MoveLeft},
+    {7, nxrt::play::Ctx::All, "Right", nxrt::play::Act::MoveRight},
+    {7, nxrt::play::Ctx::All, "I", nxrt::play::Act::LookUp},
+    {7, nxrt::play::Ctx::All, "K", nxrt::play::Act::LookDown},
+    {7, nxrt::play::Ctx::All, "J", nxrt::play::Act::LookLeft},
+    {7, nxrt::play::Ctx::All, "L", nxrt::play::Act::LookRight},
+    {7, nxrt::play::Ctx::All, "E", nxrt::play::Act::BtnA},
+    {7, nxrt::play::Ctx::All, "Mouse1", nxrt::play::Act::BtnA},
+    {7, nxrt::play::Ctx::All, "Return", nxrt::play::Act::BtnA},
+    {7, nxrt::play::Ctx::All, "Space", nxrt::play::Act::BtnB},
+    {7, nxrt::play::Ctx::All, "Mouse2", nxrt::play::Act::BtnB},
+    {7, nxrt::play::Ctx::All, "Backspace", nxrt::play::Act::BtnB},
+    {7, nxrt::play::Ctx::All, "Escape", nxrt::play::Act::BtnB},
+    {7, nxrt::play::Ctx::All, "Mouse3", nxrt::play::Act::BtnR},
+    {7, nxrt::play::Ctx::All, "1", nxrt::play::Act::DpadUp},
+    {7, nxrt::play::Ctx::All, "2", nxrt::play::Act::DpadDown},
+    {7, nxrt::play::Ctx::All, "3", nxrt::play::Act::DpadLeft},
+    {7, nxrt::play::Ctx::All, "4", nxrt::play::Act::DpadRight},
+    {7, nxrt::play::Ctx::All, "Q", nxrt::play::Act::BtnZL},
+    {7, nxrt::play::Ctx::All, "R", nxrt::play::Act::BtnZR},
+    {7, nxrt::play::Ctx::All, "F", nxrt::play::Act::BtnL},
+    {7, nxrt::play::Ctx::All, "G", nxrt::play::Act::BtnR},
+    {7, nxrt::play::Ctx::All, "Tab", nxrt::play::Act::BtnPlus},
+    {7, nxrt::play::Ctx::All, "M", nxrt::play::Act::BtnMinus},
+    {8, nxrt::play::Ctx::All, "V", nxrt::play::Act::BtnLStick},
+    {7, nxrt::play::Ctx::All, "Left Ctrl", nxrt::play::Act::BtnRStick},
 };
 
 static const nxrt::play::GameDefaults& xc2_play_defaults() {
     static const nxrt::play::GameDefaults d = [] {
         nxrt::play::GameDefaults g;
         g.settings_text = kXc2SettingsText;
-        g.defaults_rev = 6;
+        g.defaults_rev = 8;
         g.additions = kXc2Additions;
         g.addition_count = static_cast<unsigned>(sizeof kXc2Additions / sizeof kXc2Additions[0]);
         return g;
@@ -360,7 +378,7 @@ void LiveInput::live(nxrt::hid::InputSnapshot &out) {
     // which is why this drives the stick instead of a yaw angle. [xc2] mouse_capture = 0 leaves the pointer to the game.
     static const bool mouse_cam = nxrt::config_get_bool("xc2", "mouse_capture", true);
     static const double mouse_full = [] {
-        const double v = nxrt::config_get_double("xc2", "mouse_stick_scale", 25.0);   // counts for full deflection
+        const double v = nxrt::config_get_double("xc2", "mouse_stick_scale", 18.0);   // counts for full deflection
         return v > 1.0 ? v : 1.0;
     }();
     static const bool mouse_invert_y = nxrt::config_get_bool("xc2", "mouse_invert_y", false);
@@ -398,12 +416,20 @@ void LiveInput::live(nxrt::hid::InputSnapshot &out) {
             }
         }
         if (mouse_held) {
+            // This source is polled every 5 ms but the game samples the pad once a frame (~16.7 ms), so the counts have to
+            // outlive the tick that read them: summing them into a decaying accumulator keeps roughly a frame of motion
+            // instead of handing the game only the last 5 ms of it (which is what made the camera crawl).
+            static double acc_x = 0.0, acc_y = 0.0;
             const nxrt::input::MouseDelta d = nxrt::input::mouse_delta_take();
-            if (d.dx != 0.0 || d.dy != 0.0) {
-                const double dy = mouse_invert_y ? -d.dy : d.dy;
-                klx += static_cast<int>(std::lround(std::clamp(d.dx / mouse_full, -1.0, 1.0) * 32767.0));
+            acc_x += d.dx;
+            acc_y += d.dy;
+            if (acc_x != 0.0 || acc_y != 0.0) {
+                const double dy = mouse_invert_y ? -acc_y : acc_y;
+                klx += static_cast<int>(std::lround(std::clamp(acc_x / mouse_full, -1.0, 1.0) * 32767.0));
                 kly += static_cast<int>(std::lround(std::clamp(-dy / mouse_full, -1.0, 1.0) * 32767.0));
             }
+            acc_x *= 0.55;      // ~10 ms of memory: a frame's worth at 60 fps, and no leftover after a stop
+            acc_y *= 0.55;
         }
     }
     if (focused) {
