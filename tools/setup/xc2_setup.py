@@ -1378,6 +1378,13 @@ def step_done(r, repo, install):
 
 
 def main():
+    if "--emit-env" in sys.argv[1:]:
+        # Prints GAME_ENV as KEY=VALUE lines. tools/run/play.ps1 sources this before launching, so a dev run gets the
+        # same switches a package gets from launch.env - the profile no longer keeps a copy that can drift (2026-11-26:
+        # a missing NXRT_NVN_EARLYZ_FS=auto turned distant geometry black and looked like a runtime regression).
+        for key in sorted(GAME_ENV):
+            print("%s=%s" % (key, GAME_ENV[key]))
+        return 0
     ap = argparse.ArgumentParser(description="first run of the XC2 NS2 recompilation")
     ap.add_argument("--repo", required=True)
     ap.add_argument("--install", required=True)

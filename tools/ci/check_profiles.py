@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""A dev/test profile must launch the game with the same switches a package does.
+"""A dev/test profile must not contradict the switches a package launches with.
 
-`tools/setup/xc2_setup.py` owns that list (GAME_ENV, written into `<install>/launch.env` on every setup). A profile
-that drifts from it tests something no player runs, and the failure looks like a game bug rather than a config one:
+`tools/setup/xc2_setup.py` owns that list (GAME_ENV, written into `<install>/launch.env` on every setup, and
+sourced by tools/run/play.ps1 before it starts the game). A profile only carries dev-only extras; a profile that
+overrides a GAME_ENV key tests something no player runs, and the failure looks like a game bug rather than a config one:
 
 2026-11-26 - the dev profile had lost `NXRT_NVN_EARLYZ_FS=auto`. Only the eleven built-in light-list shaders then
 qualified for the registration-mask rebuild, the others logged "is not in earlyz_fs, so the mask is not rebuilt",
@@ -74,11 +75,9 @@ def fix_profile(path, lines, missing, wrong):
 
 
 # Keys a profile may differ on, with the reason. Anything else must match launch.env exactly.
-ALLOWED_DIFFERENT = {
-    # The dev profile asks for the languages the retail console does not ship (American English, Latin American
-    # Spanish) to exercise the fallbacks; a package only lists the ones the game has.
-    "NXRT_TITLE_SUPPORTED_LANGUAGES",
-}
+# Empty on purpose: a profile that overrides a GAME_ENV key is how the earlyz regression happened. If a profile ever
+# needs a different value, list the key here with the reason and check the reason still holds.
+ALLOWED_DIFFERENT = set()
 
 # play.ps1 writes these from the profile's [run] fps / hz after the [env] block, so a profile that sets those two
 # numbers is covered even though it does not repeat them as environment keys.
@@ -118,14 +117,11 @@ def main():
     failed = False
     for path in sorted(PROFILES.glob("*.ini")):
         lines, values = read_env_section(path)
-        missing = []
-        for key in GAME_ENV:
-            if key in values:
-                continue
-            if key in IMPLIED_BY_RUN and run_section_has(lines, "fps" if key == "NXRT_XC2_FPS" else "hz"):
-                continue
-            missing.append(key)
+        # play.ps1 injects GAME_ENV before the profile's [env], so a profile is not required to repeat those keys -
+        # but it must not contradict them: an override is how the earlyz regression happened.
+        inherited = [k for k in GAME_ENV if k not in values]
         wrong = [k for k in GAME_ENV if k in values and values[k] != GAME_ENV[k] and k not in ALLOWED_DIFFERENT]
+        missing = []
         extra = [k for k in values if k not in GAME_ENV]
         name = path.name
         if missing or wrong:
@@ -140,7 +136,7 @@ def main():
                 for key in wrong:
                     print("       different %s: profile has %r, launch.env has %r" % (key, values[key], GAME_ENV[key]))
         else:
-            print("  ok   %s (%d switches)" % (name, len(GAME_ENV)))
+            print("  ok   %s (%d from GAME_ENV, %d set here)" % (name, len(inherited), len(values)))
         for key in extra:
             print("       note  %s = %s is not in launch.env (dev-only switch?)" % (key, values[key]))
 
