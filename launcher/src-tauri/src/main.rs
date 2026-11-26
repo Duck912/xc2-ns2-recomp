@@ -374,6 +374,12 @@ struct Folders {
     built: bool,
 }
 
+/// The page to open on (XC2_LAUNCHER_PAGE), for screenshots; empty: home.
+#[tauri::command]
+fn start_page() -> String {
+    std::env::var("XC2_LAUNCHER_PAGE").unwrap_or_default()
+}
+
 #[tauri::command]
 fn get_folders(app: AppHandle) -> Result<Folders, String> {
     let cfg = load_config(&app);
@@ -1131,6 +1137,7 @@ fn main() {
             clean_scan,
             clean_run,
             get_folders,
+            start_page,
             set_folder,
             steam_status,
             add_to_steam,

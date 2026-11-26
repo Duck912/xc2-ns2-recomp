@@ -107,8 +107,10 @@ async function boot() {
   document.documentElement.lang = getLang();
   drawShell();
   refreshIcons();
-  go('home');
-  if (!cfg.skip_update_check) checkNow();   // quietly: the About page shows the result
+  // XC2_LAUNCHER_PAGE (screenshots, docs): open on files | saves | clean | settings | mods | about instead of home
+  const start = await api('start_page').catch(() => '');
+  go(start === 'files' ? 'setup' : ['saves', ...Object.keys(PANEL)].includes(start) ? start : 'home');
+  if (!cfg.skip_update_check && !start) checkNow();   // quietly: the About page shows the result
 }
 
 boot();
