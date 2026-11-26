@@ -1053,6 +1053,28 @@ static void arm_frame_rate(uint64_t main_base) {
     // (see the top of this file); the media model below still needs its own bump whenever film/decode changes.
     NXLOG_I("xc2", "build stamp: %s media (end of stream is a separate output; the placeholder track ends with the picture)",
             XC2_BUILD_STAMP);
+    // The NXRT_* switches this run got, one line, so a log says which launch chain produced it. 2026-11-26: a dev
+    // profile that had lost NXRT_NVN_EARLYZ_FS=auto looked like a rendering regression in the code, and nothing in the
+    // log said the switch was missing. Paths are left out (they are long and say nothing about behaviour).
+    {
+        std::string switches;
+        if (LPCH block = ::GetEnvironmentStringsA()) {
+            for (const char* e = block; *e; e += std::strlen(e) + 1) {
+                if (std::strncmp(e, "NXRT_", 5) != 0) continue;
+                const char* eq = std::strchr(e, '=');
+                if (!eq) continue;
+                const std::string key(e, static_cast<std::size_t>(eq - e));
+                if (key == "NXRT_NVN_SHADER_CACHE" || key == "NXRT_FS_ROMFS" || key == "NXRT_FS_SAVE_DIR" ||
+                    key == "NXRT_AOC_DIR" || key == "NXRT_NVN_DUMP_MISSING" || key == "NXRT_INI" ||
+                    key == "NXRT_DLSS_HOT_FILE" || key == "NXRT_NVN_SKIP_FS_FILE" || key == "NXRT_NVN_HOT_STATE_FILE")
+                    continue;   // paths
+                if (!switches.empty()) switches += ' ';
+                switches += e;
+            }
+            ::FreeEnvironmentStringsA(block);
+        }
+        NXLOG_I("xc2", "launch switches: %s", switches.empty() ? "(none)" : switches.c_str());
+    }
     if (!nxrt::config_has("nvn", "mirror_capture")) nxrt::config_set("nvn", "mirror_capture", "auto");
     if (!nxrt::config_has("nvn", "snapshot_instances")) nxrt::config_set("nvn", "snapshot_instances", "auto");
     if (!nxrt::config_has("nvn", "present_ahead")) nxrt::config_set("nvn", "present_ahead", "auto");
