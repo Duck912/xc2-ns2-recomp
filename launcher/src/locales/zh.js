@@ -280,7 +280,7 @@ export const zh = {
     'settings.smoothStep.label': '精确游戏时钟',
     'settings.smoothStep.hint': '帧时间波动时保持游戏时间精确。开启 60 帧或 120 帧时默认启用。',
     'settings.frameGen.label': '帧生成',
-    'settings.frameGen.hint': '在相邻真实帧之间插出一帧（文字与 HUD 仍来自真实帧），建议搭配 120 Hz 及以上显示器使用（若受垂直同步限制且显示器不足 120 Hz 会自动暂停）。DLSS 帧生成需 RTX 40 系及以上显卡并开启 Windows 硬件加速 GPU 调度；其它 N 卡（如 RTX 20/30、GTX 系列）以及 AMD、Intel 显卡均可选用 AMD FSR 3 帧生成（不限显卡型号，只需下方「下载 AMD 官方文件」获取的 amd_fidelityfx_vk.dll）。注意：插帧基于运动矢量与光流推测，在部分画面（如快速口型/眨眼动画、细小特效或高对比边缘）可能会出现轻微闪烁或破坏原有画面正确性。下次启动生效。',
+    'settings.frameGen.hint': '在相邻真实帧之间插出一帧（文字与 HUD 仍来自真实帧），建议搭配 120 Hz 及以上显示器使用（若受垂直同步限制且显示器不足 120 Hz 会自动暂停）。DLSS 帧生成需 RTX 40 系及以上显卡并开启 Windows 硬件加速 GPU 调度；其它 N 卡（如 RTX 20/30、GTX 系列）以及 AMD、Intel 显卡均可选用 AMD FSR 3 帧生成（不限显卡型号，只需下方「下载 AMD 官方文件」获取的 amd_fidelityfx_vk.dll）。注意：插帧基于运动矢量与光流推测，在部分画面（如快速口型/眨眼动画、细小特效或高对比边缘）可能会出现轻微闪烁或破坏原有画面正确性。另：开启后个别预渲染过场可能卡住画面，且此时不会生成冻结报告——排查画面问题前请先关掉它。下次启动生效。',
     'settings.frameGen.off': '关',
     'settings.frameGen.dlss': 'NVIDIA DLSS 帧生成（RTX 40 系）',
     'settings.frameGen.fsr3': 'AMD FSR 3（需 amd_fidelityfx_vk.dll）',

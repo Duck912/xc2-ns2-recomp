@@ -60,6 +60,14 @@ Ryzen 7 5800X + Radeon RX 6800 XT, Adrenalin 26.10.1, 1440p window:
 - The **RDNA 2 blue-grey rim** where objects meet the cloud sea and the **cloud-sea shimmer** in motion are fixed:
   both came from the runtime letting the GPU read pool bytes the CPU had already rewritten, which the mirror-capture
   work in pull requests 19 and 27 captures per submission (verified on an RX 6800 XT, 2026-11-22).
+- **Frame generation is not fully reliable yet.** With `[dlss] frame_gen` on (FSR 3 or DLSS-G) two things have been seen
+  and are not fixed: facial detail can still micro-flicker in close-ups (lips, eyebrows) even though the same scene is
+  clean with frame generation off, and a pre-rendered cutscene can stall with the picture frozen while audio keeps
+  playing. That stall leaves **no `xc2_boot_freeze.txt`** — frame generation keeps presenting interpolated frames, so the
+  "no frame presented in 10 s" watchdog never fires and the usual report shows nothing. Measured 2026-11-26 on an RX 6800
+  XT: `v0.2.5` played the DLC opening with frame generation on, while a build carrying the retail-3.0.1 frame-rate hook
+  (`[xc2] fps > 0`) froze it; the same build with `[xc2] fps = 0` played it. Turn frame generation off before reporting a
+  visual bug so the two are not confused.
 - **First run prepares shader cache (`shader_prepare`)**: boot-time shader preparation builds GPL pipeline libraries ahead of gameplay from embedded program pairs extracted during setup, eliminating steady-play and multi-map compile hitches once prepared.
 - **Slow frames on area transitions** (texture uploads and memory-pool imports), not in steady play.
 - **Shader cache & NVIDIA validation state**: stencil-plane sampler fixes (`VUID-vkCmdDrawIndexed-format-07753`) are
