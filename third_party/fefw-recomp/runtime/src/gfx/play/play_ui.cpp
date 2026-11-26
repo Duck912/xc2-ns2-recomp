@@ -1428,17 +1428,17 @@ void tab_controls(UiHost& host, const LiveStatus& live, Page& p, float bottom_h)
                 "键盘 WASD 或方向键控制左摇杆移动；连接手柄后直接用左摇杆。",
                 "Keyboard WASD or Arrow keys control Left Stick.", "WASD / 方向键");
     card_button("kb_cam", "旋转视角 (右摇杆)", "Camera (Right Stick)",
-                "键盘 I / J / K / L 控制视角转动；连接手柄后直接用右摇杆。",
-                "Keyboard I / J / K / L control Right Stick camera.", "I / J / K / L");
+                "移动鼠标即转视角（指针会被锁定在窗口内，按 F1 打开本菜单时放出）；键盘 I / J / K / L 备用，灵敏度在本页「鼠标」分组里调。",
+                "Moving the mouse turns the camera (the pointer is captured; F1 releases it). I/J/K/L also work; the slider is in the Mouse group on this page.", "鼠标 / I J K L");
     card_button("kb_abxy", "确认 / 取消 / 功用键 (A B X Y)", "Face Buttons (A B X Y)",
-                "空格或回车 = A（确认），退格或 Esc = B（取消），U = X（快传/菜单），O = Y。",
-                "Space/Enter = A, Backspace/Esc = B, U = X, O = Y.", "Space / Back / U / O");
-    card_button("kb_shld", "肩键与扳机 (L / R / ZL / ZR)", "Shoulders & Triggers",
-                "Q = L，E = R，数字键 1 = ZL，数字键 2 = ZR。",
-                "Q = L, E = R, 1 = ZL, 2 = ZR.", "Q / E / 1 / 2");
-    card_button("kb_sys", "菜单 / 地图 / 摇杆下压", "PLUS / MINUS / L3 / R3",
-                "Tab 或 + = PLUS（主菜单），- = MINUS，Shift = 左摇杆按下，Ctrl = 右摇杆按下；手柄同时按 - 与 + 可呼出本 F1 菜单。",
-                "Tab/+ = PLUS, - = MINUS, Shift/Ctrl = L3/R3. Gamepad MINUS + PLUS toggles F1 menu.", "Tab / - / Shift / Ctrl");
+                "左键或 E = A（确认/攻击），空格 = B（跳跃），退格或 Esc = B（取消），1 / 2 / 3 / 4 = Y / A / B / X。",
+                "Left click or E = A (confirm/attack), Space = B (jump), Backspace/Esc = B (cancel), 1/2/3/4 = Y/A/B/X.", "左键 · E · 空格 · 1 2 3 4");
+    card_button("kb_shld", "肩键与扳机 + 锁定 (L / R / ZL / ZR)", "Shoulders, Triggers & Lock-on",
+                "F = L，G = R，Q / R = ZL / ZR（技能盘翻页），右键 = R（锁定）。",
+                "F = L, G = R, Q/R = ZL/ZR (arts palette paging), right click = R (lock on).", "F / G / Q / R / 右键");
+    card_button("kb_sys", "菜单 / 地图 / 滚轮 / 摇杆下压", "PLUS / MINUS / Wheel / L3 / R3",
+                "Tab = PLUS（主菜单），M = MINUS（地图），滚轮 = 十字键上/下，V = 左摇杆按下，Ctrl = 右摇杆按下；手柄同时按 - 与 + 可呼出本 F1 菜单。",
+                "Tab = PLUS (menu), M = MINUS (map), wheel = d-pad up/down, V/Ctrl = L3/R3. Gamepad MINUS + PLUS toggles F1 menu.", "Tab / M / 滚轮 / V · Ctrl");
 
     pane_end(live);
 }
