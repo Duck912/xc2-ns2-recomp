@@ -7,6 +7,8 @@
 #ifdef NXRT_HAVE_N2DEN
 
 #include <algorithm>
+#include <cctype>
+#include <cstdlib>
 #include <array>
 #include <atomic>
 #include <cstring>
@@ -19,6 +21,7 @@
 
 #include "nvnhle/embed.h"
 #include "nxrt/abi.h"
+#include "nxrt/config.h"
 #include "nxrt/dispatch.h"
 #include "nxrt/kernel.h"
 #include "nxrt/log.h"
@@ -100,6 +103,37 @@ void* MapView(void*, uint64_t address, uint64_t size, void** view) {
 }
 void UnmapView(void*, void* view) { mem::heap_private_view_unmap(view); }
 
+// The player's NVN-HLE choices ([nvnhle] in nxrt.ini, written by the settings page), set before Start reads them.
+void ApplyConfiguredSettings() {
+    struct Map { const char* ini; const char* setting; const char* fallback; const char* const* from; const char* const* to; int n; };
+    static const char* const kUpFrom[] = {"console", "dlss", "fsr1", "off"};
+    static const char* const kUpTo[] = {"Auto", "Dlss", "Fsr1", "Copy"};
+    static const char* const kFilterFrom[] = {"bilinear", "bicubic", "lanczos", "fsr", "sgsr", "area"};
+    static const char* const kFilterTo[] = {"Bilinear", "Bicubic", "Lanczos", "Fsr", "Sgsr", "Area"};
+    static const char* const kVsyncFrom[] = {"mailbox", "fifo", "immediate"};
+    static const char* const kVsyncTo[] = {"Mailbox", "Fifo", "Immediate"};
+    static const Map kMaps[] = {
+        {"upscaler", "nvn_upscaler", "console", kUpFrom, kUpTo, 4},
+        {"window_filter", "scaling_filter", "bilinear", kFilterFrom, kFilterTo, 6},
+        {"vsync", "use_vsync", "mailbox", kVsyncFrom, kVsyncTo, 3},
+    };
+    for (const Map& m : kMaps) {
+        std::string v = config_get_str("nvnhle", m.ini, m.fallback);
+        for (char& c : v) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        bool known = false;
+        for (int i = 0; i < m.n; ++i) {
+            if (v == m.from[i]) {
+                N2denNvnhle::SetSetting(m.setting, m.to[i]);
+                known = true;
+            }
+        }
+        if (!known) NXLOG_W("n2den", "[nvnhle] %s = %s is not one of its values: NVN-HLE's default", m.ini, v.c_str());
+    }
+    // The DLSS model is read once, from the environment (nvn_dlss.cpp Preset): default K, "default" = the driver's choice
+    std::string model = config_get_str("nvnhle", "dlss_model", "K");
+    if (!std::getenv("EDEN_NX2_DLSS_PRESET")) _putenv_s("EDEN_NX2_DLSS_PRESET", model == "default" ? "default" : model.substr(0, 1).c_str());
+}
+
 // The play overlay over n2den's frames (n2den's replay thread).
 void OverlayRecord(void* user, const N2denNvnhle::OverlayDevice& d, const N2denNvnhle::OverlayFrame& f) {
     gfx::Overlay::ForeignDevice fd;
@@ -149,6 +183,7 @@ bool start(const StartDesc& desc, std::string* error) {
     info.host.map_view = MapView;
     info.host.unmap_view = UnmapView;
     std::string err;
+    ApplyConfiguredSettings();
     if (!N2denNvnhle::Start(info, &err)) {
         NXLOG_E(kTag, "n2den NVN-HLE failed to start: %s", err.c_str());
         if (error) *error = err;
@@ -157,6 +192,9 @@ bool start(const StartDesc& desc, std::string* error) {
     g_active.store(true, std::memory_order_release);
     set_proc_resolver(&Resolve);
     NXLOG_I(kTag, "n2den NVN-HLE started: %zu NVN functions, %ux%u", N2denNvnhle::FunctionCount(), desc.width, desc.height);
+    NXLOG_I(kTag, "NVN-HLE settings: upscaler %s, window scaler %s, vsync %s, DLSS model %s", N2denNvnhle::GetSetting("nvn_upscaler").c_str(),
+            N2denNvnhle::GetSetting("scaling_filter").c_str(), N2denNvnhle::GetSetting("use_vsync").c_str(),
+            std::getenv("EDEN_NX2_DLSS_PRESET") ? std::getenv("EDEN_NX2_DLSS_PRESET") : "K");
     return true;
 }
 
@@ -171,6 +209,9 @@ bool active() { return g_active.load(std::memory_order_acquire); }
 void resize(uint32_t width, uint32_t height) {
     if (active()) N2denNvnhle::Resize(width, height);
 }
+
+bool set_setting(const char* key, const char* value) { return N2denNvnhle::SetSetting(key, value); }
+std::string get_setting(const char* key) { return N2denNvnhle::GetSetting(key); }
 
 void set_overlay(gfx::Overlay* overlay) {
     if (!overlay) {
@@ -203,6 +244,8 @@ bool active() { return false; }
 void resize(uint32_t, uint32_t) {}
 void notify_cpu_write(uint64_t, uint64_t) {}
 void set_overlay(gfx::Overlay*) {}
+bool set_setting(const char*, const char*) { return false; }
+std::string get_setting(const char*) { return {}; }
 }  // namespace nxrt::nvn::n2den
 
 #endif  // NXRT_HAVE_N2DEN

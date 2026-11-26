@@ -24,8 +24,11 @@
 #include "extras/temporal.h"
 #include "nxrt/frame_limiter.h"
 #include "nxrt/input_source.h"
+#include "nxrt/log.h"
 #include "nxrt/lowlat.h"
+#include "nxrt/config.h"
 #include "nxrt/nvn_backend.h"
+#include "nxrt/nvn_n2den.h"
 #include "nvn/nvn_mirror_cap.h"
 #include "nxrt/overlay.h"
 #include "nxrt/play.h"
@@ -974,7 +977,7 @@ void tab_display(const LiveStatus& live, Page& p, float bottom_h) {
     }
 
     card_group("帧率与同步", "Frame Rate & Sync");
-    if (card_toggle("vsync", "垂直同步 (VSync)", "VSync",
+    if (!nvn::n2den::active() && card_toggle("vsync", "垂直同步 (VSync)", "VSync",
                     "开启（推荐）：使用 FIFO 呈现模式，消除画面撕裂并防止 AMD 显卡交换链竞态。关闭：使用 Immediate 模式以获得最低延迟。",
                     "On (recommended on AMD): FIFO presentation prevents tearing and swapchain races. Off: lowest latency.",
                     &d.vsync)) {
@@ -1033,6 +1036,75 @@ void tab_display(const LiveStatus& live, Page& p, float bottom_h) {
 }
 
 // ---- Tab 1: Graphics ----------------------------------------------------------------------------------------------------------------
+// The graphics page while NVN-HLE draws the game (--nvn n2den): its own upscaler, DLSS model, window scaler and VSync, saved
+// to [nvnhle] in nxrt.ini at once. The runtime renderer's options (render scale, FSR 2-4, colour grading, HDR, textures) do
+// not reach NVN-HLE and are not shown.
+int nvnhle_index(const char* key, const char* fallback, const char* const* keys, int n) {
+    std::string v = config_get_str("nvnhle", key, fallback);
+    for (char& c : v) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    for (int i = 0; i < n; ++i) {
+        std::string k = keys[i];
+        for (char& c : k) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (v == k) return i;
+    }
+    return 0;
+}
+
+void nvnhle_save(const char* key, const char* value) {
+    std::string err;
+    if (!config_write("nvnhle", key, value, &err)) NXLOG_W("play", "cannot save [nvnhle] %s to nxrt.ini: %s", key, err.c_str());
+    else NXLOG_I("play", "[nvnhle] %s -> %s saved to nxrt.ini", key, value);
+}
+
+void tab_graphics_nvnhle() {
+    static const char* const kUpKeys[] = {"console", "dlss", "fsr1", "off"};
+    static const char* const kUpZh[] = {"主机原版 (游戏自带 DLSS)", "DLSS (替换全部超分)", "FSR 1", "关闭 (双线性)"};
+    static const char* const kUpEn[] = {"Console (the game's own DLSS)", "DLSS (replaces every upscaler)", "FSR 1", "Off (bilinear)"};
+    static const char* const kModelKeys[] = {"K", "J", "L", "M", "default"};
+    static const char* const kModelZh[] = {"K (Transformer，推荐)", "J", "L", "M", "驱动默认"};
+    static const char* const kModelEn[] = {"K (transformer, recommended)", "J", "L", "M", "Driver default"};
+    static const char* const kFilterKeys[] = {"bilinear", "bicubic", "lanczos", "fsr", "sgsr", "area"};
+    static const char* const kFilterNames[] = {"Bilinear", "Bicubic", "Lanczos", "AMD FSR 1", "Snapdragon GSR", "Area"};
+    static const char* const kFilterSetting[] = {"Bilinear", "Bicubic", "Lanczos", "Fsr", "Sgsr", "Area"};
+    static const char* const kVsyncKeys[] = {"mailbox", "fifo", "immediate"};
+    static const char* const kVsyncZh[] = {"Mailbox (低延迟，无撕裂)", "FIFO (开启)", "Immediate (关闭)"};
+    static const char* const kVsyncEn[] = {"Mailbox (low latency, no tearing)", "FIFO (on)", "Immediate (off)"};
+    static int up = nvnhle_index("upscaler", "console", kUpKeys, 4);
+    static int model = nvnhle_index("dlss_model", "K", kModelKeys, 5);
+    static int filter = nvnhle_index("window_filter", "bilinear", kFilterKeys, 6);
+    static int vsync = nvnhle_index("vsync", "mailbox", kVsyncKeys, 3);
+
+    card_group("NVN-HLE 超分与呈现", "NVN-HLE Upscaling & Presentation");
+    ImGui::TextDisabled("%s", tr("NVN-HLE 绘制游戏画面：以下选项立即保存，标注「重启」的在下次启动时生效。",
+                                 "NVN-HLE draws the game: these save at once; the ones marked restart apply at the next start."));
+    if (card_choice("nh_up", "超分器", "Upscaler",
+                    "主机原版：游戏自己的 DLSS 调用在真正的 DLSS 上运行（推荐）。DLSS：同时替换游戏的其他超分网络。FSR 1 / 关闭：不用 DLSS。",
+                    "Console: the game's own DLSS calls run on real DLSS (recommended). DLSS: also replaces the game's other upscaling "
+                    "networks. FSR 1 / Off: no DLSS.",
+                    &up, kUpZh, kUpEn, 4, true)) {
+        nvnhle_save("upscaler", kUpKeys[up]);
+    }
+    if (card_choice("nh_model", "DLSS 模型", "DLSS model",
+                    "DLSS 使用的 AI 模型。K 是 Transformer 模型，画质最好；J 拖影更少但更闪。",
+                    "Which AI model DLSS uses. K is the transformer model and looks best; J ghosts less but flickers more.",
+                    &model, kModelZh, kModelEn, 5, true)) {
+        nvnhle_save("dlss_model", kModelKeys[model]);
+    }
+    if (card_choice("nh_filter", "窗口缩放", "Window scaler",
+                    "游戏画面与窗口大小不同时使用的缩放方式（实时生效）。",
+                    "How the game's picture is fitted to the window when their sizes differ (applies live).",
+                    &filter, kFilterNames, kFilterNames, 6, false, true)) {
+        nvnhle_save("window_filter", kFilterKeys[filter]);
+        nvn::n2den::set_setting("scaling_filter", kFilterSetting[filter]);
+    }
+    if (card_choice("nh_vsync", "垂直同步", "VSync",
+                    "Mailbox：无撕裂且延迟低（推荐）。FIFO：传统垂直同步。Immediate：关闭，延迟最低但会撕裂。",
+                    "Mailbox: no tearing and low latency (recommended). FIFO: classic VSync. Immediate: off, lowest latency, tears.",
+                    &vsync, kVsyncZh, kVsyncEn, 3, true)) {
+        nvnhle_save("vsync", kVsyncKeys[vsync]);
+    }
+}
+
 void tab_graphics(const LiveStatus& live, Page& p, float bottom_h) {
     DisplaySettings& d = p.edit.display;
     Game3dSettings& g3d = p.edit.game3d;
@@ -1041,6 +1113,11 @@ void tab_graphics(const LiveStatus& live, Page& p, float bottom_h) {
     extras::UpscaleSettings& up = p.edit.extras.upscale;
 
     pane_begin("tab_graphics", bottom_h);
+    if (nvn::n2den::active()) {
+        tab_graphics_nvnhle();
+        pane_end(live);
+        return;
+    }
 
     card_group("超分与抗锯齿", "Upscaling & Anti-Aliasing");
     {

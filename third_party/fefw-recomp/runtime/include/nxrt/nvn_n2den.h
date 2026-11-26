@@ -30,5 +30,9 @@ void resize(uint32_t width, uint32_t height);
 void notify_cpu_write(uint64_t address, uint64_t size);
 // Draws `overlay` (made with Context::foreign) over every frame n2den presents, after its upscaler; null: none.
 void set_overlay(gfx::Overlay* overlay);
+// NVN-HLE's own settings by key and value name ("nvn_upscaler" = "Dlss"; embed.h SetSetting). start() applies the
+// player's [nvnhle] choices from nxrt.ini first: upscaler, dlss_model, window_filter, vsync.
+bool set_setting(const char* key, const char* value);
+std::string get_setting(const char* key);
 
 }  // namespace nxrt::nvn::n2den
