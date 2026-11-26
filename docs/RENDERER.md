@@ -43,14 +43,17 @@ inside a pass, VRAM release of idle streamed textures, NDSR/DLSS replacement).
   shim maps one onto the other.
 - Present/windowing, input overlay and frame pacing would come from the recomp runtime instead.
 
-## Recommendation
+## Decision (2026-11-26)
 
-1. Bring the game up first on xc2-ns2-recomp's renderer as it is (fewest moving parts while `main` is being
-   lifted). **Caveat:** if it hits the NVIDIA device-lost blocker on the dev machine, stop at the first
-   device loss and switch to step 2 early rather than retry.
-2. In parallel, extract n2den's NVN-HLE as a library behind the recomp's NVN proc table:
-   a. `GuestMemory` over host memory; a thunk shim from fefw's `NVN_REG` ABI to the `functions_*` entry points.
-   b. Bring `video_core/nvn` + its shader front end + the needed `shader_recompiler` subset.
-   c. Bring `renderer_vulkan/nvn` with a minimal Device/Scheduler/present layer.
-   d. A switch (`nvn_backend = fefw | n2den`) so both can be compared on the same frame.
-3. Keep one renderer once n2den's matches or beats the other in picture and frame rate.
+1. **Start on fefw-recomp's renderer** as xc2-ns2-recomp ships it, and bring the game up on it. If it hits
+   the NVIDIA device-lost blocker on the dev machine, stop at the first device loss (never retry) and
+   raise switching early.
+2. **n2den's NVN-HLE becomes a shared library**, built in the Galaxia project as the first step of its
+   renderer rebuild (stage 4): extracted from the Galaxia n2den fork with no behaviour change, then used by
+   both Galaxia and this recomp. Its boundaries: NVN entry points through a host function table (this
+   project adapts fefw's `NVN_REG` thunks to it), a `GuestMemory` interface (host memory here), and a
+   host side where the embedding program provides the Vulkan device, queues and present.
+3. **Switch** (`nvn_backend = fefw | shared`) once the library is embedded, so both can be compared on the
+   same frame; keep one renderer once the shared one matches or beats fefw's in picture and frame rate.
+4. Renderer improvements (VRAM residency, parallel recording, bindless pools) happen inside the library
+   after the extraction, checked in both projects.
