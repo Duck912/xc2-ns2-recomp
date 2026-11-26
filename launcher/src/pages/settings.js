@@ -40,7 +40,10 @@ const SECTIONS = [
       { id: 'frame_gen', type: 'select', label: 'settings.frameGen.label', sec: 'dlss', key: 'frame_gen', def: '0',
         options: [['0', 'settings.frameGen.off'], ['dlss', 'settings.frameGen.dlss'], ['fsr3', 'settings.frameGen.fsr3']],
         hint: 'settings.frameGen.hint' },
-      { id: 'hdr_mode', type: 'select', label: 'settings.hdr.label', sec: 'hdr', key: 'mode', def: 'auto',
+      // HDR lives in controls.ini, the file the in-game F1 page writes: nxrt.ini wins over it (play.cpp merge_env),
+      // so writing this field to nxrt.ini would pin the mode and quietly override whatever the player picked in F1
+      // (#57). The field is disabled until the game has run once and created controls.ini (exists[file] -> dis()).
+      { id: 'hdr_mode', type: 'select', file: 'controls', label: 'settings.hdr.label', sec: 'hdr', key: 'mode', def: 'auto',
         options: [['auto', 'settings.hdr.auto'], ['on', 'settings.hdr.on'], ['native', 'settings.hdr.native'], ['off', 'settings.hdr.off']],
         hint: 'settings.hdr.hint' },
       // FIFO is the default and is written explicitly: an empty value left the mode to [display] vsync, which the page
