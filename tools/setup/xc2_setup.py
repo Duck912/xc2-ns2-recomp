@@ -470,7 +470,12 @@ def step_lift(r, repo, install, jobs=0):
 def step_link(r, repo, install):
     started = r.step("link")
     exe = repo / "xc2" / "build" / "301" / "boot" / "xc2_boot.exe"
-    if exe.is_file():
+    lib = repo / "xc2" / "build" / "301" / "lib"
+    # The exe is the lifted game code linked against the runtime headers, so it is stale as soon as one of those
+    # libraries is newer. Checking only that the file exists kept an old exe across a runtime change, and the mixed
+    # pair showed up as rendering faults that a fresh build fixed (a comment on the 0.2.1 video).
+    newest_lib = max((p.stat().st_mtime for p in lib.glob("*.lib")), default=0.0)
+    if exe.is_file() and exe.stat().st_mtime >= newest_lib:
         return r.end_step("link", started, True, "the boot exe is already there")
     patched = install / "build" / "exefs-patched"
     exefs_dir = patched if (patched / "m3_state.json").is_file() and (patched / "main").is_file() else install / "exefs"
@@ -647,10 +652,31 @@ def clear_high_entropy_va(exe):
         return True
 
 
+def runtime_signature(rtlib):
+    """What the exe was linked against. An upgrade replaces the runtime DLL and keeps the exe, so this is the only
+    thing that says whether the pair still matches."""
+    try:
+        st = rtlib.stat()
+        return {"size": st.st_size, "mtime": int(st.st_mtime)}
+    except OSError:
+        return None
+
+
+def link_stamp_matches(stamp, sig):
+    try:
+        return sig is not None and json.loads(stamp.read_text(encoding="utf-8")) == sig
+    except (OSError, ValueError):
+        return False
+
+
 def step_link_package(r, repo, install, zig, rtlib, jobs):
     started = r.step("link")
     exe = install / "xc2_boot.exe"
-    if exe.is_file():
+    stamp = install / "build" / "link-stamp.json"
+    sig = runtime_signature(rtlib)
+    # Same rule as the checkout: keep the exe only when it was linked against this exact runtime. The exe carries the
+    # lifted game code, so pairing a new xc2_rt.dll with an exe from an older release is a mixed build.
+    if exe.is_file() and link_stamp_matches(stamp, sig):
         # Clear high-entropy ASLR on existing installs across upgrades without forcing a full Zig relink.
         if not r.dry and clear_high_entropy_va(exe):
             r.log("  patched %s: cleared HIGH_ENTROPY_VA" % exe.name)
@@ -754,6 +780,9 @@ def step_link_package(r, repo, install, zig, rtlib, jobs):
         r.log("  patched %s: cleared HIGH_ENTROPY_VA" % exe.name)
     copy_runtime_dlls(r, rtlib.parent, install)
     finalize_m3_state(r, install)
+    if not r.dry and sig is not None:
+        stamp.parent.mkdir(parents=True, exist_ok=True)
+        stamp.write_text(json.dumps(sig), encoding="utf-8")
     return r.end_step("link", started, True)
 
 def junction(link, target, r):
