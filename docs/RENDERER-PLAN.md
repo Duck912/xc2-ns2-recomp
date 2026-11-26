@@ -161,6 +161,7 @@ To run (needs a person at the machine; RAM/VRAM guard for `xc2_boot.exe` in `C:/
 
 Known gaps: movies (no texture hookup yet), the F1 overlay and F12 screenshots (this runtime's
 renderer is off in n2den mode), guest pool write tracking (`GuestMemory::Track` is not implemented
-for identity memory: fine for host-imported pools, untested for device-local copies), and
+for identity memory: n2den then keeps those ranges in guest memory instead of device-local copies, slower
+but correct), and
 `vi::ListFrameHistory` display ticks use 19.2 MHz while this runtime's Switch 2 tick is 31.25 MHz.
 

@@ -14,6 +14,8 @@
 #include <unordered_map>
 #include <utility>
 
+#include <windows.h>
+
 #include "nvnhle/embed.h"
 #include "nxrt/abi.h"
 #include "nxrt/dispatch.h"
@@ -91,6 +93,16 @@ bool start(const StartDesc& desc, std::string* error) {
     info.program_id = desc.program_id;
     info.sdk_image = desc.sdk_image;
     info.sdk_image_size = desc.sdk_image_size;
+    // Never n2den's own %APPDATA% folder: its settings, caches and log stay with this executable.
+    std::string data_dir = desc.data_directory;
+    if (data_dir.empty()) {
+        char exe[MAX_PATH] = {};
+        const DWORD n = ::GetModuleFileNameA(nullptr, exe, MAX_PATH);
+        std::string dir(exe, n);
+        const size_t slash = dir.find_last_of("\\/");
+        data_dir = (slash == std::string::npos ? std::string{"."} : dir.substr(0, slash)) + "\\user";
+    }
+    info.data_directory = data_dir.c_str();
     info.host.guest_clock_ticks = ClockTicks;
     info.host.guest_time_ns = TimeNs;
     info.host.sleep_guest_ns = SleepNs;

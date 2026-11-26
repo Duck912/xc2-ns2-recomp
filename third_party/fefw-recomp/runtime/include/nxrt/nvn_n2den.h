@@ -16,6 +16,7 @@ struct StartDesc {
     uint64_t program_id = 0;           // the Switch 2 program (0x0400...)
     const uint8_t* sdk_image = nullptr;  // the loaded sdk module (read for its SDK generation), may be null
     size_t sdk_image_size = 0;
+    std::string data_directory;          // n2den's settings, caches and log; empty = "user" beside the executable
 };
 
 bool available();                      // built with the library
