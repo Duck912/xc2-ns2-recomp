@@ -81,7 +81,7 @@ def romfs_ok(folder):
 
 
 def nvnhle_dist(repo):
-    env = os.environ.get("XCDE_NVNHLE_DIST", "")
+    env = os.environ.get("XCDE_NVNHLE_DIST", "") or os.environ.get("XC2_NVNHLE_DIST", "")
     return Path(env) if env else repo / "work" / "nvnhle-dist"
 
 
@@ -286,12 +286,12 @@ def step_link(r, repo):
     return r.end_step("link", started, rc == 0 and ok, "" if rc == 0 and ok else "build-boot.ps1 failed")
 
 
-def step_streamline(r, repo, install, package=False, fetch=True):
+def step_streamline(r, repo, install, package=False, fetch=True, boot=None):
     """NVN-HLE loads Streamline from <exe folder>/user/streamline. A copy the launcher already downloaded (into
     <install>/upscalers/streamline) is used; otherwise NVIDIA's release is downloaded here (fetch; --no-streamline
     skips it). Missing is not an error: the game then upscales with FSR 1."""
     started = r.step("streamline")
-    dest = (install if package else repo / BOOT) / "user" / "streamline"
+    dest = (install if package else repo / (boot or BOOT)) / "user" / "streamline"
     if (dest / "sl.interposer.dll").is_file():
         return r.end_step("streamline", started, True, "already in place")
     for src in (install / "upscalers" / "streamline", Path(os.environ.get("XCDE_STREAMLINE_DIR", "") or "-")):
@@ -322,14 +322,15 @@ def step_streamline(r, repo, install, package=False, fetch=True):
     return r.end_step("streamline", started, True, "NVIDIA Streamline %s" % SL_VERSION if ok else "unpacked without sl.interposer.dll")
 
 
-def step_done(r, repo, install):
+def step_done(r, repo, install, env=None, game="XC:DE", engine="xcde_setup.py"):
     started = r.step("done")
     if not r.dry:
         path = install / "launch.env"
-        text = ("# The start-up switches of XC:DE on NVN-HLE. Written by tools/setup/xcde_setup.py from GAME_ENV on every\n"
-                "# setup and read by the launcher (Play).\n")
-        for k in sorted(GAME_ENV):
-            text += "%s=%s\n" % (k, GAME_ENV[k])
+        env = GAME_ENV if env is None else env
+        text = ("# The start-up switches of %s on NVN-HLE. Written by tools/setup/%s from GAME_ENV on every\n"
+                "# setup and read by the launcher (Play).\n" % (game, engine))
+        for k in sorted(env):
+            text += "%s=%s\n" % (k, env[k])
         path.write_text(text, encoding="utf-8", newline="\n")
         (install / "setup_state.tsv").write_text("mprs_setup_state\t1\nmeta\tfinished\t1\n", encoding="utf-8")
     r.write_status(state="done", note="ready to play")
