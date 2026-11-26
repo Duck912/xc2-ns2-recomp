@@ -9,7 +9,8 @@
 # package also carries the shader harness and spirv-val; XC:DE needs neither (NVN-HLE translates shaders at run time).
 param(
     [string]$Out = '',
-    [string]$Zig = '',        # the Zig 0.17.0 folder (holds zig.exe); default $env:XC2_ZIG or zig.exe on PATH
+    [string]$Zig = '',        # the Zig 0.17.0 folder (holds zig.exe), with -IncludeZig; default $env:XC2_ZIG or zig.exe on PATH
+    [switch]$IncludeZig,      # ship Zig (+360 MB) for an offline package; by default the first setup downloads it
     [string]$NvnhleDist = ''  # the NVN-HLE distribution folder whose LICENSES/ ship with the DLL
 )
 $ErrorActionPreference = 'Stop'
@@ -59,9 +60,13 @@ $py = Join-Path $root 'xc2\build\release\tools\python'
 Need (Join-Path $py 'python.exe') 'the embeddable Python (tools\build\build-release.ps1)'
 CopyTree $py (Join-Path $Out 'tools\python')
 Say ("python        {0:N1} MB  (capstone, lz4, zstandard, nxrecomp)" -f (Size (Join-Path $Out 'tools\python')))
-Need (Join-Path $Zig 'zig.exe') 'zig.exe (-Zig)'
-CopyTree $Zig (Join-Path $Out 'tools\build\zig')
-Say ("zig           {0:N1} MB" -f (Size (Join-Path $Out 'tools\build\zig')))
+if ($IncludeZig) {
+    Need (Join-Path $Zig 'zig.exe') 'zig.exe (-Zig)'
+    CopyTree $Zig (Join-Path $Out 'tools\build\zig')
+    Say ("zig           {0:N1} MB" -f (Size (Join-Path $Out 'tools\build\zig')))
+} else {
+    Say 'zig           not shipped: the first setup downloads Zig 0.17.0 (100 MB, SHA-256 checked) into tools\build\zig'
+}
 
 # --- the engine and what the lift and link read ----------------------------------------------------------------------
 New-Item -ItemType Directory -Force (Join-Path $Out 'engine') | Out-Null
@@ -87,7 +92,8 @@ if (Test-Path (Join-Path $NvnhleDist 'LICENSES')) {
 @"
 Bundled tools, each with its own licence:
   tools/python        Python 3.13.17 (PSF) with capstone (BSD-3), lz4 (BSD-2), zstandard (BSD-3), nxrecomp (GPL-3.0)
-  tools/build/zig     Zig 0.17.0 (MIT); its bundled clang, lld and libc++ carry Apache-2.0 WITH LLVM-exception
+  tools/build/zig     Zig 0.17.0 (MIT), downloaded by the first setup; its clang, lld and libc++ carry Apache-2.0 WITH LLVM-exception
+  user/streamline     NVIDIA Streamline (NVIDIA's licence; its licence files sit beside the DLLs), downloaded by setup unless skipped
   runtime/xc2_rt.dll  this project, the fefw-recomp runtime and n2den's NVN-HLE (GPL-3.0-or-later); the libraries
                       NVN-HLE bundles keep their own licences (licenses/nvnhle, source in licenses/nvnhle/SOURCE.txt)
 "@ | Set-Content -LiteralPath (Join-Path $lic 'BUNDLED_TOOLS.txt') -Encoding utf8NoBOM
@@ -98,8 +104,8 @@ XC:DE NS2 recomp - portable package
 
 Run xcde-launcher.exe. Pick your own legally dumped copy of Xenoblade Chronicles: Definitive Edition - Nintendo
 Switch 2 Edition (the .nup, or its ExeFS / RomFS / add-on folders), press Set up, then Play. Set up recompiles the
-game's code on this PC with the bundled tools; nothing needs to be installed. For NVIDIA DLSS, download Streamline
-from the launcher's Settings.
+game's code on this PC; nothing needs to be installed. The first setup downloads the compiler (Zig, 100 MB) and,
+unless you untick it, NVIDIA Streamline for DLSS (276 MB).
 
 No game files are included. Not affiliated with or endorsed by Nintendo or Monolith Soft.
 "@ | Set-Content -LiteralPath (Join-Path $Out 'README.txt') -Encoding utf8NoBOM

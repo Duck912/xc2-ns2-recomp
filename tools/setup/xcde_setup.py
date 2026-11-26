@@ -45,6 +45,22 @@ NVNHLE_VERSION = ""                     # set with the first release of the libr
 NVNHLE_URL = ""                         # its zip on that release
 NVNHLE_SHA256 = ""
 
+# The compiler a release package recompiles the dump with. Not shipped in the package (it would be 360 of its 420 MB):
+# the first setup downloads it from ziglang.org and checks it against the SHA-256 ziglang.org publishes.
+ZIG_VERSION = "0.17.0"
+ZIG_URL = "https://ziglang.org/download/0.17.0/zig-x86_64-windows-0.17.0.zip"
+ZIG_SHA256 = "b5663f69581dcf391293fbf16c06cb80d81d806545ce618b4d0bab7f0eb8c428"
+
+# NVIDIA Streamline (the game's DLSS runs through it): the official release, as launcher/src-tauri/src/streamline.rs
+# downloads it, and the files NVN-HLE loads plus their licences.
+SL_VERSION = "2.14.16"
+SL_URL = "https://github.com/NVIDIA-RTX/Streamline/releases/download/v2.14.16/streamline-sdk-v2.14.16.zip"
+SL_SHA256 = "32041e51db0cab709a271b72a352281b690c2abbd669a827809401a5dd23956b"
+SL_FILES = ["bin/x64/sl.interposer.dll", "bin/x64/sl.common.dll", "bin/x64/sl.dlss.dll", "bin/x64/nvngx_dlss.dll",
+            "bin/x64/sl.dlss_g.dll", "bin/x64/nvngx_dlssg.dll", "bin/x64/sl.reflex.dll", "bin/x64/sl.pcl.dll",
+            "bin/x64/NvLowLatencyVk.dll", "bin/x64/nvngx_dlss.license.txt", "bin/x64/reflex.license.txt",
+            "license.txt", "3rd-party-licenses.md"]
+
 # The start-up switches: XC2's (the sdk modules are byte-identical, so its sdk hooks apply) with XC:DE's own title
 # facts. config/profiles/xcde.ini repeats the two that differ for a checkout run.
 GAME_ENV = dict(base.GAME_ENV)
@@ -99,6 +115,72 @@ def step_nvnhle(r, repo):
     shutil.rmtree(work, ignore_errors=True)
     ok = nvnhle_ok(dist)
     return r.end_step("nvnhle", started, ok, "" if ok else "the zip does not hold lib/ and include/nvnhle/")
+
+
+def download_verified(r, url, dest, sha256, what):
+    """Download url to dest (a .part first), check its SHA-256; True when dest holds the verified file."""
+    if dest.is_file() and hashlib.sha256(dest.read_bytes()).hexdigest() == sha256:
+        return True
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    part = dest.with_suffix(dest.suffix + ".part")
+    r.log("  downloading %s" % what)
+    try:
+        with urllib.request.urlopen(url, timeout=60) as resp, open(part, "wb") as out:
+            total = int(resp.headers.get("Content-Length") or 0)
+            got = 0
+            while True:
+                chunk = resp.read(1 << 20)
+                if not chunk:
+                    break
+                out.write(chunk)
+                got += len(chunk)
+                if total:
+                    r.note_progress("%s %d / %d MB" % (what, got >> 20, total >> 20), 100.0 * got / total)
+    except OSError as e:
+        r.log("  the download failed: %s" % e)
+        return False
+    digest = hashlib.sha256(part.read_bytes()).hexdigest()
+    if digest != sha256:
+        r.log("  %s does not match its SHA-256 (%s)" % (what, digest))
+        part.unlink(missing_ok=True)
+        return False
+    os.replace(part, dest)
+    return True
+
+
+def package_zig(repo):
+    return repo / "tools" / "build" / "zig" / "zig.exe"
+
+
+def step_tools(r, repo):
+    """A package's compiler: Zig, downloaded once into tools/build/zig."""
+    import zipfile
+    started = r.step("tools")
+    zig = package_zig(repo)
+    if zig.is_file():
+        return r.end_step("tools", started, True, "Zig %s is on this PC" % ZIG_VERSION)
+    if r.dry:
+        return r.end_step("tools", started, True, "would download Zig %s" % ZIG_VERSION)
+    cache = repo / "tools" / "build" / ("zig-%s.zip" % ZIG_VERSION)
+    if not download_verified(r, ZIG_URL, cache, ZIG_SHA256, "Zig %s (100 MB)" % ZIG_VERSION):
+        return r.end_step("tools", started, False, "Zig could not be downloaded from ziglang.org (check the connection)")
+    r.log("  unpacking Zig")
+    dest = zig.parent
+    with zipfile.ZipFile(cache) as z:
+        for m in z.infolist():
+            rel = m.filename.split("/", 1)[1] if "/" in m.filename else ""   # drop the zip's top folder
+            if not rel:
+                continue
+            out = dest / rel
+            if m.is_dir():
+                out.mkdir(parents=True, exist_ok=True)
+                continue
+            out.parent.mkdir(parents=True, exist_ok=True)
+            with z.open(m) as src, open(out, "wb") as f:
+                shutil.copyfileobj(src, f)
+    cache.unlink(missing_ok=True)
+    ok = zig.is_file()
+    return r.end_step("tools", started, ok, "Zig %s" % ZIG_VERSION if ok else "the Zig zip held no zig.exe")
 
 
 def step_runtime(r, repo):
@@ -203,9 +285,10 @@ def step_link(r, repo):
     return r.end_step("link", started, rc == 0 and ok, "" if rc == 0 and ok else "build-boot.ps1 failed")
 
 
-def step_streamline(r, repo, install, package=False):
-    """NVN-HLE loads Streamline from <boot>/user/streamline. The launcher downloads NVIDIA's release (verified) into
-    <install>/upscalers/streamline; this copies it. Missing is not an error: the game then upscales with FSR 1."""
+def step_streamline(r, repo, install, package=False, fetch=True):
+    """NVN-HLE loads Streamline from <exe folder>/user/streamline. A copy the launcher already downloaded (into
+    <install>/upscalers/streamline) is used; otherwise NVIDIA's release is downloaded here (fetch; --no-streamline
+    skips it). Missing is not an error: the game then upscales with FSR 1."""
     started = r.step("streamline")
     dest = (install if package else repo / BOOT) / "user" / "streamline"
     if (dest / "sl.interposer.dll").is_file():
@@ -216,8 +299,26 @@ def step_streamline(r, repo, install, package=False):
             if not r.dry:
                 shutil.copytree(src, dest, dirs_exist_ok=True)
             return r.end_step("streamline", started, True)
-    return r.end_step("streamline", started, True,
-                      "not downloaded: DLSS falls back to FSR 1 (the launcher's Settings download Streamline)")
+    if not fetch:
+        return r.end_step("streamline", started, True, "skipped: DLSS falls back to FSR 1")
+    if r.dry:
+        return r.end_step("streamline", started, True, "would download Streamline %s" % SL_VERSION)
+    import zipfile
+    cache = install / "upscalers" / ("streamline-sdk-v%s.zip" % SL_VERSION)
+    if not download_verified(r, SL_URL, cache, SL_SHA256, "NVIDIA Streamline %s (276 MB)" % SL_VERSION):
+        return r.end_step("streamline", started, True, "could not be downloaded: DLSS falls back to FSR 1")
+    dest.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(cache) as z:
+        for want in SL_FILES:
+            src = next((n for n in z.namelist() if n.endswith(want)), None)
+            if src is None:
+                r.log("  %s is not in the Streamline zip" % want)
+                continue
+            with z.open(src) as fsrc, open(dest / want.rsplit("/", 1)[-1], "wb") as fdst:
+                shutil.copyfileobj(fsrc, fdst)
+    cache.unlink(missing_ok=True)
+    ok = (dest / "sl.interposer.dll").is_file()
+    return r.end_step("streamline", started, True, "NVIDIA Streamline %s" % SL_VERSION if ok else "unpacked without sl.interposer.dll")
 
 
 def step_done(r, repo, install):
@@ -249,6 +350,7 @@ def main():
     ap.add_argument("--dlc", help="the add-on's RomFS (holds dlcver.bin)")
     ap.add_argument("--jobs", type=int, default=0)
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--no-streamline", action="store_true", help="do not download NVIDIA Streamline (DLSS)")
     ap.add_argument("--skip", default="", help="comma separated steps to skip")
     a = ap.parse_args()
 
@@ -265,18 +367,22 @@ def main():
     r.log("repo    %s" % repo)
     r.log("install %s" % install)
     r.log("input   %s" % (nup or exefs_in))
-    tools = base.package_tools(repo)
-    if tools:
+    # A release package: the bundled Python and runtime/xc2_rt.lib (Zig comes with the first setup, step tools).
+    pkg_py = repo / "tools" / "python" / "python.exe"
+    pkg_lib = repo / "runtime" / "xc2_rt.lib"
+    if pkg_py.is_file() and pkg_lib.is_file():
+        tools = (pkg_py, package_zig(repo), pkg_lib)
         # A release package (docs/RELEASE-PLAN.md): runtime/xc2_rt.dll with NVN-HLE in it, the bundled Python and Zig.
         # Nothing to fetch or build but the game's own code, into the run folder.
         py, zig, rtlib = tools
         r.log("mode    package: the runtime, Python and the compiler travel with it")
         steps = [
+            ("tools", lambda: step_tools(r, repo)),
             ("doctor", lambda: base.step_doctor_package(r, repo, tools)),
             ("ingest", lambda: step_ingest(r, repo, install, nup, exefs_in, romfs_in, dlc_in, package=True)),
             ("lift", lambda: base.step_lift_package(r, repo, install, py, a.jobs, sites=repo / "xcde" / "sites")),
             ("link", lambda: base.step_link_package(r, repo, install, zig, rtlib, a.jobs, exe_name=EXE)),
-            ("streamline", lambda: step_streamline(r, repo, install, package=True)),
+            ("streamline", lambda: step_streamline(r, repo, install, package=True, fetch=not a.no_streamline)),
             ("done", lambda: step_done(r, repo, install)),
         ]
         return run_steps(r, steps, skip)
@@ -289,7 +395,7 @@ def main():
         ("ingest", lambda: step_ingest(r, repo, install, nup, exefs_in, romfs_in, dlc_in)),
         ("lift", lambda: step_lift(r, repo, a.jobs)),
         ("link", lambda: step_link(r, repo)),
-        ("streamline", lambda: step_streamline(r, repo, install)),
+        ("streamline", lambda: step_streamline(r, repo, install, fetch=not a.no_streamline)),
         ("done", lambda: step_done(r, repo, install)),
     ]
     return run_steps(r, steps, skip)
