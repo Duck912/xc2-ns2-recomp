@@ -96,7 +96,7 @@ async function renderFiles(el, ctx, cfg, status) {
   const draw = () => {
     const chosen = report?.chosen;
     const req = tools.length === 0
-      ? `<div class="tile"><span class="dot"></span><div class="grow"><div class="title">${esc(t('wiz.files.pkgTitle'))}</div><div class="detail">${esc(t('wiz.files.pkgText'))}</div></div></div>`
+      ? `<div class="tile compact"><span class="dot"></span><span class="title">${esc(t('wiz.files.pkgTitle'))}</span><span class="faint grow">${esc(t('wiz.files.pkgText'))}</span></div>`
       : missing.length === 0
         ? `<div class="tile"><span class="dot"></span><div class="grow"><div class="title">${esc(t('wiz.files.toolsOk'))}</div><div class="detail">${esc(tools.map((x) => x.name).join(' · '))}</div></div></div>`
         : `<div class="tile"><span class="badge bad">${icon('triangle-alert')}</span><div class="grow"><div class="title">${esc(t('wiz.files.toolsMissing'))}</div>${missing.map((x) => `<div class="detail"><b>${esc(x.name)}</b>: ${esc(x.hint)}</div>`).join('')}</div></div>`;
@@ -108,13 +108,14 @@ async function renderFiles(el, ctx, cfg, status) {
              ${report.dlc?.length ? `<span class="ok">&#10003; ${esc(t('wiz.files.addon'))} ${esc(report.dlc.join(', '))}</span>` : `<span>${esc(t('wiz.files.noAddon'))}</span>`}</div></div></div>`
         : report
           ? `<div class="tile"><span class="badge bad">${icon('x')}</span><div class="grow"><div class="title">${esc(t('wiz.files.notUsable'))}</div><div class="detail">${esc(report.path)}</div>${(report.errors || []).map((e) => `<div class="detail">${esc(e)}</div>`).join('')}</div></div>`
-          : `<div class="tile"><div class="grow"><div class="detail">${esc(t('wiz.files.none'))}</div></div></div>`;
+          : `<div class="tile compact"><span class="faint">${esc(t('wiz.files.none'))}</span></div>`;
     const gb = (n) => (n == null ? '' : t('wiz.folders.free', { size: (n / (1 << 30)).toFixed(0) }));
-    const folderRow = (which, f, title, hint) => `<div class="tile"><span class="badge">${icon(which === 'game' ? 'hard-drive' : 'file-archive')}</span>
-        <div class="grow"><div class="title">${esc(title)}${f.is_default ? ` <span class="faint">${esc(t('wiz.folders.default'))}</span>` : ''}</div>
-          <div class="detail"><code>${esc(f.path)}</code></div><div class="detail">${esc(hint)}${f.free != null ? ` · ${esc(gb(f.free))}` : ''}</div></div>
-        <button class="btn" data-folder="${which}" ${busy ? 'disabled' : ''}>${icon('folder')}${esc(t('wiz.folders.change'))}</button>
-        ${f.is_default ? '' : `<button class="btn quiet" data-folder-reset="${which}" ${busy ? 'disabled' : ''}>${esc(t('wiz.folders.reset'))}</button>`}</div>`;
+    // One compact line per folder: name, path, free space, Change (the hint is the row's tooltip)
+    const folderRow = (which, f, title, hint) => `<div class="tile compact folder-row" title="${esc(hint)}">${icon(which === 'game' ? 'hard-drive' : 'file-archive')}
+        <span class="title">${esc(title)}</span><code class="grow path">${esc(f.path)}</code>
+        <span class="faint">${f.free != null ? esc(gb(f.free)) : ''}${f.is_default ? ` · ${esc(t('wiz.folders.default'))}` : ''}</span>
+        <button class="btn sm" data-folder="${which}" ${busy ? 'disabled' : ''}>${esc(t('wiz.folders.change'))}</button>
+        ${f.is_default ? '' : `<button class="btn quiet sm" data-folder-reset="${which}" ${busy ? 'disabled' : ''}>${esc(t('wiz.folders.reset'))}</button>`}</div>`;
     const foldersHtml = folders
       ? `<div class="section-label">${esc(t('wiz.folders.title'))}</div>
          ${folderRow('game', folders.game, t('wiz.folders.game'), t('wiz.folders.gameHint'))}

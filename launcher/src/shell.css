@@ -203,3 +203,12 @@ html, body { background: transparent; }
 
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* Compact one-line tiles (Game files step: the package note, the two folders) */
+.tile.compact { padding: var(--space-2) var(--space-4); gap: var(--space-3); min-height: 0; font-size: var(--font-size-sm); }
+.tile.compact .title { white-space: nowrap; }
+.tile.compact .path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.tile.compact [data-lucide], .tile.compact svg { width: 18px; height: 18px; flex: 0 0 auto; color: var(--color-text-dim); }
+.tile.compact .faint { white-space: nowrap; }
+.tile.compact.folder-row + .tile.compact.folder-row { margin-top: calc(-1 * var(--space-2)); }
+.btn.sm { padding: 4px var(--space-3); min-height: 30px; font-size: var(--font-size-sm); }
