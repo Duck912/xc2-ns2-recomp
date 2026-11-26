@@ -350,6 +350,24 @@ void LiveInput::live(nxrt::hid::InputSnapshot &out) {
     const HWND fg = ::GetForegroundWindow();
     const bool focused = own && fg == own;
     const bool menu_blocked = nxrt::play::overlay_blocks_game();
+    // Mouse camera: capture the pointer (relative mode, raw and unaccelerated counts) while the game has the focus and no
+    // page is open, and turn the counts into right-stick deflection for this frame. The game's own camera curve runs on top,
+    // which is why this drives the stick instead of a yaw angle. [xc2] mouse_capture = 0 leaves the pointer to the game.
+    static const bool mouse_cam = nxrt::config_get_bool("xc2", "mouse_capture", true);
+    static const double mouse_full = [] {
+        const double v = nxrt::config_get_double("xc2", "mouse_stick_scale", 55.0);   // counts for full deflection
+        return v > 1.0 ? v : 1.0;
+    }();
+    static const bool mouse_invert_y = nxrt::config_get_bool("xc2", "mouse_invert_y", false);
+    static bool mouse_held = false;
+    const bool want_mouse = mouse_cam && own != nullptr && focused && !menu_blocked;
+    if (want_mouse != mouse_held) {
+        mouse_held = want_mouse;
+        nxrt::play::set_external_mouse_capture(mouse_held);
+        nxrt::platform::set_relative_mouse(mouse_held);
+        if (mouse_held) nxrt::input::mouse_delta_take();   // drop whatever piled up before the capture
+        NXLOG_I("input", "mouse camera %s", mouse_held ? "on (pointer captured)" : "off");
+    }
     // one line the first time a mapped key is down, so a hands-on session can be told from "the keyboard is not seen"
     static bool said_focus = false;
     if (!said_focus && own && (down('W') || down(VK_SPACE) || down(VK_RETURN) || down(VK_ESCAPE) || down('A'))) {
@@ -372,6 +390,14 @@ void LiveInput::live(nxrt::hid::InputSnapshot &out) {
             if (brx != 0.0f || bry != 0.0f) {
                 klx += static_cast<int>(std::lround(brx * 32767.0f));
                 kly += static_cast<int>(std::lround(bry * 32767.0f));
+            }
+        }
+        if (mouse_held) {
+            const nxrt::input::MouseDelta d = nxrt::input::mouse_delta_take();
+            if (d.dx != 0.0 || d.dy != 0.0) {
+                const double dy = mouse_invert_y ? -d.dy : d.dy;
+                klx += static_cast<int>(std::lround(std::clamp(d.dx / mouse_full, -1.0, 1.0) * 32767.0));
+                kly += static_cast<int>(std::lround(std::clamp(-dy / mouse_full, -1.0, 1.0) * 32767.0));
             }
         }
     }

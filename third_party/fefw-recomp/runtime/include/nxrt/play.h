@@ -58,6 +58,11 @@ bool overlay_blocks_game();                 // true while the F1 overlay (or on-
 // does, on purpose) gets nothing from the keyboard unless it asks for this. False when play mode is not running.
 bool binding_output(uint64_t now_ns, uint64_t* buttons, float* lx, float* ly, float* rx, float* ry);
 
+// Hands the pointer to an external input source (xc2_boot's LiveInput turns the counts into right-stick camera
+// movement). While this is on, play mode stops capturing and releasing the mouse itself, and stops reading the
+// counts for its own aim, so the two never fight over the same deltas.
+void set_external_mouse_capture(bool on);
+
 // Live gamepad tuning read by external input sources (e.g. xc2_boot's LiveInput). Lock-free snapshot.
 struct LivePadConfig {
     bool label_abxy = false;

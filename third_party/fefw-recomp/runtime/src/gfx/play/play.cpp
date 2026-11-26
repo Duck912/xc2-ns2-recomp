@@ -71,6 +71,10 @@ namespace {
 // more without one, and Windows then calls the window "Not Responding". busy_pump runs before every SVC (svc_set_busy_hook); on the
 // thread that owns the window it pumps the events when the last pump is 100 ms old. Elsewhere it costs a thread-id compare.
 std::atomic<DWORD> g_pump_tid{0};
+// Set by an external input source that drives the pointer itself (xc2_boot's LiveInput, which turns the counts into
+// right-stick camera movement). While on, play mode neither captures nor releases the mouse and its aim path leaves
+// the deltas alone - otherwise the two would toggle the capture against each other every frame.
+std::atomic<bool> g_external_mouse{false};
 std::atomic<uint64_t> g_last_pump_ms{0};
 void keyboard_service();
 void busy_pump() {
@@ -1041,7 +1045,8 @@ int update_hook(::Ctx*, uint64_t, void*) {
     if (st.window) {
         platform::set_text_input(st.overlay && st.overlay->keyboard_open());   // typed text for the on-screen keyboard only
         const bool want = st.capture_mouse && platform::focused() && !platform::minimized() && !overlay_visible && playing &&
-                          st.capture_state.load() == 0 && !hid::jc2_mouse_wants_pointer();
+                          st.capture_state.load() == 0 && !hid::jc2_mouse_wants_pointer() &&
+                          !g_external_mouse.load(std::memory_order_relaxed);
         if (want != platform::relative_mouse()) {
             platform::set_relative_mouse(want);
             if (want) input::mouse_delta_take();      // nothing that piled up before the capture
@@ -1610,6 +1615,12 @@ void stop() {
 bool overlay_blocks_game() {
     const G& st = g();
     return st.started && st.overlay && st.overlay->blocks_game();
+}
+
+void set_external_mouse_capture(bool on) {
+    const bool was = g_external_mouse.exchange(on, std::memory_order_relaxed);
+    // Hand the pointer back cleanly on the way out: the caller captures it again on its own terms.
+    if (was && !on && platform::relative_mouse()) platform::set_relative_mouse(false);
 }
 
 bool binding_output(uint64_t now_ns, uint64_t* buttons, float* lx, float* ly, float* rx, float* ry) {
