@@ -10,35 +10,36 @@
  */
 
 :root {
-  color-scheme: light;
+  color-scheme: dark;
 
-  /* surfaces: sky blue, with the cards a shade lighter so they lift off the page */
-  --color-bg: #bfe3f7;
-  --color-surface: #d9eefb;
-  --color-surface-raised: #eef8fe;
-  --color-surface-sunken: #a5d3ec;
-  --color-border: #8ec4e2;
-  --color-border-strong: #6aa6c9;
+  /* surfaces: the icon's midnight indigo, layered the way Galaxia's menu layers its panels */
+  --color-bg: #0d1020;
+  --color-surface: #161a33;
+  --color-surface-raised: #1e2344;
+  --color-surface-sunken: #0a0c19;
+  --color-border: #2a3060;
+  --color-border-strong: #3b4380;
 
-  /* text: deep navy ink, which is what reads on a light blue page */
-  --color-text: #0c2b40;
-  --color-text-dim: #3d6480;
-  --color-text-faint: #6b8fa8;
+  /* text: Galaxia's warm cream on indigo */
+  --color-text: #f3eee2;
+  --color-text-dim: #b8b2c6;
+  --color-text-faint: #7d7a94;
 
-  /* brand and state: cherry red, the colour the app icon sets its monogram in */
-  --color-accent: #d0244c;
-  --color-accent-strong: #b01b3f;
-  --color-on-accent: #fff5f7;
-  --color-ok: #1a7f6b;
-  --color-warn: #a35c06;
-  --color-danger: #c0273c;
-  --color-focus: #1667c4;
+  /* brand and state: Monado red (the icon), ice-blue inlays for focus and progress */
+  --color-accent: #cd302b;
+  --color-accent-strong: #e8433d;
+  --color-on-accent: #fff6f4;
+  --color-ok: #4fbf9a;
+  --color-warn: #e0a443;
+  --color-danger: #ef5a52;
+  --color-focus: #9debff;
+  --color-glow: #318cac;
 
   /* background slot */
   --bg-image: none;
   --bg-size: cover;
   --bg-position: center;
-  --bg-overlay: rgba(191, 227, 247, 0.86);
+  --bg-overlay: rgba(13, 16, 32, 0.0);
 
   /* type */
   --font-ui: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
@@ -70,8 +71,8 @@
   --icon-stroke: 2;
 
   /* depth and motion */
-  --shadow-card: 0 1px 2px rgba(12, 43, 64, 0.10), 0 8px 24px rgba(12, 43, 64, 0.08);
-  --shadow-pop: 0 12px 40px rgba(12, 43, 64, 0.18);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 24px rgba(0, 0, 0, 0.25);
+  --shadow-pop: 0 12px 40px rgba(0, 0, 0, 0.45);
   --transition: 140ms ease;
 }
 

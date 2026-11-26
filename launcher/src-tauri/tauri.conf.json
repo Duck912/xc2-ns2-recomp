@@ -14,10 +14,12 @@
       {
         "label": "main",
         "title": "XC:DE NS2 recomp launcher",
-        "width": 1080,
-        "height": 900,
+        "width": 980,
+        "height": 660,
         "minWidth": 860,
-        "minHeight": 560,
+        "decorations": false,
+        "transparent": true,
+        "minHeight": 600,
         "center": true
       }
     ],

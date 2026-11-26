@@ -46,6 +46,8 @@ struct Config {
     runner: String,
     /// The launcher's own interface language ("en", "zh", or the code of a language pack in locales/). Empty: English.
     lang: String,
+    /// Build without NVIDIA Streamline (the game's DLSS then falls back to FSR 1): setup runs with --no-streamline.
+    no_streamline: bool,
 }
 
 fn config_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -126,6 +128,7 @@ fn paths(cfg: &Config) -> Result<setup::Paths, String> {
         dlc: report.dlc_dir.map(PathBuf::from),
         game_dir,
         package: package_tools(),
+        no_streamline: cfg.no_streamline,
     })
 }
 

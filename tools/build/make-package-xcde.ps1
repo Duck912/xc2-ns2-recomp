@@ -77,7 +77,6 @@ New-Item -ItemType Directory -Force (Join-Path $Out 'xcde\sites') | Out-Null
 Copy-Item (Join-Path $root 'xcde\sites\*') (Join-Path $Out 'xcde\sites') -Force
 Put 'xcde\xcde.ico'                    # the exe's icon (the package link embeds it)
 Put 'xcde\supported_builds.txt'        # the launcher's dump check
-Put 'xcdeÍe.ico'                    # the exe's icon (the package link embeds it)
 Put 'xc2\src\xc2_stub.cpp'
 Put 'xc2\src\xc2_modules.h'
 CopyTree (Join-Path $root 'third_party\nxrecomp\recomp\include') (Join-Path $Out 'third_party\nxrecomp\recomp\include')

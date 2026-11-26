@@ -5,7 +5,7 @@ import {
   Save, Undo2, Folder, Monitor, Volume2, Mouse, Gamepad2, LoaderCircle, FolderSearch, Wrench,
   ShieldCheck, Keyboard, HardDrive, FileArchive, Terminal, ListChecks, Hammer, Circle, Sparkles, Gauge,
   Download, RefreshCw, RotateCw, CircleArrowUp, Languages, Package,
-  Plus, ChevronUp, ChevronDown, ChevronRight, GripVertical,
+  Plus, ChevronUp, ChevronDown, ChevronRight, GripVertical, Minus, X, Check, ArrowLeft, ScrollText,
 } from 'lucide';
 
 const ICONS = {
@@ -13,7 +13,7 @@ const ICONS = {
   Save, Undo2, Folder, Monitor, Volume2, Mouse, Gamepad2, LoaderCircle, FolderSearch, Wrench,
   ShieldCheck, Keyboard, HardDrive, FileArchive, Terminal, ListChecks, Hammer, Circle, Sparkles, Gauge,
   Download, RefreshCw, RotateCw, CircleArrowUp, Languages, Package,
-  Plus, ChevronUp, ChevronDown, ChevronRight, GripVertical,
+  Plus, ChevronUp, ChevronDown, ChevronRight, GripVertical, Minus, X, Check, ArrowLeft, ScrollText,
 };
 
 /** Calls a Rust command. */

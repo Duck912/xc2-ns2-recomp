@@ -70,6 +70,8 @@ pub struct Paths {
     pub game_dir: PathBuf,
     /// the release package's tools/ folder (tools/build/fefw_build.py next to the launcher); None in a checkout
     pub package: Option<PathBuf>,
+    /// the player unticked "Download NVIDIA DLSS": setup runs with --no-streamline
+    pub no_streamline: bool,
 }
 
 impl Paths {
@@ -907,6 +909,9 @@ fn run_steps(r: &Runner, p: &Paths, _jobs: usize) -> Result<bool, String> {
         // and reports the toolchain missing on a machine that builds.
         .arg("--skip")
         .arg(if p.package.is_some() { "" } else { "doctor" });
+    if p.no_streamline {
+        c.arg("--no-streamline");
+    }
     if let Some(dlc) = &p.dlc {
         c.env("XC2_AOC_DIR", dlc);
     }

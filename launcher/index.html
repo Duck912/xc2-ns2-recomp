@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>XC:DE NS2 recomp launcher</title>
+    <title>XC:DE NS2 recomp</title>
     <link rel="icon" type="image/png" href="/icon.png" />
   </head>
   <body>
@@ -13,7 +13,19 @@
     </div>
 
     <div id="app">
-      <nav id="nav" aria-label="Main"></nav>
+      <!-- The window has no system frame (tauri.conf.json decorations: false): this bar is its title bar. -->
+      <header id="titlebar" data-tauri-drag-region>
+        <div class="tb-brand" data-tauri-drag-region>
+          <img src="/icon.png" alt="" class="tb-icon" data-tauri-drag-region />
+          <span class="tb-name" id="tb-name" data-tauri-drag-region>XC:DE Recomp</span>
+        </div>
+        <div class="tb-center" id="tb-center" data-tauri-drag-region></div>
+        <div class="tb-actions">
+          <button class="tb-btn" id="tb-settings" type="button"><i data-lucide="settings"></i></button>
+          <button class="tb-btn round" id="tb-min" type="button"><i data-lucide="minus"></i></button>
+          <button class="tb-btn round" id="tb-close" type="button"><i data-lucide="x"></i></button>
+        </div>
+      </header>
       <main id="view"></main>
     </div>
     <div id="toast" aria-live="polite"></div>

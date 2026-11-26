@@ -241,6 +241,7 @@ mod tests {
             dlc: None,
             game_dir: game.to_path_buf(),
             package: None,
+            no_streamline: false,
         }
     }
 
