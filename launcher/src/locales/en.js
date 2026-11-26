@@ -455,7 +455,7 @@ export const en = {
   'settings.files.whatStreamlineFg': 'the Streamline frame generation files',
     'settings.resolution.label': 'Output resolution',
     'settings.resolution.auto': 'the game own default',
-    'settings.resolution.hint': "The window size and the size the game tells its display it has. 1440p is the ceiling of the game's own link.",
+    'settings.resolution.hint': 'The size the game reports to its display, and the ceiling of its internal resolution. Set it to 1440p or higher for your GPU and pair it with DLSS or FSR - at 1080p the picture looks soft.',
     'settings.opMode.label': 'Picture mode',
     'settings.opMode.docked': 'Docked (full quality)',
     'settings.opMode.handheld': 'Handheld (lighter)',

@@ -454,7 +454,7 @@ export const zh = {
   'settings.files.whatStreamlineFg': 'Streamline 帧生成的 DLL',
     'settings.resolution.label': '输出分辨率',
     'settings.resolution.auto': '游戏自己的默认值',
-    'settings.resolution.hint': '窗口大小，也是游戏向它的显示器报告的尺寸。1440p 是游戏自己链路的上限。',
+    'settings.resolution.hint': '游戏向它的显示器报告的尺寸，也决定内部分辨率的上限。建议按显卡性能设到 1440p 或更高，再配合 DLSS 或 FSR 使用——只开 1080p 时画面会偏糊。',
     'settings.opMode.label': '画质模式',
     'settings.opMode.docked': '主机模式（高画质）',
     'settings.opMode.handheld': '掌机模式（省性能）',
