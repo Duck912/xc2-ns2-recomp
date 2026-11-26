@@ -2784,7 +2784,8 @@ int main(int argc, char **argv) {
         g_frame_limiter = nxrt::play::limiter();
         nxrt::play::StartOptions po;
         po.window = true;
-        po.overlay = false;
+        po.overlay = true;
+        po.foreign_overlay = true;   // the F1 menu and the F10 counter, drawn into n2den's frames (set_overlay once n2den starts)
         nxrt::play::start(po);
     } else {
         std::string err;
@@ -3022,6 +3023,7 @@ int main(int argc, char **argv) {
         nd.sdk_image_size = static_cast<size_t>(sdk_image_size);
         std::string err;
         if (!nxrt::nvn::n2den::start(nd, &err)) die("n2den NVN-HLE: %s", err.c_str());
+        nxrt::nvn::n2den::set_overlay(nxrt::play::overlay());
     }
 
     // Model-spawn probe (XC2_MODEL_PROBE=1): "did the engine ever create this model?", logged with its arguments. Works

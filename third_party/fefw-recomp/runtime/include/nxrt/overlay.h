@@ -29,6 +29,7 @@ public:
         Renderer* renderer = nullptr;
         FrameLimiter* limiter = nullptr;     // optional: shows and sets the frame cap
         bool has_window = true;              // false: no window controls (headless)
+        bool foreign = false;                // another renderer presents (n2den): device/renderer null, draw_foreign draws
     };
     static std::unique_ptr<Overlay> create(const Context& ctx, std::string* error = nullptr);
     ~Overlay();
@@ -96,6 +97,29 @@ public:
 
     // The Renderer overlay hook: builds and draws the menu on top of the frame (no-op while hidden, unless the counter is on).
     void draw(const FrameInfo& f);
+
+    // Drawing into frames another renderer presents (n2den's NVN-HLE): its device and the frame's command buffer. The
+    // image is in GENERAL and stays there; the framebuffer has one colour attachment of `format`. Called on that
+    // renderer's present thread; release_foreign when its device is about to go.
+    struct ForeignDevice {
+        VkInstance instance = VK_NULL_HANDLE;
+        VkPhysicalDevice physical = VK_NULL_HANDLE;
+        VkDevice device = VK_NULL_HANDLE;
+        uint32_t api_version = 0;
+        uint32_t queue_family = 0;
+        VkQueue queue = VK_NULL_HANDLE;
+        PFN_vkGetInstanceProcAddr get_instance_proc_addr = nullptr;
+        void (*lock_queue)(bool lock) = nullptr;   // held around every use of `queue` (texture uploads)
+    };
+    struct ForeignFrame {
+        VkCommandBuffer cmd = VK_NULL_HANDLE;
+        VkImage image = VK_NULL_HANDLE;
+        VkFramebuffer framebuffer = VK_NULL_HANDLE;
+        VkFormat format = VK_FORMAT_UNDEFINED;
+        VkExtent2D extent = {};
+    };
+    void draw_foreign(const ForeignDevice& d, const ForeignFrame& f);
+    void release_foreign();
     void install_on_renderer();              // renderer->set_overlay_hook(draw)
 
     uint64_t frames_drawn() const;

@@ -26,6 +26,8 @@
 #include "nxrt/frame_limiter.h"
 #include "nxrt/gfx.h"
 
+namespace nxrt::gfx { class Overlay; }
+
 namespace nxrt::play {
 
 // Loads the settings file and creates the frame limiter. Idempotent. Returns false (and uses the factory settings) when the file is invalid.
@@ -47,11 +49,14 @@ struct StartOptions {
     gfx::Device* device = nullptr;          // needed for the overlay
     gfx::Renderer* renderer = nullptr;      // needed for the overlay and for present-mode changes; null = no graphics (unit tests)
     bool window = false;                    // a platform window exists: pump its events, capture the pointer, fullscreen, quit on close
-    bool overlay = true;                    // create the F1 overlay (needs device and renderer)
+    bool overlay = true;                    // create the F1 overlay (needs device and renderer, or foreign_overlay)
+    bool foreign_overlay = false;           // another renderer presents (n2den): the overlay draws into its frames through
+                                            // overlay()->draw_foreign, without this runtime's device and renderer
 };
 bool start(const StartOptions& opt);        // after nxrt::init, the renderer and the NVN back end; installs the hid input source and the hooks
 void stop();                                // saves changed settings, removes the hooks and the input source
 bool overlay_blocks_game();                 // true while the F1 overlay (or on-screen keyboard) wants keyboard/mouse/pad input
+gfx::Overlay* overlay();                    // the F1 overlay, or null (no overlay, play mode not started)
 
 // The binding engine's contribution at `now_ns`: Switch buttons plus stick deflection in -1..1. Play mode installs its
 // own input source (PlaySource) that already merges this, but a game whose own source replaces it (xc2_boot's LiveInput

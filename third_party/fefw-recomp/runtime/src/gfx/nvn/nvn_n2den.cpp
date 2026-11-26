@@ -24,6 +24,7 @@
 #include "nxrt/log.h"
 #include "nxrt/memory.h"
 #include "nxrt/nvn.h"
+#include "nxrt/overlay.h"
 
 namespace nxrt::nvn::n2den {
 namespace {
@@ -99,6 +100,27 @@ void* MapView(void*, uint64_t address, uint64_t size, void** view) {
 }
 void UnmapView(void*, void* view) { mem::heap_private_view_unmap(view); }
 
+// The play overlay over n2den's frames (n2den's replay thread).
+void OverlayRecord(void* user, const N2denNvnhle::OverlayDevice& d, const N2denNvnhle::OverlayFrame& f) {
+    gfx::Overlay::ForeignDevice fd;
+    fd.instance = static_cast<VkInstance>(d.instance);
+    fd.physical = static_cast<VkPhysicalDevice>(d.physical);
+    fd.device = static_cast<VkDevice>(d.device);
+    fd.api_version = d.api_version;
+    fd.queue_family = d.queue_family;
+    fd.queue = static_cast<VkQueue>(d.queue);
+    fd.get_instance_proc_addr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(d.get_instance_proc_addr);
+    fd.lock_queue = d.lock_queue;
+    gfx::Overlay::ForeignFrame ff;
+    ff.cmd = static_cast<VkCommandBuffer>(f.cmdbuf);
+    ff.image = reinterpret_cast<VkImage>(f.image);
+    ff.framebuffer = reinterpret_cast<VkFramebuffer>(f.framebuffer);
+    ff.format = static_cast<VkFormat>(f.format);
+    ff.extent = {f.width, f.height};
+    static_cast<gfx::Overlay*>(user)->draw_foreign(fd, ff);
+}
+void OverlayRelease(void* user) { static_cast<gfx::Overlay*>(user)->release_foreign(); }
+
 }  // namespace
 
 bool available() { return true; }
@@ -150,6 +172,18 @@ void resize(uint32_t width, uint32_t height) {
     if (active()) N2denNvnhle::Resize(width, height);
 }
 
+void set_overlay(gfx::Overlay* overlay) {
+    if (!overlay) {
+        N2denNvnhle::SetOverlay(nullptr);
+        return;
+    }
+    N2denNvnhle::OverlayCallbacks cb;
+    cb.user = overlay;
+    cb.record = &OverlayRecord;
+    cb.release_device = &OverlayRelease;
+    N2denNvnhle::SetOverlay(&cb);
+}
+
 void notify_cpu_write(uint64_t address, uint64_t size) {
     if (active()) N2denNvnhle::NotifyCpuWrite(address, size);
 }
@@ -168,6 +202,7 @@ void stop() {}
 bool active() { return false; }
 void resize(uint32_t, uint32_t) {}
 void notify_cpu_write(uint64_t, uint64_t) {}
+void set_overlay(gfx::Overlay*) {}
 }  // namespace nxrt::nvn::n2den
 
 #endif  // NXRT_HAVE_N2DEN

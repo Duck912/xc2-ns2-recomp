@@ -1567,6 +1567,25 @@ bool start(const StartOptions& opt) {
                 apply_fps_counter(st.settings.fps);
             }
         }
+    } else if (opt.overlay && opt.foreign_overlay) {
+        // another renderer presents (n2den's NVN-HLE): the same overlay and menu, drawn into its frames (draw_foreign)
+        gfx::Overlay::Context oc;
+        oc.foreign = true;
+        oc.limiter = &st.limiter;
+        oc.has_window = st.window;
+        std::string err;
+        st.overlay = gfx::Overlay::create(oc, &err);
+        if (!st.overlay) {
+            NXLOG_W(kTag, "no overlay: %s", err.c_str());
+        } else {
+            gfx::Overlay* ov = st.overlay.get();
+            if (const GamePlay* gp = game_play(); gp && gp->settings_menu) {
+                st.overlay->set_menu([gp, ov] { gp->settings_menu(g_host, *ov); });
+            } else {
+                st.overlay->set_menu([ov] { draw_settings_menu(g_host, *ov); });
+            }
+            apply_fps_counter(st.settings.fps);
+        }
     }
     // The software keyboard asks the player on the overlay's on-screen keyboard while there is a game window ([applet] swkbd_prompt = false: never;
     // force: also without a window, for scripted headless runs).
@@ -1623,6 +1642,11 @@ void stop() {
     }
     st.limiter.set_pre_frame_hook(nullptr, nullptr);
     st.started = false;
+}
+
+gfx::Overlay* overlay() {
+    G& st = g();
+    return st.overlay.get();
 }
 
 bool overlay_blocks_game() {

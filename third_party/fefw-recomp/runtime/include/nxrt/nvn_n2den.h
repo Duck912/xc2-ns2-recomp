@@ -8,6 +8,8 @@
 #include <cstdint>
 #include <string>
 
+namespace nxrt::gfx { class Overlay; }
+
 namespace nxrt::nvn::n2den {
 
 struct StartDesc {
@@ -26,5 +28,7 @@ bool active();
 void resize(uint32_t width, uint32_t height);
 // The guest CPU wrote memory the GPU may read outside NVN calls (decoded movie frames).
 void notify_cpu_write(uint64_t address, uint64_t size);
+// Draws `overlay` (made with Context::foreign) over every frame n2den presents, after its upscaler; null: none.
+void set_overlay(gfx::Overlay* overlay);
 
 }  // namespace nxrt::nvn::n2den

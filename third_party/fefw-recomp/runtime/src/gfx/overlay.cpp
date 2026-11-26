@@ -195,6 +195,14 @@ struct Overlay::Impl {
     ImGuiStyle base_style;            // the style at scale 1; style = base_style scaled by ui_scale (update_scale)
     float ui_scale = 0.f;             // 0: not applied yet
     bool backend_ready = false;
+    // foreign mode (Context::foreign): the Vulkan backend starts on the first frame, with that renderer's device
+    bool foreign_failed = false;
+    VkDevice foreign_device = VK_NULL_HANDLE;
+    VkRenderPass foreign_pass = VK_NULL_HANDLE;
+    VkFormat foreign_format = VK_FORMAT_UNDEFINED;
+    const ForeignFrame* foreign_frame = nullptr;     // set while draw_foreign runs draw
+    void (*foreign_lock)(bool) = nullptr;
+    bool capturing() const { return ctx.renderer && ctx.renderer->capture_pending(); }
     std::atomic<bool> visible{false};
     std::mutex mu;                    // guards the ImGui context: events arrive on the game's main thread, drawing happens on the presenting thread
     int toggle_sc = SDL_SCANCODE_F1;
@@ -350,6 +358,7 @@ void Overlay::Impl::build_ui() {
         menu();
         return;
     }
+    if (!ctx.renderer) return;
     Renderer& r = *ctx.renderer;
     // First-use layout, in units of the UI scale (update_scale): the panels (the settings menu) sit at the top left, the diagnostics window
     // at the top right and folded up. The player moves them; nothing is remembered between runs.
@@ -464,7 +473,7 @@ void Overlay::Impl::update_scale(const VkExtent2D& extent) {
 }
 
 std::unique_ptr<Overlay> Overlay::create(const Context& ctx, std::string* error) {
-    if (!ctx.device || !ctx.renderer) {
+    if (!ctx.foreign && (!ctx.device || !ctx.renderer)) {
         if (error) *error = "overlay needs a device and a renderer";
         return nullptr;
     }
@@ -472,8 +481,8 @@ std::unique_ptr<Overlay> Overlay::create(const Context& ctx, std::string* error)
     o->impl_ = new Impl();
     Impl& s = *o->impl_;
     s.ctx = ctx;
-    s.color_format = ctx.renderer->format();
-    if (ctx.renderer->output_kind() != extras::OutputKind::Sdr8) {
+    if (ctx.renderer) s.color_format = ctx.renderer->format();
+    if (ctx.renderer && ctx.renderer->output_kind() != extras::OutputKind::Sdr8) {
         // HDR swapchain: ImGui draws into an RGBA8 target that the composite maps onto the swapchain (see draw)
         if (s.composite.init(*ctx.device)) {
             s.hdr = true;
@@ -602,8 +611,12 @@ std::unique_ptr<Overlay> Overlay::create(const Context& ctx, std::string* error)
     }
     ImGui::GetStyle().FontSizeBase = 18.0f;
     s.base_style = ImGui::GetStyle();
-    const VkExtent2D e = ctx.renderer->extent();
+    const VkExtent2D e = ctx.renderer ? ctx.renderer->extent() : VkExtent2D{1280, 720};
     io.DisplaySize = ImVec2(static_cast<float>(e.width), static_cast<float>(e.height));
+    if (ctx.foreign) {
+        NXLOG_I(kTag, "overlay ready, drawn into another renderer's frames (toggle key %s)", SDL_GetScancodeName(static_cast<SDL_Scancode>(s.toggle_sc)));
+        return o;
+    }
 
     VkPipelineRenderingCreateInfoKHR rci = {VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR};
     rci.colorAttachmentCount = 1;
@@ -637,7 +650,7 @@ Overlay::~Overlay() {
     impl_->shutdown_perf_hud();
     if (impl_->ctx.device) impl_->ctx.device->wait_idle();
     impl_->composite.shutdown();
-    if (impl_->backend_ready) ImGui_ImplVulkan_Shutdown();
+    if (impl_->backend_ready && !impl_->ctx.foreign) ImGui_ImplVulkan_Shutdown();   // foreign: release_foreign did it with the device
     if (impl_->imgui) ImGui::DestroyContext(impl_->imgui);
     delete impl_;
 }
@@ -1112,7 +1125,7 @@ void Overlay::apply_present_pending() {
     Impl& s = *impl_;
     if (s.want_mode) {
         s.want_mode = false;
-        s.ctx.renderer->set_present_mode(s.new_mode);
+        if (s.ctx.renderer) s.ctx.renderer->set_present_mode(s.new_mode);
     }
 }
 
@@ -1702,8 +1715,8 @@ void Overlay::draw(const FrameInfo& f) {
     const bool counter_on = s.counter_show.load(std::memory_order_relaxed);
     const auto now = std::chrono::steady_clock::now();
     const double now_s = std::chrono::duration<double>(now.time_since_epoch()).count();
-    const bool note_on = s.note_visible(now_s) && (s.counter_in_shots.load(std::memory_order_relaxed) || !s.ctx.renderer->capture_pending());
-    const bool ptr_on = s.ptr_show.load(std::memory_order_relaxed) && (s.ptr_in_shots.load(std::memory_order_relaxed) || !s.ctx.renderer->capture_pending());
+    const bool note_on = s.note_visible(now_s) && (s.counter_in_shots.load(std::memory_order_relaxed) || !s.capturing());
+    const bool ptr_on = s.ptr_show.load(std::memory_order_relaxed) && (s.ptr_in_shots.load(std::memory_order_relaxed) || !s.capturing());
     const bool kb_on = s.kb_poll();
     if (!s.visible && !counter_on && !note_on && !ptr_on && !kb_on) {
         s.last_frame = now;
@@ -1732,7 +1745,7 @@ void Overlay::draw(const FrameInfo& f) {
         s.counter_was_on = false;
     }
     // a screenshot leaves the counter out unless asked for; with the menu hidden there is then nothing to draw
-    const bool show_counter = counter_on && (s.counter_in_shots.load(std::memory_order_relaxed) || !s.ctx.renderer->capture_pending());
+    const bool show_counter = counter_on && (s.counter_in_shots.load(std::memory_order_relaxed) || !s.capturing());
     if (!s.visible && !show_counter && !note_on && !ptr_on && !kb_on) {
         s.last_frame = now;
         return;
@@ -1784,7 +1797,39 @@ void Overlay::draw(const FrameInfo& f) {
         ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), f.cmd);
         vkCmdEndRendering(f.cmd);
     };
-    if (hdr_frame) {
+    if (s.foreign_frame) {
+        // another renderer's frame: its framebuffer in a load/store render pass, the image kept in GENERAL
+        const ForeignFrame& ff = *s.foreign_frame;
+        ImDrawData* dd = ImGui::GetDrawData();
+        if (dd->Textures) {   // uploads submit to the shared queue and wait: under its lock (the atlas, glyphs met first)
+            for (ImTextureData* tex : *dd->Textures) {
+                if (tex->Status == ImTextureStatus_WantCreate || tex->Status == ImTextureStatus_WantUpdates || tex->Status == ImTextureStatus_WantDestroy) {
+                    if (s.foreign_lock) s.foreign_lock(true);
+                    ImGui_ImplVulkan_UpdateTexture(tex);
+                    if (s.foreign_lock) s.foreign_lock(false);
+                }
+            }
+        }
+        const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        VkImageMemoryBarrier b = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        b.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+        b.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        b.oldLayout = b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image = ff.image;
+        b.subresourceRange = range;
+        vkCmdPipelineBarrier(ff.cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
+        VkRenderPassBeginInfo rb = {VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+        rb.renderPass = s.foreign_pass;
+        rb.framebuffer = ff.framebuffer;
+        rb.renderArea = {{0, 0}, ff.extent};
+        vkCmdBeginRenderPass(ff.cmd, &rb, VK_SUBPASS_CONTENTS_INLINE);
+        ImGui_ImplVulkan_RenderDrawData(dd, ff.cmd);
+        vkCmdEndRenderPass(ff.cmd);
+        b.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        b.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+        vkCmdPipelineBarrier(ff.cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
+    } else if (hdr_frame) {
         // HDR: the overlay goes into the cleared RGBA8 target, then the composite maps it onto the swapchain image (UI white = paper white)
         const extras::HdrState hs = extras::hdr_state();
         s.composite.begin_overlay(f.cmd);
@@ -1795,6 +1840,94 @@ void Overlay::draw(const FrameInfo& f) {
     }
     s.drawn++;
     ImGui::SetCurrentContext(prev);
+}
+
+void Overlay::draw_foreign(const ForeignDevice& d, const ForeignFrame& f) {
+    Impl& s = *impl_;
+    if (!s.ctx.foreign || s.foreign_failed) return;
+    if (s.backend_ready && f.format != s.foreign_format) release_foreign();   // the presented format changed (HDR): start over
+    if (!s.backend_ready) {
+        // n2den's device: volk's entry points (this runtime's own renderer is not running) and a render pass of the frame's shape
+        volkInitializeCustom(d.get_instance_proc_addr);
+        volkLoadInstanceOnly(d.instance);
+        volkLoadDevice(d.device);
+        VkAttachmentDescription att = {};
+        att.flags = VK_ATTACHMENT_DESCRIPTION_MAY_ALIAS_BIT;
+        att.format = f.format;
+        att.samples = VK_SAMPLE_COUNT_1_BIT;
+        att.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        att.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        att.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        att.initialLayout = att.finalLayout = VK_IMAGE_LAYOUT_GENERAL;
+        const VkAttachmentReference ref = {0, VK_IMAGE_LAYOUT_GENERAL};
+        VkSubpassDescription sub = {};
+        sub.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        sub.colorAttachmentCount = 1;
+        sub.pColorAttachments = &ref;
+        VkRenderPassCreateInfo rpi = {VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+        rpi.attachmentCount = 1;
+        rpi.pAttachments = &att;
+        rpi.subpassCount = 1;
+        rpi.pSubpasses = &sub;
+        if (vkCreateRenderPass(d.device, &rpi, nullptr, &s.foreign_pass) != VK_SUCCESS) {
+            NXLOG_E(kTag, "overlay: render pass for the presented frames failed: no overlay");
+            s.foreign_failed = true;
+            return;
+        }
+        std::lock_guard<std::mutex> lk(s.mu);
+        ImGuiContext* prev = ImGui::GetCurrentContext();
+        ImGui::SetCurrentContext(s.imgui);
+        ImGui_ImplVulkan_InitInfo ii = {};
+        ii.ApiVersion = d.api_version;
+        ii.Instance = d.instance;
+        ii.PhysicalDevice = d.physical;
+        ii.Device = d.device;
+        ii.QueueFamily = d.queue_family;
+        ii.Queue = d.queue;
+        ii.DescriptorPoolSize = 16;
+        ii.MinImageCount = 2;
+        ii.ImageCount = 8;   // vertex buffers come back after 8 frames: more than n2den has in flight
+        ii.PipelineInfoMain.RenderPass = s.foreign_pass;
+        ii.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+        ii.CheckVkResultFn = [](VkResult r) { if (r != VK_SUCCESS) NXLOG_E(kTag, "ImGui Vulkan call failed (%d)", static_cast<int>(r)); };
+        const bool ok = ImGui_ImplVulkan_Init(&ii);
+        ImGui::SetCurrentContext(prev);
+        if (!ok) {
+            NXLOG_E(kTag, "overlay: ImGui_ImplVulkan_Init on the presenting device failed: no overlay");
+            vkDestroyRenderPass(d.device, s.foreign_pass, nullptr);
+            s.foreign_pass = VK_NULL_HANDLE;
+            s.foreign_failed = true;
+            return;
+        }
+        s.foreign_device = d.device;
+        s.foreign_format = f.format;
+        s.backend_ready = true;
+        NXLOG_I(kTag, "overlay drawing into the presented frames (%ux%u, format %d)", f.extent.width, f.extent.height, static_cast<int>(f.format));
+    }
+    s.foreign_lock = d.lock_queue;
+    FrameInfo fi;
+    fi.cmd = f.cmd;
+    fi.image = f.image;
+    fi.format = f.format;
+    fi.extent = f.extent;
+    s.foreign_frame = &f;
+    draw(fi);
+    s.foreign_frame = nullptr;
+}
+
+void Overlay::release_foreign() {
+    Impl& s = *impl_;
+    if (!s.ctx.foreign || !s.backend_ready) return;
+    std::lock_guard<std::mutex> lk(s.mu);
+    ImGuiContext* prev = ImGui::GetCurrentContext();
+    ImGui::SetCurrentContext(s.imgui);
+    ImGui_ImplVulkan_Shutdown();   // its textures come back as WantCreate on the next device
+    ImGui::SetCurrentContext(prev);
+    if (s.foreign_pass != VK_NULL_HANDLE) vkDestroyRenderPass(s.foreign_device, s.foreign_pass, nullptr);
+    s.foreign_pass = VK_NULL_HANDLE;
+    s.foreign_device = VK_NULL_HANDLE;
+    s.backend_ready = false;
 }
 
 void Overlay::install_on_renderer() {
