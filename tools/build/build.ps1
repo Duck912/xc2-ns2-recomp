@@ -24,7 +24,10 @@ param(
     [string]$ObjDir = '',
     [string]$LibDir = '',
     [string]$ModsDir = '',
-    [string]$IniPath = ''
+    [string]$IniPath = '',
+    # Where the shipped per-module site lists live (default xc2\sites). Another game's modules (XC:DE's main) point this at
+    # its own folder: XC2's lists expect XC2's code bytes.
+    [string]$SitesDir = ''
 )
 $ErrorActionPreference = 'Stop'
 $root = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'xc2'   # tools\build -> the checkout's xc2
@@ -116,7 +119,7 @@ if (-not $SkipLift) {
             # their patches. Say so and use the shipped copy; touch the override to mean it.
             $sitesArg = @()
             $override = Join-Path $build "sites-$m.txt"
-            $shipped = Join-Path $root "sites\sites-$m.txt"
+            $shipped = Join-Path $(if ($SitesDir) { $SitesDir } else { Join-Path $root 'sites' }) "sites-$m.txt"
             $useSites = $null
             if (Test-Path $override) {
                 if ((Test-Path $shipped) -and ((Get-Item -LiteralPath $override).LastWriteTime -lt (Get-Item -LiteralPath $shipped).LastWriteTime)) {

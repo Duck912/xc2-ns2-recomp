@@ -2646,6 +2646,7 @@ int main(int argc, char **argv) {
         else if (arg("--log")) logp = argv[++i];
         else if (arg("--gfx")) ++i;   // parsed again below (window | headless)
         else if (arg("--nvn")) ++i;   // parsed again below (runtime | n2den)
+        else if (arg("--game")) ++i;  // parsed again below (xc2 | xcde)
         else if (arg("--entry")) entry_mode = argv[++i];
         else if (arg("--addr")) addr_override = std::strtoull(argv[++i], nullptr, 0);
         else if (!std::strcmp(argv[i], "--prepare-shaders")) prepare_only = true;
@@ -2678,6 +2679,13 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++)
         if (!std::strcmp(argv[i], "--nvn") && i + 1 < argc && !std::strcmp(argv[i + 1], "n2den")) nvn_n2den = true;
     if (const char* b = std::getenv("NXRT_NVN_BACKEND"); b && !std::strcmp(b, "n2den")) nvn_n2den = true;
+    // --game xcde (or XC2_GAME=xcde): Xenoblade Chronicles: Definitive Edition - Nintendo Switch 2 Edition. Its sdk, subsdk0-3
+    // and rtld are byte-identical to this game's (docs/TARGET.md), so the same lifted libraries and their sdk/rtld hooks serve;
+    // only main differs (lifted without this game's site list). Every XC2 main hook and function replacement is skipped.
+    bool game_xcde = false;
+    for (int i = 1; i < argc; i++)
+        if (!std::strcmp(argv[i], "--game") && i + 1 < argc && !std::strcmp(argv[i + 1], "xcde")) game_xcde = true;
+    if (const char* g = std::getenv("XC2_GAME"); g && !std::strcmp(g, "xcde")) game_xcde = true;
     if (nvn_n2den && (headless || !nxrt::nvn::n2den::available()))
         die(headless ? "--nvn n2den needs a window" : "this build has no n2den NVN-HLE (configure the runtime with NXRT_N2DEN_DIST)");
     std::unique_ptr<nxrt::gfx::Device> gfx_device;
@@ -2926,7 +2934,7 @@ int main(int argc, char **argv) {
     nxrt::config_set("boot", "link", link.c_str());
     // The guest rtld relocates the images itself; when we skip it (host link + direct entry) the host's relocation must stay.
     nxrt::config_set("boot", "guest_relinks", (link == "host" && entry_mode == "rtld" && !addr_override) ? "1" : "0");
-    nxrt::config_set("process", "program_id", "0x0100E95004038000");
+    nxrt::config_set("process", "program_id", game_xcde ? "0x0100FF500E34A000" : "0x0100E95004038000");
     // The "Switch 2 Edition" runs the Switch 1 graphics stack (NVN 3.5.0, Maxwell shaders), so its GPU memory
     // keeps Tegra X1 GOB order: with the Switch 2 order every block-linear texture is scrambled (the 16^3 colour
     // LUT came out green and turned the whole scene cyan - HANDOVER section 15).
@@ -2987,7 +2995,7 @@ int main(int argc, char **argv) {
         ::GetClientRect(static_cast<HWND>(nd.native_window), &rc);
         nd.width = static_cast<uint32_t>(rc.right - rc.left);
         nd.height = static_cast<uint32_t>(rc.bottom - rc.top);
-        nd.program_id = 0x0400E95004038001ull;
+        nd.program_id = game_xcde ? 0x0400FF500E34A001ull : 0x0400E95004038001ull;
         nd.sdk_image = reinterpret_cast<const uint8_t*>(g_sdk_base);
         nd.sdk_image_size = static_cast<size_t>(sdk_image_size);
         std::string err;
@@ -2996,6 +3004,9 @@ int main(int argc, char **argv) {
 
     // Model-spawn probe (XC2_MODEL_PROBE=1): "did the engine ever create this model?", logged with its arguments. Works
     // without a re-lift: both site addresses are already in build\sites-main.txt (HANDOVER 19.9, step P3).
+    if (game_xcde) {
+        NXLOG_I("boot", "game: XC:DE S2E - XC2's main hooks and function replacements are not armed");
+    } else {
     if (std::getenv("XC2_MODEL_PROBE")) arm_model_probe(main_base);
     arm_frame_rate(main_base);
     arm_native_res(main_base);
@@ -3023,6 +3034,7 @@ int main(int argc, char **argv) {
     arm_obj_scan(main_base);
     arm_ns1_probe(main_base);
     arm_ns2_mem_probe(main_base);
+    }  // !game_xcde
 
     // Bring-up probe (XC2_TRACE_LAUNCHER=1): which apps::FrameworkLauncher work function runs each frame. The engine draws a
     // frame with no geometry; this tells a standby (waiting for the applet/user) apart from a scene that failed to build.

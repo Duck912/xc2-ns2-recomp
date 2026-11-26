@@ -115,6 +115,8 @@ if ($Shots) {
     Write-Host "shots: $dir"
 }
 
+# n2den's NVN-HLE translates shaders at run time: no prefill pass (which also needs this runtime's own NVN back end).
+if ($env:NXRT_NVN_BACKEND -eq 'n2den') { $NoPrefill = $true }
 if (-not $NoPrefill -and -not $env:XC2_NOPREFILL) {
     & pwsh -NoProfile -File (Join-Path $repo 'tools\\run\\prefill.ps1') -Exe $exe -Exefs $exefs -Cache $cache -Work (Join-Path $repo 'work')
 }
