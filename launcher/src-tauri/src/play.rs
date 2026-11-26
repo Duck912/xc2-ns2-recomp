@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Starts xc2_boot.exe in the run folder, watches it, and reports how it ended. On Linux xc2_boot.exe (a Windows program) runs through a
+//! Starts xcde.exe in the run folder, watches it, and reports how it ended. On Linux xcde.exe (a Windows program) runs through a
 //! runner: the launcher's `runner` setting, else Steam's own Proton, else umu-run, else wine.
 
 use serde::Serialize;
@@ -54,7 +54,7 @@ fn report_files(dir: &Path, started: SystemTime) -> Vec<ReportFile> {
         .collect()
 }
 
-/// The command that starts xc2_boot.exe: the program and its arguments before the exe. On Windows nothing (the exe itself). On Linux
+/// The command that starts xcde.exe: the program and its arguments before the exe. On Windows nothing (the exe itself). On Linux
 /// `custom` (the runner setting, split into words like a shell does, so `"/path/Proton - Experimental/proton" run` works), else
 /// Steam's Proton (in the Steam Linux Runtime, as Steam starts a game), else umu-run, else wine.
 pub fn runner(custom: &str) -> Result<Vec<String>, String> {
@@ -73,7 +73,7 @@ pub fn runner(custom: &str) -> Result<Vec<String>, String> {
             return Ok(vec![r.to_string()]);
         }
     }
-    Err("xc2_boot.exe is a Windows program: on Linux it runs through Proton or Wine. Install Steam and its Proton (Library, Tools, Proton Experimental), umu-launcher (umu-run) or \
+    Err("xcde.exe is a Windows program: on Linux it runs through Proton or Wine. Install Steam and its Proton (Library, Tools, Proton Experimental), umu-launcher (umu-run) or \
          Wine, or set the runner in Settings."
         .into())
 }
@@ -233,7 +233,7 @@ fn read_launch_env(dir: &Path) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Start the package's own xc2_boot.exe: no script, no file outside the install, every path under it.
+/// Start the package's own xcde.exe: no script, no file outside the install, every path under it.
 fn package_command(dir: &Path, exe: &Path) -> Command {
     let logs = dir.join("work").join("logs");
     let _ = std::fs::create_dir_all(&logs);
@@ -291,7 +291,7 @@ pub fn start(app: &AppHandle, p: &crate::setup::Paths, launcher_dir: &Path, mini
     }
     let exe = p.exe();
     if !exe.is_file() {
-        return Err(format!("xc2_boot.exe was not found at {}. Run Set up first.", crate::dump::fwd(&exe)));
+        return Err(format!("xcde.exe was not found at {}. Run Set up first.", crate::dump::fwd(&exe)));
     }
     let package = p.package.is_some();
     let repo = p.repo.clone();
@@ -307,7 +307,7 @@ pub fn start(app: &AppHandle, p: &crate::setup::Paths, launcher_dir: &Path, mini
     }
     let script = (!package).then(|| repo.join("tools").join("run").join("play-xcde.cmd"));
     let launcher_dir = launcher_dir.to_path_buf();
-    set_status(app, Status { state: "running".into(), message: "Starting xc2_boot.exe...".into(), ..Default::default() });
+    set_status(app, Status { state: "running".into(), message: "Starting xcde.exe...".into(), ..Default::default() });
     std::thread::spawn(move || {
         // leading NAME=value words are environment variables, as in a shell (there is none in between here)
         let n = runner.iter().take_while(|w| w.split_once('=').is_some_and(|(k, _)| !k.is_empty() && !k.contains('/'))).count();
@@ -334,10 +334,10 @@ pub fn start(app: &AppHandle, p: &crate::setup::Paths, launcher_dir: &Path, mini
         if is_umu(&runner) && std::env::var_os("GAMEID").is_none() && !assign.iter().any(|w| w.starts_with("GAMEID=")) {
             cmd.env("GAMEID", "0");
         }
-        // xc2_boot.exe reads fefw.ini from its working directory: every path comes from there
+        // xcde.exe reads fefw.ini from its working directory: every path comes from there
         cmd.current_dir(&dir);
         // the upscaler DLLs ship next to the launcher (upscalers/fsr, upscalers/streamline), which need not be the run folder
-        // (on Linux as xc2_boot.exe sees it under Wine: Z:/...)
+        // (on Linux as xcde.exe sees it under Wine: Z:/...)
         if cfg!(windows) {
             cmd.env("NXRT_LAUNCHER_DIR", &launcher_dir);
         } else {
@@ -353,11 +353,11 @@ pub fn start(app: &AppHandle, p: &crate::setup::Paths, launcher_dir: &Path, mini
             Ok(c) => c,
             Err(e) => {
                 let what = if runner.is_empty() { String::new() } else { format!(" ({})", runner.join(" ")) };
-                set_status(&app2, Status { state: "exited".into(), crashed: true, message: format!("Could not start xc2_boot.exe: {e}{what}"), ..Default::default() });
+                set_status(&app2, Status { state: "exited".into(), crashed: true, message: format!("Could not start xcde.exe: {e}{what}"), ..Default::default() });
                 return;
             }
         };
-        set_status(&app2, Status { state: "running".into(), message: format!("xc2_boot.exe started (process {})", child.id()), ..Default::default() });
+        set_status(&app2, Status { state: "running".into(), message: format!("xcde.exe started (process {})", child.id()), ..Default::default() });
         if minimize {
             if let Some(w) = app2.get_webview_window("main") {
                 let _ = w.minimize();
@@ -390,16 +390,16 @@ pub fn start(app: &AppHandle, p: &crate::setup::Paths, launcher_dir: &Path, mini
             other_fatal = likely_cause(&std::fs::read_to_string(dir.join("fefw_crash.txt")).unwrap_or_default());
         }
         let message = match (&wait_err, code) {
-            (Some(e), _) => format!("Lost track of xc2_boot.exe: {e}"),
-            (None, Some(0)) => "xc2_boot.exe exited normally.".to_string(),
+            (Some(e), _) => format!("Lost track of xcde.exe: {e}"),
+            (None, Some(0)) => "xcde.exe exited normally.".to_string(),
             (None, Some(_)) if other_fatal.is_some() => other_fatal.unwrap_or_default(),
             (None, Some(4)) if cpu_fatal => match crate::cpu::build_variant() {
-                // xc2_boot.exe was built for another processor (the folder moved, the processor changed): Set up builds the one for this
-                Some(_) => "xc2_boot.exe stopped before the game started: it was built for a processor with features this one lacks (fefw_fatal.txt says which). Run Set up again: it builds the version of the game for this processor.".to_string(),
-                None => "xc2_boot.exe stopped before the game started: this processor lacks CMPXCHG16B, SSE4.2 or POPCNT, which the game needs (an Intel Core i3 / i5 / i7 of 2008 or an AMD FX of 2011, or newer). fefw_fatal.txt says which.".to_string(),
+                // xcde.exe was built for another processor (the folder moved, the processor changed): Set up builds the one for this
+                Some(_) => "xcde.exe stopped before the game started: it was built for a processor with features this one lacks (fefw_fatal.txt says which). Run Set up again: it builds the version of the game for this processor.".to_string(),
+                None => "xcde.exe stopped before the game started: this processor lacks CMPXCHG16B, SSE4.2 or POPCNT, which the game needs (an Intel Core i3 / i5 / i7 of 2008 or an AMD FX of 2011, or newer). fefw_fatal.txt says which.".to_string(),
             },
-            (None, Some(c)) => format!("xc2_boot.exe exited with code {} (0x{:08X}).", c, c as u32),
-            (None, None) => "xc2_boot.exe was ended by the system.".to_string(),
+            (None, Some(c)) => format!("xcde.exe exited with code {} (0x{:08X}).", c, c as u32),
+            (None, None) => "xcde.exe was ended by the system.".to_string(),
         };
         set_status(&app2, Status { state: "exited".into(), code, crashed, files, message });
         if minimize {

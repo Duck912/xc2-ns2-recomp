@@ -112,7 +112,7 @@ impl Paths {
     }
     pub fn exe(&self) -> PathBuf {
         match &self.package {
-            Some(_) => self.in_game(&["xc2_boot.exe"]),
+            Some(_) => self.in_game(&["xcde.exe"]),
             None => exe_path(&self.repo),
         }
     }
@@ -202,7 +202,7 @@ pub(crate) fn package_python(tools: &Path) -> PathBuf {
 }
 
 pub fn exe_path(repo: &Path) -> PathBuf {
-    repo.join("xcde").join("build").join("200").join("boot-n2den").join("xc2_boot.exe")
+    repo.join("xcde").join("build").join("200").join("boot-n2den").join("xcde.exe")
 }
 
 pub const MODULES: [&str; 6] = ["main", "sdk", "subsdk0", "subsdk1", "subsdk2", "rtld"];

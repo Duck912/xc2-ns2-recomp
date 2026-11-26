@@ -19,6 +19,7 @@ param(
     [string]$OutDir = '',       # where xc2_boot.exe and its object go; default build\boot
     [string]$LibDir = '',       # directory holding the per-module libs build.ps1 writes; default build\lib
     [string]$Defines = '',      # extra /D defines for xc2_boot.cpp, space separated (HANDOVER 89: XC2_MODULES_7)
+    [string]$ExeName = 'xc2_boot.exe',  # the exe's file name (XC:DE: xcde.exe); its .map, .names and _freeze.txt follow it
     [string]$N2denDist = ''     # n2den NVN-HLE distribution folder (lib\n2den_nvnhle_bundle.lib): links it for --nvn n2den;
                                 # the runtime must be configured with the same folder as NXRT_N2DEN_DIST
 )
@@ -187,11 +188,12 @@ if ($foundIco) {
     }
 }
 
-$exe = Join-Path $bd 'xc2_boot.exe'
+$exe = Join-Path $bd $ExeName
+$exeBase = [IO.Path]::GetFileNameWithoutExtension($ExeName)
 # A linker map next to the exe: the runtime reads it (diag/symbols.cpp) and names the frames of every thread dump and crash
 # backtrace instead of printing bare offsets. Without it a dump says "xc2_boot+0x8383d" and nothing else - and the PDB of this
 # exe is 492 MB and only exists for the MSVC release build, never for this one (2026-11-22).
-$mapFile = Join-Path $bd 'xc2_boot.map'
+$mapFile = Join-Path $bd ($exeBase + '.map')
 & clang-cl.exe /nologo /MT "/Fe:$exe" $obj $objOpus $objAudio @iconRes `
     "$gfxDir\nxrt_gfx.lib" "$gfxDir\nxrt.lib" "$game\nxrt_game_xc2ns2_core.lib" "$game\nxrt_game_xc2ns2_data.lib" `
     $mainlib (Join-Path $libdir 'sdk.lib') `
@@ -207,7 +209,7 @@ Write-Host ("boot exe: {0} ({1:N1} MB)" -f $exe, ((Get-Item $exe).Length / 1MB))
 # symbols.cpp). build.ps1 writes it from the lift; a boot build from a lib dir that predates the sidecar is fine -
 # the dump then keeps the f_ names.
 $namesSrc = Join-Path $libdir 'guest-symbols.names'
-$namesDst = Join-Path $bd 'xc2_boot.names'
+$namesDst = Join-Path $bd ($exeBase + '.names')
 if (Test-Path -LiteralPath $namesSrc) {
     Copy-Item -LiteralPath $namesSrc -Destination $namesDst -Force
     Write-Host ("guest names: {0}" -f $namesDst)
@@ -235,6 +237,6 @@ Write-Host ('build.json: {0} {1}' -f $head.Substring(0, 7), $(if ($dirty) { 'dir
 
 if ($Run) {
     Push-Location $bd
-    try { & $exe --exefs $Exefs --link $Link --gfx $Gfx --log (Join-Path $bd 'xc2_boot.log') } finally { Pop-Location }
+    try { & $exe --exefs $Exefs --link $Link --gfx $Gfx --log (Join-Path $bd ($exeBase + '.log')) } finally { Pop-Location }
 }
 

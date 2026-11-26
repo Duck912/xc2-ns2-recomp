@@ -3,8 +3,8 @@
 //! platform (XC2-package-dist-*.zip) with curl (Windows' own curl.exe), checks it against the SHA-256 digest GitHub lists for
 //! the asset, unpacks it with tar (Windows' own tar.exe) and moves the new files over the install folder. Everything the old
 //! package had is moved to update/old first and moved back if any step fails.
-//! The player's files (xc2_boot.exe, nxrt.ini, controls.ini, save/, shader_cache/, logs) are not in the zip and stay as they are.
-//! Afterwards `rebuild_needed` checks whether xc2_boot.exe is missing or the hook tables / stub sources changed.
+//! The player's files (xcde.exe, nxrt.ini, controls.ini, save/, shader_cache/, logs) are not in the zip and stay as they are.
+//! Afterwards `rebuild_needed` checks whether xcde.exe is missing or the hook tables / stub sources changed.
 
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -464,11 +464,11 @@ pub fn install(install: &Path, top: &Path, old: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Whether the updated package requires rebuilding xc2_boot.exe. Compares `install/xc2` against `update/old/xc2`
+/// Whether the updated package requires rebuilding xcde.exe. Compares `install/xc2` against `update/old/xc2`
 /// saved aside during `install()` (because `tar -m` gives all unpacked files the current timestamp).
 pub fn rebuild_needed(install: &Path, game_dir: &Path) -> (Option<bool>, String) {
-    if !game_dir.join("xc2_boot.exe").is_file() {
-        return (Some(true), "xc2_boot.exe is not built yet".into());
+    if !game_dir.join("xcde.exe").is_file() {
+        return (Some(true), "xcde.exe is not built yet".into());
     }
     let old_dir = install.join(WORK).join("old");
     if !old_dir.is_dir() {
@@ -649,7 +649,7 @@ mod tests {
         put(inst.join("xc2/sites/main.txt"), "same");
         put(old.join("xc2/sites/main.txt"), "same");
         assert_eq!(rebuild_needed(&inst, &inst).0, Some(true));
-        put(inst.join("xc2_boot.exe"), "exe");
+        put(inst.join("xcde.exe"), "exe");
         assert_eq!(rebuild_needed(&inst, &inst), (Some(false), String::new()));
         put(inst.join("xc2/sites/main.txt"), "changed");
         assert_eq!(rebuild_needed(&inst, &inst).0, Some(true));

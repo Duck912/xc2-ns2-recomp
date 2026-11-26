@@ -12,7 +12,7 @@ Steps, each skipped when its result is already there (docs/RELEASE-PLAN.md):
     runtime     the two CMake builds, configured with NXRT_N2DEN_DIST
     ingest      the Switch 2 program's ExeFS, program 0's RomFS (the game data) and the add-on's RomFS
     lift        the seven modules to .lib with xcde/sites
-    link        xcde/build/200/boot-n2den/xc2_boot.exe
+    link        xcde/build/200/boot-n2den/xcde.exe
     streamline  NVIDIA Streamline into the boot folder's user/streamline (the game's DLSS; FSR 1 without it)
     done        launch.env (the start-up switches) and the run profile's game links
 
@@ -37,6 +37,7 @@ ADDON_ID = "0100ff500e34b001"            # the add-on (upgrade pack): dlcver.bin
 BUILD = Path("xcde") / "build" / "200"
 EXEFS = Path("xcde") / "game" / "xcde200"
 BOOT = BUILD / "boot-n2den"
+EXE = "xcde.exe"
 
 # The prebuilt NVN-HLE library this checkout links against (docs/RELEASE-PLAN.md). XCDE_NVNHLE_DIST (a folder with
 # lib/n2den_nvnhle_bundle.lib and include/nvnhle/embed.h) wins over the download, for a library built locally.
@@ -195,8 +196,8 @@ def step_link(r, repo):
     rc = r.run(base.pwsh(repo / "tools" / "build" / "build-boot.ps1", "-Exefs", repo / EXEFS,
                          "-OutDir", repo / BOOT, "-LibDir", repo / BUILD / "lib",
                          "-MainLib", repo / BUILD / "lib" / "main.lib", "-Defines", "XC2_MODULES_7",
-                         "-N2denDist", nvnhle_dist(repo)), cwd=repo, on_line=base.build_progress(r, "link"))
-    ok = (repo / BOOT / "xc2_boot.exe").is_file()
+                         "-ExeName", EXE, "-N2denDist", nvnhle_dist(repo)), cwd=repo, on_line=base.build_progress(r, "link"))
+    ok = (repo / BOOT / EXE).is_file()
     return r.end_step("link", started, rc == 0 and ok, "" if rc == 0 and ok else "build-boot.ps1 failed")
 
 
