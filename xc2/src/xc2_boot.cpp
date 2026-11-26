@@ -44,6 +44,7 @@
 #include "nxrt/gfx_tuning.h"
 #include "nxrt/nvn.h"
 #include "nxrt/nvn_backend.h"
+#include "nxrt/nvn_n2den.h"
 #include "nxrt/platform.h"
 #include "nxrt/play.h"
 
@@ -2644,6 +2645,7 @@ int main(int argc, char **argv) {
         else if (arg("--link")) link = argv[++i];
         else if (arg("--log")) logp = argv[++i];
         else if (arg("--gfx")) ++i;   // parsed again below (window | headless)
+        else if (arg("--nvn")) ++i;   // parsed again below (runtime | n2den)
         else if (arg("--entry")) entry_mode = argv[++i];
         else if (arg("--addr")) addr_override = std::strtoull(argv[++i], nullptr, 0);
         else if (!std::strcmp(argv[i], "--prepare-shaders")) prepare_only = true;
@@ -2670,6 +2672,14 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++)
         if (!std::strcmp(argv[i], "--gfx") && i + 1 < argc) gfxmode = argv[++i];
     const bool headless = prepare_only || !std::strcmp(gfxmode, "headless");
+    // --nvn n2den (or NXRT_NVN_BACKEND=n2den): n2den's NVN-HLE renders and presents (nxrt/nvn_n2den.h); this
+    // runtime's own NVN back end, renderer, shader cache and overlay are not started.
+    bool nvn_n2den = false;
+    for (int i = 1; i < argc; i++)
+        if (!std::strcmp(argv[i], "--nvn") && i + 1 < argc && !std::strcmp(argv[i + 1], "n2den")) nvn_n2den = true;
+    if (const char* b = std::getenv("NXRT_NVN_BACKEND"); b && !std::strcmp(b, "n2den")) nvn_n2den = true;
+    if (nvn_n2den && (headless || !nxrt::nvn::n2den::available()))
+        die(headless ? "--nvn n2den needs a window" : "this build has no n2den NVN-HLE (configure the runtime with NXRT_N2DEN_DIST)");
     std::unique_ptr<nxrt::gfx::Device> gfx_device;
     std::unique_ptr<nxrt::gfx::Renderer> gfx_renderer;
     nxrt::nvn::install();
@@ -2755,7 +2765,14 @@ int main(int argc, char **argv) {
             }
         }
     }
-    {
+    if (nvn_n2den) {
+        // n2den owns the Vulkan device and the swapchain; it starts once the sdk module is loaded (below).
+        g_frame_limiter = nxrt::play::limiter();
+        nxrt::play::StartOptions po;
+        po.window = true;
+        po.overlay = false;
+        nxrt::play::start(po);
+    } else {
         std::string err;
         nxrt::gfx::DeviceDesc dd;
         dd.headless = headless ? 1 : 0;
@@ -2935,6 +2952,7 @@ int main(int argc, char **argv) {
     }
 
     // 1+2. map and register
+    uint64_t sdk_image_size = 0;
     for (const ModEntry &g : module_table()) {
         const std::string path = exefs + "\\" + g.file;
         if (!file_exists(path)) die("module file not found: %s", path.c_str());
@@ -2949,6 +2967,7 @@ int main(int argc, char **argv) {
         const nxrt::RegResult r = nxrt::nxmodule_register(m, g.nx, *g.abi);
         if (!r.ok()) die("lifted module %s refused: %s", g.file, r.message.c_str());
         NXLOG_I("boot", "module %s at 0x%llx", g.file, static_cast<unsigned long long>(m->base()));
+        if (!std::strcmp(g.file, "sdk")) sdk_image_size = m->size();
     }
 
     // In the DLL build the lifted modules come from the exe, so ask the table rather than naming nxmod_*.
@@ -2961,6 +2980,19 @@ int main(int argc, char **argv) {
     g_main_base = main_base;
     g_sdk_base = module_base("sdk");
     g_rtld_base = module_base("rtld");
+    if (nvn_n2den) {
+        nxrt::nvn::n2den::StartDesc nd;
+        nd.native_window = nxrt::platform::native_hwnd();
+        RECT rc{};
+        ::GetClientRect(static_cast<HWND>(nd.native_window), &rc);
+        nd.width = static_cast<uint32_t>(rc.right - rc.left);
+        nd.height = static_cast<uint32_t>(rc.bottom - rc.top);
+        nd.program_id = 0x0400E95004038001ull;
+        nd.sdk_image = reinterpret_cast<const uint8_t*>(g_sdk_base);
+        nd.sdk_image_size = static_cast<size_t>(sdk_image_size);
+        std::string err;
+        if (!nxrt::nvn::n2den::start(nd, &err)) die("n2den NVN-HLE: %s", err.c_str());
+    }
 
     // Model-spawn probe (XC2_MODEL_PROBE=1): "did the engine ever create this model?", logged with its arguments. Works
     // without a re-lift: both site addresses are already in build\sites-main.txt (HANDOVER 19.9, step P3).
@@ -3373,6 +3405,7 @@ int main(int argc, char **argv) {
     NXLOG_I("boot", "entering guest at 0x%llx (x1 = main thread handle 0x%x)", static_cast<unsigned long long>(entry), h);    nxrt::dispatch_call(ctx, entry);
     NXLOG_I("boot", "the entry function returned (x0 = 0x%llx)", static_cast<unsigned long long>(ctx->x[0]));
     nxrt::kernel::main_thread_release();
+    nxrt::nvn::n2den::stop();
     nxrt::shutdown();
     return static_cast<int>(ctx->x[0] & 0xff);
 }

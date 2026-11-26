@@ -170,9 +170,19 @@ void install() {
 
 void set_unknown_policy(UnknownPolicy p) { g_unknown_policy.store(static_cast<int>(p)); }
 
+namespace {
+std::atomic<ProcResolver> g_proc_resolver{nullptr};
+}  // namespace
+
+void set_proc_resolver(ProcResolver resolver) { g_proc_resolver.store(resolver, std::memory_order_release); }
+
 uint64_t proc_address(const char* name) {
     if (!name || !*name) return 0;
     if (!g_installed.load()) install();
+    if (const ProcResolver resolver = g_proc_resolver.load(std::memory_order_acquire);
+        resolver && std::strcmp(name, "nvnBootstrapLoader") != 0 && std::strcmp(name, "nvnDeviceGetProcAddress") != 0) {
+        if (const uint64_t a = resolver(name)) return a;
+    }
     if (entry_index(name) >= 0) return hle_address(name);
     {
         HleFn fn = nullptr;

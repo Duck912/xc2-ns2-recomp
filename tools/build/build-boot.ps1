@@ -18,7 +18,9 @@ param(
     [string]$MainLib = '',      # the main.lib to link; default build\lib\main.lib
     [string]$OutDir = '',       # where xc2_boot.exe and its object go; default build\boot
     [string]$LibDir = '',       # directory holding the per-module libs build.ps1 writes; default build\lib
-    [string]$Defines = ''       # extra /D defines for xc2_boot.cpp, space separated (HANDOVER 89: XC2_MODULES_7)
+    [string]$Defines = '',      # extra /D defines for xc2_boot.cpp, space separated (HANDOVER 89: XC2_MODULES_7)
+    [string]$N2denDist = ''     # n2den NVN-HLE distribution folder (lib\n2den_nvnhle_bundle.lib): links it for --nvn n2den;
+                                # the runtime must be configured with the same folder as NXRT_N2DEN_DIST
 )
 $ErrorActionPreference = 'Stop'
 $root = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'xc2'   # tools\build -> the checkout's xc2
@@ -48,6 +50,13 @@ if (-not [System.IO.Path]::IsPathRooted($libdir)) { $libdir = Join-Path (Get-Loc
 # The retail 3.0.1 ExeFS has three more modules (HANDOVER 89). They are linked only when their libs are in $LibDir, so the
 # 4-module dev/playable build links exactly what it always did.
 $extraLibs = @()
+$n2denLibs = @()
+if ($N2denDist) {
+    $bundle = Join-Path $N2denDist 'lib\n2den_nvnhle_bundle.lib'
+    if (-not (Test-Path $bundle)) { throw "no n2den bundle at $bundle" }
+    # The bundle's own Windows dependencies (sockets and TLS of its HTTP client, signature checks of Streamline).
+    $n2denLibs = @($bundle, 'ws2_32.lib', 'crypt32.lib', 'wintrust.lib', 'bcrypt.lib', 'iphlpapi.lib', 'mswsock.lib', 'secur32.lib', 'shlwapi.lib', 'dbghelp.lib', 'ntdll.lib')
+}
 foreach ($m in 'subsdk1', 'subsdk2', 'subsdk3') { $p = Join-Path $libdir ($m + '.lib'); if (Test-Path $p) { $extraLibs += $p } }
 # libvpx (BSD-3): the host VP9/VP8 decoders sit in nxrt.lib (runtime/src/media/video_codec.cpp), so linking the runtime
 # needs the library even though nothing in this exe mentions vpx - without it the link stops at nine vpx_codec_* symbols.
@@ -186,7 +195,7 @@ $mapFile = Join-Path $bd 'xc2_boot.map'
 & clang-cl.exe /nologo /MT "/Fe:$exe" $obj $objOpus $objAudio @iconRes `
     "$gfxDir\nxrt_gfx.lib" "$gfxDir\nxrt.lib" "$game\nxrt_game_xc2ns2_core.lib" "$game\nxrt_game_xc2ns2_data.lib" `
     $mainlib (Join-Path $libdir 'sdk.lib') `
-    (Join-Path $libdir 'subsdk0.lib') (Join-Path $libdir 'rtld.lib') @extraLibs @vpxLibs @vorbisLibs @ffLibs `
+    (Join-Path $libdir 'subsdk0.lib') (Join-Path $libdir 'rtld.lib') @extraLibs @vpxLibs @vorbisLibs @ffLibs @n2denLibs `
     "$gfxDir\nxrt_imgui.lib" "$gfxDir\nxrt_volk.lib" "$gfxDir\nxrt_tiling.lib" "$gfxDir\nxrt_astc2bc7.lib" "$gfxDir\nxrt_zstd.lib" `
     "$gfxDir\_deps\sdl3-build\SDL3-static.lib" "$gfxDir\third_party\dav1d\nxrt_dav1d.lib" `
     kernel32.lib user32.lib gdi32.lib winmm.lib imm32.lib ole32.lib oleaut32.lib version.lib uuid.lib advapi32.lib `

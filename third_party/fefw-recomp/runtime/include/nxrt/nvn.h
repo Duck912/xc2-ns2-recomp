@@ -58,6 +58,10 @@ enum class UnknownPolicy { Stub, Null };
 void set_unknown_policy(UnknownPolicy p);
 // Guest address of the thunk for a name (what nvnBootstrapLoader returns); 0 for a null answer.
 uint64_t proc_address(const char* name);
+// Another NVN implementation answers first (n2den's NVN-HLE, nvn_n2den.h): proc_address asks `resolver` for every name except
+// nvnBootstrapLoader / nvnDeviceGetProcAddress and uses its answer when it is not 0. Null removes it.
+using ProcResolver = uint64_t (*)(const char* name);
+void set_proc_resolver(ProcResolver resolver);
 
 // ---- implementing entry points ----------------------------------------------------------------------------------------
 // Replaces the stub of an entry point by a real handler (called with the guest registers like any HLE function; read the

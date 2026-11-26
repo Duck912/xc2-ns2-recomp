@@ -67,6 +67,18 @@ target_link_libraries(nxrt_gfx PUBLIC nxrt nxrt_volk nxrt_vma nxrt_imgui nxrt_ti
 # links nxrt (nxrt_tests, the liftrun_* tests) links nxrt_gfx too, as the game exe does. Static libraries may depend on each other.
 target_link_libraries(nxrt INTERFACE nxrt_gfx)
 target_compile_definitions(nxrt_gfx PUBLIC VMA_STATIC_VULKAN_FUNCTIONS=0 VMA_DYNAMIC_VULKAN_FUNCTIONS=1)
+# n2den's NVN-HLE as the NVN implementation (include/nxrt/nvn_n2den.h): the folder n2den's
+# src/nvnhle/make_dist.sh writes (include/nvnhle/embed.h, lib/n2den_nvnhle_bundle.lib). The boot
+# executable links the bundle; empty = not built in.
+set(NXRT_N2DEN_DIST "" CACHE PATH "n2den NVN-HLE distribution folder (include/, lib/n2den_nvnhle_bundle.lib)")
+if(NXRT_N2DEN_DIST)
+    if(NOT EXISTS "${NXRT_N2DEN_DIST}/include/nvnhle/embed.h")
+        message(FATAL_ERROR "NXRT_N2DEN_DIST=${NXRT_N2DEN_DIST} has no include/nvnhle/embed.h")
+    endif()
+    target_include_directories(nxrt_gfx PRIVATE "${NXRT_N2DEN_DIST}/include")
+    target_compile_definitions(nxrt_gfx PRIVATE NXRT_HAVE_N2DEN)
+    message(STATUS "nxrt: n2den NVN-HLE from ${NXRT_N2DEN_DIST}")
+endif()
 
 add_executable(nxrt_gfx_demo apps/gfx_demo.cpp)
 target_link_libraries(nxrt_gfx_demo PRIVATE nxrt_gfx)
