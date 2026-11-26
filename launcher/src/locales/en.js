@@ -7,7 +7,7 @@ export const en = {
   name: 'English',
   strings: {
     // ----- shell -----
-    'brand.name': 'XC2 NS2 recomp',
+    'brand.name': 'XC:DE NS2 recomp',
     'nav.main': 'Main',
     'nav.play': 'Play',
     'nav.mods': 'Mods',
@@ -16,7 +16,7 @@ export const en = {
     'nav.about': 'About',
     'nav.restartUpdate': 'Restart to update',
     'nav.updateTo': 'Update to {version}',
-    'window.title': 'XC2 NS2 recomp launcher',
+    'window.title': 'XC:DE NS2 recomp launcher',
 
     // ----- shared -----
     'common.on': 'On',
@@ -402,7 +402,7 @@ export const en = {
     // ----- about -----
     'about.launcherWord': 'launcher',
     'about.title': 'About',
-    'about.intro': 'Launcher for the Xenoblade Chronicles 2 - Nintendo Switch 2 Edition static recompilation (Windows / Vulkan).',
+    'about.intro': 'Launcher for the Xenoblade Chronicles: Definitive Edition - Nintendo Switch 2 Edition static recompilation (Windows, drawn by n2den's NVN-HLE on Vulkan).',
     'about.updates': 'Updates',
     'about.checkout': 'This launcher runs in a checkout of the repository: update it with git.',
     'about.rebuildNeeded': 'Set up has to run again',

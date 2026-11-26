@@ -305,7 +305,7 @@ pub fn start(app: &AppHandle, p: &crate::setup::Paths, launcher_dir: &Path, mini
     if package {
         refresh_runtime_dll(&dir);
     }
-    let script = (!package).then(|| repo.join("tools").join("run").join("play-301.cmd"));
+    let script = (!package).then(|| repo.join("tools").join("run").join("play-xcde.cmd"));
     let launcher_dir = launcher_dir.to_path_buf();
     set_status(app, Status { state: "running".into(), message: "Starting xc2_boot.exe...".into(), ..Default::default() });
     std::thread::spawn(move || {

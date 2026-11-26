@@ -24,13 +24,16 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-pub const STEPS: [(&str, &str); 7] = [
+/// The steps tools/setup/xcde_setup.py runs in a checkout (XC:DE on NVN-HLE; docs/RELEASE-PLAN.md).
+pub const STEPS: [(&str, &str); 9] = [
     ("doctor", "Check this machine"),
     ("sources", "Fetch the build sources"),
+    ("nvnhle", "Get the NVN-HLE renderer"),
     ("runtime", "Build the runtime"),
     ("ingest", "Read the game files"),
     ("lift", "Recompile the game code"),
     ("link", "Link the game"),
+    ("streamline", "Set up NVIDIA DLSS"),
     ("done", "Finish"),
 ];
 
@@ -43,8 +46,10 @@ fn step_title(id: &str) -> &'static str {
         "doctor" => "Check this machine",
         "sources" => "Fetch the build sources",
         "runtime" => "Build the runtime",
+        "nvnhle" => "Get the NVN-HLE renderer",
         "ingest" => "Read the game files",
         "lift" => "Recompile the game code",
+        "streamline" => "Set up NVIDIA DLSS",
         "link" => "Link the game",
         "shaders" => "Translate the shaders",
         "done" => "Finish",
@@ -197,7 +202,7 @@ pub(crate) fn package_python(tools: &Path) -> PathBuf {
 }
 
 pub fn exe_path(repo: &Path) -> PathBuf {
-    repo.join("xc2").join("build").join("boot-301").join("xc2_boot.exe")
+    repo.join("xcde").join("build").join("200").join("boot-n2den").join("xc2_boot.exe")
 }
 
 pub const MODULES: [&str; 6] = ["main", "sdk", "subsdk0", "subsdk1", "subsdk2", "rtld"];
@@ -864,16 +869,16 @@ fn shader_steps(r: &Runner, p: &Paths, jobs: usize, cwd: &Path) -> Result<bool, 
 fn engine_script(repo: &Path) -> PathBuf {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            let p = dir.join("engine").join("xc2_setup.py");
+            let p = dir.join("engine").join("xcde_setup.py");
             if p.is_file() {
                 return p;
             }
         }
     }
-    repo.join("tools").join("setup").join("xc2_setup.py")
+    repo.join("tools").join("setup").join("xcde_setup.py")
 }
 
-/// Runs the setup engine (engine/xc2_setup.py). The launcher is only the view: the engine writes setup/status.json and the
+/// Runs the setup engine (engine/xcde_setup.py). The launcher is only the view: the engine writes setup/status.json and the
 /// checklist above reads it back.
 fn run_steps(r: &Runner, p: &Paths, _jobs: usize) -> Result<bool, String> {
     let engine = engine_script(&p.repo);

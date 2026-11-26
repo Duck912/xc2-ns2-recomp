@@ -59,18 +59,17 @@ pub fn game_path(p: &Path) -> String {
     }
 }
 
-/// The build of main this recomp supports: `build_id = '<40 hex>'` in xc2/recomp/xc2ns2/config.py.
+/// The builds of main this recomp supports: xcde/supported_builds.txt, one `<40 hex build id> <version>` per line
+/// ('#' comments). The Switch 2 program's main (the ExeFS the setup recompiles).
 pub fn supported_builds(repo: &Path) -> Vec<(String, String)> {
-    let text = fs::read_to_string(repo.join("xc2").join("recomp").join("xc2ns2").join("config.py")).unwrap_or_default();
+    let text = fs::read_to_string(repo.join("xcde").join("supported_builds.txt")).unwrap_or_default();
     let mut out = Vec::new();
     for line in text.lines() {
-        let Some(rest) = line.trim().strip_prefix("build_id =") else { continue };
-        let Some(open) = rest.find('\'') else { continue };
-        let tail = &rest[open + 1..];
-        let Some(close) = tail.find('\'') else { continue };
-        let id = &tail[..close];
+        let line = line.split('#').next().unwrap_or("").trim();
+        let mut words = line.split_whitespace();
+        let (Some(id), version) = (words.next(), words.next().unwrap_or("")) else { continue };
         if id.len() == 40 && id.chars().all(|c| c.is_ascii_hexdigit()) {
-            out.push((id.to_uppercase(), "3.0.1".to_string()));
+            out.push((id.to_uppercase(), version.to_string()));
         }
     }
     out

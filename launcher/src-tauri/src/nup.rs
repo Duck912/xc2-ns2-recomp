@@ -229,9 +229,19 @@ pub fn extract(nup_path: &Path, out: &Path, progress: &mut dyn FnMut(u64, u64, &
 
     // (package, destination) pairs for the base, the updates and the add-ons (the runtime serves dlc/ as [aoc] dir).
     let mut jobs: Vec<(&Package, PathBuf)> = Vec::new();
+    // A Switch 2 Edition carries two base programs: the Switch 2 program (the highest program index, the low hex digit of
+    // the title id) whose ExeFS is the code, and program 0 whose RomFS is the game data (the Switch 2 program's RomFS is a
+    // dummy). base/ gets the one's exefs and the other's romfs; with a single base program it gets both.
+    let bases: Vec<&Package> = nup.packages.iter().filter(|p| p.kind == KIND_BASE).collect();
+    let code_base = bases.iter().max_by_key(|p| p.title_id & 0xF).map(|p| p.title_id);
+    let data_base = bases.iter().min_by_key(|p| p.title_id & 0xF).map(|p| p.title_id);
+    let mut parts: Vec<(u64, bool, bool)> = Vec::new(); // (title id, take exefs, take romfs)
     for p in &nup.packages {
         match p.kind {
-            KIND_BASE => jobs.push((p, out.join("base"))),
+            KIND_BASE => {
+                parts.push((p.title_id, Some(p.title_id) == code_base, Some(p.title_id) == data_base));
+                jobs.push((p, out.join("base")))
+            }
             KIND_UPDATE => jobs.push((p, out.join("updates").join(p.version.to_string()))),
             KIND_ADDON => jobs.push((p, out.join("dlc").join(format!("{:016X}", p.title_id)))),
             _ => {}
@@ -241,9 +251,15 @@ pub fn extract(nup_path: &Path, out: &Path, progress: &mut dyn FnMut(u64, u64, &
         return Err("This .nup has no base game or update in it.".into());
     }
     let mut ex = Extractor { nup: &nup, src: BufReader::with_capacity(1 << 20, file), done: 0, total: 0, progress, cancel };
+    let wanted = |p: &Package, exefs: bool| -> bool {
+        if p.kind != KIND_BASE {
+            return true;
+        }
+        parts.iter().find(|(id, _, _)| *id == p.title_id).map_or(true, |(_, e, r)| if exefs { *e } else { *r })
+    };
     for (p, _) in &jobs {
-        for d in [p.exefs_dir, p.romfs_dir] {
-            if d != NO_DIR && (d as usize) < nup.dirs.len() {
+        for (d, exefs) in [(p.exefs_dir, true), (p.romfs_dir, false)] {
+            if d != NO_DIR && (d as usize) < nup.dirs.len() && wanted(p, exefs) {
                 ex.total += ex.dir_total(d, 0);
             }
         }
@@ -253,7 +269,7 @@ pub fn extract(nup_path: &Path, out: &Path, progress: &mut dyn FnMut(u64, u64, &
             return Err("The .nup package tree is invalid.".into());
         }
         for (d, name) in [(p.exefs_dir, "exefs"), (p.romfs_dir, "romfs")] {
-            if d != NO_DIR {
+            if d != NO_DIR && wanted(p, name == "exefs") {
                 if d as usize >= nup.dirs.len() {
                     return Err("The .nup package tree is invalid.".into());
                 }

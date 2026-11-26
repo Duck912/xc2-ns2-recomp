@@ -1,0 +1,14 @@
+# xc2 hook sites for sdk (retail 3.0.1). Shipped with the repository.
+#
+# These two are not diagnostics: the thread manager and VAMM initialisers read state that the console's boot
+# loader would have set up. The launcher's XC2_301_BOOTPARAM=1 and XC2_301_VAMM=1 do the same job at run time,
+# so a build without these hooks still boots - but with the hooks the values come from the game, not from us.
+
+entryhook 7500170030   # nn::os::detail::ThreadManagerImplByHorizon ctor: reads the boot parameter block's thread handle
+entryhook 750016dcc0   # nn::os::detail::VammManager::AllocateAddressRegion: initialize the manager before the first use
+
+# Notes
+#  - Every line is an address the lifter turns into a hook; no game bytes are here.
+#  - ASCII only: the lifter reads this file with the locale encoding, and a non-ASCII byte breaks the lift.
+#  - Add your own with "entryhook <address>" (called on entry) or "midhook <address>" (called mid-function).
+#    Use tools\analysis\symat.py to name an address, and xc2_boot.cpp's hook_add_entry to act on it.

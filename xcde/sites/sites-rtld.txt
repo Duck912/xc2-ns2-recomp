@@ -1,0 +1,11 @@
+# xc2 hook sites for rtld (retail 3.0.1). Shipped with the repository.
+#
+# rtld+0x1470 is a flag-setting helper (it writes 1 at rtld+0x3000 and returns to its caller).
+
+entryhook 7700001470
+
+# Notes
+#  - Every line is an address the lifter turns into a hook; no game bytes are here.
+#  - ASCII only: the lifter reads this file with the locale encoding, and a non-ASCII byte breaks the lift.
+#  - Add your own with "entryhook <address>" (called on entry) or "midhook <address>" (called mid-function).
+#    Use tools\analysis\symat.py to name an address, and xc2_boot.cpp's hook_add_entry to act on it.

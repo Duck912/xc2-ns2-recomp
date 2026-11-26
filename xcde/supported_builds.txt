@@ -1,0 +1,2 @@
+# The builds of the Switch 2 program's main this recomp supports (the launcher's dump check): <build id> <version>
+BB7B2F62784F5FAA1282AA5F5C61EF168763DCD7 2.0.0

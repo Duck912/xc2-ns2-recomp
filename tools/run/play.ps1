@@ -67,15 +67,17 @@ foreach ($d in $logs, $missing, $save) { if ($d) { New-Item -ItemType Directory 
 # launch.env, so a dev run cannot drift from a package run. The profile's [env] applies afterwards and is for
 # dev-only switches (NXRT_NVN_DS_DEBUG, a wider language list) - never for a copy of GAME_ENV.
 $gameEnvPy = if ($env:XC2_PYTHON) { $env:XC2_PYTHON } else { 'python' }
+# [run] setup names the game's engine (config/profiles/xcde.ini: tools/setup/xcde_setup.py); XC2's by default.
+$setupPy = Join-Path $repo (Get-Cfg 'run/setup' 'tools/setup/xc2_setup.py')
 try {
-    $gameEnv = & $gameEnvPy (Join-Path $repo 'tools/setup/xc2_setup.py') --emit-env 2>$null
+    $gameEnv = & $gameEnvPy $setupPy --emit-env 2>$null
     foreach ($line in $gameEnv) {
         if (-not $line) { continue }
         $eq = $line.IndexOf('=')
         if ($eq -gt 0) { Set-Item -Path ('env:' + $line.Substring(0, $eq)) -Value $line.Substring($eq + 1) }
     }
 } catch {
-    Write-Warning "play.ps1: could not read GAME_ENV from tools/setup/xc2_setup.py ($_); the launch may differ from a package"
+    Write-Warning "play.ps1: could not read GAME_ENV from $setupPy ($_); the launch may differ from a package"
 }
 foreach ($k in $cfg.Keys) {
     if ($k.StartsWith('env/')) { Set-Item -Path ('env:' + $k.Substring(4)) -Value $cfg[$k] }

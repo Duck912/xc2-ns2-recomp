@@ -6,7 +6,7 @@ export const zh = {
   name: '中文',
   strings: {
     // ----- 外框 -----
-    'brand.name': '异度之刃 2 NS2 重编译',
+    'brand.name': '异度神剑 终极版 NS2 重编译',
     'nav.main': '主菜单',
     'nav.play': '游玩',
     'nav.mods': '模组',
@@ -15,7 +15,7 @@ export const zh = {
     'nav.about': '关于',
     'nav.restartUpdate': '重启以更新',
     'nav.updateTo': '更新到 {version}',
-    'window.title': '异度之刃 2 NS2 启动器',
+    'window.title': '异度神剑 终极版 NS2 启动器',
 
     // ----- 通用 -----
     'common.on': '开',
@@ -362,7 +362,7 @@ export const zh = {
     // ----- 关于 -----
     'about.launcherWord': '启动器',
     'about.title': '关于',
-    'about.intro': '《异度之刃 2》NS2 版静态重编译（Windows / Vulkan）的启动器。',
+    'about.intro': '《异度神剑 终极版》NS2 版静态重编译（Windows，由 n2den 的 NVN-HLE 在 Vulkan 上绘制）的启动器。',
     'about.updates': '更新',
     'about.checkout': '此启动器运行在仓库的检出目录中：请用 git 更新。',
     'about.rebuildNeeded': '重启后需要重新构建',
