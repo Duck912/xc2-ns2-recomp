@@ -78,7 +78,7 @@ history; that project draws with the runtime's own renderer, this one with NVN-H
 
 ## Credits
 
-- **NVN-HLE**, the renderer: written by duck912 in the Eglantine Community, ported to n2den, and from there into
+- **NVN-HLE**, the renderer: duck912 and the Eglantine Community, ported to n2den, and from there into
   this project. Its source for each release is attached to the release (`n2den-nvnhle-src-*.zip`).
 - [xc2-ns2-recomp](https://github.com/weile10000/xc2-ns2-recomp) (weile10000 and contributors): the base this port
   is built on, including the XC2 hooks, the settings menu and the launcher.
